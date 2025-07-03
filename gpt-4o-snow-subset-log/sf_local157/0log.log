@@ -1,0 +1,1135 @@
+2025-07-01 04:52:52 - Thread-753 (execute) - INFO - [Exploration]
+Below are the SQL queries designed to analyze the data in the `BITCOIN_PRICES` table step by step, ensuring a clear and methodical approach to answer the task.
+
+### Query 1: Retrieve all rows filtered for the dates between August 1 and August 10, 2021, with a limit of 20 rows.
+```sql
+-- Description: Fetch all data from August 1, 2021, to August 10, 2021, with a focus on the needed date range.
+SELECT * 
+FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+LIMIT 20;
+```
+
+---
+
+### Query 2: distinct list of tickers from the given date range (useful to understand unique symbols)
+```sql
+-- Description: Retrieve distinct tickers within the specified date range.
+SELECT DISTINCT "ticker"
+FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+LIMIT 20;
+```
+
+---
+
+### Query 3: Fetch all rows where the "volume" column has any non-standard formats such as "K", "M", or "-" (useful for identifying formatting issues).
+```sql
+-- Description: Retrieve rows with volumes containing special characters ("K", "M") or blanks ("-") within the date range.
+SELECT * 
+FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+  AND ("volume" LIKE '%K%' OR "volume" LIKE '%M%' OR "volume" = '-')
+LIMIT 20;
+```
+
+---
+
+### Query 4: Convert "K" and "M" volumes to numeric values and replace "-" with 0.
+```sql
+-- Description: Convert "K" volumes to thousands, "M" volumes to millions, and set "-" volumes to 0.
+SELECT "ticker", 
+       "market_date", 
+       "price", 
+       CASE 
+           WHEN "volume" LIKE '%K%' THEN CAST(REPLACE("volume", 'K', '') AS FLOAT) * 1000
+           WHEN "volume" LIKE '%M%' THEN CAST(REPLACE("volume", 'M', '') AS FLOAT) * 1000000
+           WHEN "volume" = '-' THEN 0
+           ELSE CAST("volume" AS FLOAT)
+       END AS "volume_number"
+FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+LIMIT 20;
+```
+
+---
+
+### Query 5: Filter out records where volume (after conversion) equals zero for daily percentage calculation.
+```sql
+-- Description: Exclude rows with zero volumes after conversion for percentage calculations.
+SELECT "ticker", 
+       "market_date", 
+       "price", 
+       CASE 
+           WHEN "volume" LIKE '%K%' THEN CAST(REPLACE("volume", 'K', '') AS FLOAT) * 1000
+           WHEN "volume" LIKE '%M%' THEN CAST(REPLACE("volume", 'M', '') AS FLOAT) * 1000000
+           ELSE CAST("volume" AS FLOAT) 
+       END AS "volume_number"
+FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+  AND "volume" != '-'
+LIMIT 20;
+```
+
+---
+
+### Query 6: Generate a list sorted by ticker and date to prepare for percentage change calculations.
+```sql
+-- Description: Sort the cleaned data by ticker and market date for easier percentage calculations.
+SELECT "ticker", 
+       "market_date", 
+       "price", 
+       CASE 
+           WHEN "volume" LIKE '%K%' THEN CAST(REPLACE("volume", 'K', '') AS FLOAT) * 1000
+           WHEN "volume" LIKE '%M%' THEN CAST(REPLACE("volume", 'M', '') AS FLOAT) * 1000000
+           ELSE CAST("volume" AS FLOAT) 
+       END AS "volume_number"
+FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+  AND "volume" != '-'
+ORDER BY "ticker", TO_DATE("market_date", 'DD-MM-YYYY')
+LIMIT 20;
+```
+
+---
+
+### Query 7: Add a window function to calculate the previous day's volume for each ticker.
+```sql
+-- Description: Use a window function to calculate the previous day's volume for each ticker.
+SELECT "ticker", 
+       "market_date", 
+       "price", 
+       "volume_number", 
+       LAG("volume_number") OVER (PARTITION BY "ticker" ORDER BY TO_DATE("market_date", 'DD-MM-YYYY')) AS "previous_volume"
+FROM (
+    SELECT "ticker", 
+           "market_date", 
+           "price", 
+           CASE 
+               WHEN "volume" LIKE '%K%' THEN CAST(REPLACE("volume", 'K', '') AS FLOAT) * 1000
+               WHEN "volume" LIKE '%M%' THEN CAST(REPLACE("volume", 'M', '') AS FLOAT) * 1000000
+               ELSE CAST("volume" AS FLOAT) 
+           END AS "volume_number"
+    FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+    WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+      AND "volume" != '-'
+) subquery
+LIMIT 20;
+```
+
+---
+
+### Query 8: Calculate the daily percentage change in volume using the current and previous day's volumes.
+```sql
+-- Description: Calculate the daily percentage change in trading volume for each ticker.
+SELECT "ticker", 
+       "market_date", 
+       "price", 
+       "volume_number", 
+       "previous_volume", 
+       CASE 
+           WHEN "previous_volume" = 0 OR "previous_volume" IS NULL THEN NULL
+           ELSE (("volume_number" - "previous_volume") / "previous_volume") * 100
+       END AS "percentage_change"
+FROM (
+    SELECT "ticker", 
+           "market_date", 
+           "price", 
+           "volume_number", 
+           LAG("volume_number") OVER (PARTITION BY "ticker" ORDER BY TO_DATE("market_date", 'DD-MM-YYYY')) AS "previous_volume"
+    FROM (
+        SELECT "ticker", 
+               "market_date", 
+               "price", 
+               CASE 
+                   WHEN "volume" LIKE '%K%' THEN CAST(REPLACE("volume", 'K', '') AS FLOAT) * 1000
+                   WHEN "volume" LIKE '%M%' THEN CAST(REPLACE("volume", 'M', '') AS FLOAT) * 1000000
+                   ELSE CAST("volume" AS FLOAT) 
+               END AS "volume_number"
+        FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+        WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+          AND "volume" != '-'
+    ) subquery_1
+) subquery_2
+LIMIT 20;
+```
+
+---
+
+### Query 9: Filter only results with valid percentage changes (non-null) and sort by ticker and date.
+```sql
+-- Description: Filter out rows with invalid percentage changes and sort them for final results.
+SELECT *
+FROM (
+    SELECT "ticker", 
+           "market_date", 
+           "price", 
+           "volume_number", 
+           "previous_volume", 
+           CASE 
+               WHEN "previous_volume" = 0 OR "previous_volume" IS NULL THEN NULL
+               ELSE (("volume_number" - "previous_volume") / "previous_volume") * 100
+           END AS "percentage_change"
+    FROM (
+        SELECT "ticker", 
+               "market_date", 
+               "price", 
+               "volume_number", 
+               LAG("volume_number") OVER (PARTITION BY "ticker" ORDER BY TO_DATE("market_date", 'DD-MM-YYYY')) AS "previous_volume"
+        FROM (
+            SELECT "ticker", 
+                   "market_date", 
+                   "price", 
+                   CASE 
+                       WHEN "volume" LIKE '%K%' THEN CAST(REPLACE("volume", 'K', '') AS FLOAT) * 1000
+                       WHEN "volume" LIKE '%M%' THEN CAST(REPLACE("volume", 'M', '') AS FLOAT) * 1000000
+                       ELSE CAST("volume" AS FLOAT) 
+                   END AS "volume_number"
+            FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+            WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+              AND "volume" != '-'
+        ) subquery_1
+    ) subquery_2
+) final_query
+WHERE "percentage_change" IS NOT NULL
+ORDER BY "ticker", TO_DATE("market_date", 'DD-MM-YYYY')
+LIMIT 20;
+```
+
+---
+
+### Query 10: Final output with only required columns (ticker, date, volume change percentage).
+```sql
+-- Description: Output ticker, date, and valid volume change percentage.
+SELECT "ticker", 
+       "market_date", 
+       "percentage_change"
+FROM (
+    SELECT *
+    FROM (
+        SELECT "ticker", 
+               "market_date", 
+               "price", 
+               "volume_number", 
+               "previous_volume", 
+               CASE 
+                   WHEN "previous_volume" = 0 OR "previous_volume" IS NULL THEN NULL
+                   ELSE (("volume_number" - "previous_volume") / "previous_volume") * 100
+               END AS "percentage_change"
+        FROM (
+            SELECT "ticker", 
+                   "market_date", 
+                   "price", 
+                   "volume_number", 
+                   LAG("volume_number") OVER (PARTITION BY "ticker" ORDER BY TO_DATE("market_date", 'DD-MM-YYYY')) AS "previous_volume"
+            FROM (
+                SELECT "ticker", 
+                       "market_date", 
+                       "price", 
+                       CASE 
+                           WHEN "volume" LIKE '%K%' THEN CAST(REPLACE("volume", 'K', '') AS FLOAT) * 1000
+                           WHEN "volume" LIKE '%M%' THEN CAST(REPLACE("volume", 'M', '') AS FLOAT) * 1000000
+                           ELSE CAST("volume" AS FLOAT) 
+                       END AS "volume_number"
+                FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+                WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+                  AND "volume" != '-'
+            ) subquery_1
+        ) subquery_2
+    ) final_query
+    WHERE "percentage_change" IS NOT NULL
+) result_set
+ORDER BY "ticker", TO_DATE("market_date", 'DD-MM-YYYY')
+LIMIT 20;
+```
+
+These queries move from simple exploration to advanced calculation, culminating in the final results needed for your task.
+[Exploration]
+2025-07-01 04:52:52 - Thread-753 (execute) - INFO - [Try to execute]
+-- Description: Fetch all data from August 1, 2021, to August 10, 2021, with a focus on the needed date range.
+SELECT * 
+FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:52:53 - Thread-753 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Fetch all data from August 1, 2021, to August 10, 2021, with a focus on the needed date range.
+SELECT * 
+FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+LIMIT 20;
+Results:
+ticker,market_date,price,open,high,low,volume,change
+ETH,10-08-2021,3140.71,3162.81,3232.02,3057.84,1.12M,-0.70%
+ETH,09-08-2021,3162.93,3011.88,3184.84,2899.24,1.44M,5.01%
+ETH,08-08-2021,3012.07,3158.3,3188.49,2949.66,1.25M,-4.62%
+ETH,07-08-2021,3158.0,2889.58,3169.74,2867.58,64.84K,9.29%
+ETH,06-08-2021,2889.43,2827.23,2946.62,2726.04,1.06M,2.20%
+ETH,05-08-2021,2827.21,2725.28,2842.95,2533.51,1.65M,3.74%
+ETH,04-08-2021,2725.29,2506.5,2766.46,2462.32,1.23M,8.72%
+
+[Successfully executed]
+2025-07-01 04:52:53 - Thread-753 (execute) - INFO - [Try to execute]
+-- Description: Retrieve distinct tickers within the specified date range.
+SELECT DISTINCT "ticker"
+FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:52:53 - Thread-753 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Retrieve distinct tickers within the specified date range.
+SELECT DISTINCT "ticker"
+FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+LIMIT 20;
+Results:
+ticker
+ETH
+BTC
+
+[Successfully executed]
+2025-07-01 04:52:53 - Thread-753 (execute) - INFO - [Try to execute]
+-- Description: Retrieve rows with volumes containing special characters ("K", "M") or blanks ("-") within the date range.
+SELECT * 
+FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+  AND ("volume" LIKE '%K%' OR "volume" LIKE '%M%' OR "volume" = '-')
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:52:53 - Thread-753 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Retrieve rows with volumes containing special characters ("K", "M") or blanks ("-") within the date range.
+SELECT * 
+FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+  AND ("volume" LIKE '%K%' OR "volume" LIKE '%M%' OR "volume" = '-')
+LIMIT 20;
+Results:
+ticker,market_date,price,open,high,low,volume,change
+ETH,10-08-2021,3140.71,3162.81,3232.02,3057.84,1.12M,-0.70%
+ETH,09-08-2021,3162.93,3011.88,3184.84,2899.24,1.44M,5.01%
+ETH,08-08-2021,3012.07,3158.3,3188.49,2949.66,1.25M,-4.62%
+ETH,07-08-2021,3158.0,2889.58,3169.74,2867.58,64.84K,9.29%
+ETH,06-08-2021,2889.43,2827.23,2946.62,2726.04,1.06M,2.20%
+ETH,05-08-2021,2827.21,2725.28,2842.95,2533.51,1.65M,3.74%
+ETH,04-08-2021,2725.29,2506.5,2766.46,2462.32,1.23M,8.72%
+
+[Successfully executed]
+2025-07-01 04:52:53 - Thread-753 (execute) - INFO - [Try to execute]
+-- Description: Convert "K" volumes to thousands, "M" volumes to millions, and set "-" volumes to 0.
+SELECT "ticker", 
+       "market_date", 
+       "price", 
+       CASE 
+           WHEN "volume" LIKE '%K%' THEN CAST(REPLACE("volume", 'K', '') AS FLOAT) * 1000
+           WHEN "volume" LIKE '%M%' THEN CAST(REPLACE("volume", 'M', '') AS FLOAT) * 1000000
+           WHEN "volume" = '-' THEN 0
+           ELSE CAST("volume" AS FLOAT)
+       END AS "volume_number"
+FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:52:54 - Thread-753 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Convert "K" volumes to thousands, "M" volumes to millions, and set "-" volumes to 0.
+SELECT "ticker", 
+       "market_date", 
+       "price", 
+       CASE 
+           WHEN "volume" LIKE '%K%' THEN CAST(REPLACE("volume", 'K', '') AS FLOAT) * 1000
+           WHEN "volume" LIKE '%M%' THEN CAST(REPLACE("volume", 'M', '') AS FLOAT) * 1000000
+           WHEN "volume" = '-' THEN 0
+           ELSE CAST("volume" AS FLOAT)
+       END AS "volume_number"
+FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+LIMIT 20;
+Results:
+ticker,market_date,price,volume_number
+ETH,10-08-2021,3140.71,1120000.0
+ETH,09-08-2021,3162.93,1440000.0
+ETH,08-08-2021,3012.07,1250000.0
+ETH,07-08-2021,3158.0,64840.0
+ETH,06-08-2021,2889.43,1060000.0
+ETH,05-08-2021,2827.21,1650000.0
+ETH,04-08-2021,2725.29,1230000.0
+ETH,03-08-2021,2506.65,158450.0
+ETH,02-08-2021,2608.04,970670.0
+ETH,01-08-2021,2556.23,1200000.0
+ETH,10-07-2021,2111.12,929320.0
+ETH,09-07-2021,2145.89,1420000.0
+ETH,08-07-2021,2120.22,1820000.0
+
+[Successfully executed]
+2025-07-01 04:52:54 - Thread-753 (execute) - INFO - [Try to execute]
+-- Description: Exclude rows with zero volumes after conversion for percentage calculations.
+SELECT "ticker", 
+       "market_date", 
+       "price", 
+       CASE 
+           WHEN "volume" LIKE '%K%' THEN CAST(REPLACE("volume", 'K', '') AS FLOAT) * 1000
+           WHEN "volume" LIKE '%M%' THEN CAST(REPLACE("volume", 'M', '') AS FLOAT) * 1000000
+           ELSE CAST("volume" AS FLOAT) 
+       END AS "volume_number"
+FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+  AND "volume" != '-'
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:52:54 - Thread-753 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Exclude rows with zero volumes after conversion for percentage calculations.
+SELECT "ticker", 
+       "market_date", 
+       "price", 
+       CASE 
+           WHEN "volume" LIKE '%K%' THEN CAST(REPLACE("volume", 'K', '') AS FLOAT) * 1000
+           WHEN "volume" LIKE '%M%' THEN CAST(REPLACE("volume", 'M', '') AS FLOAT) * 1000000
+           ELSE CAST("volume" AS FLOAT) 
+       END AS "volume_number"
+FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+  AND "volume" != '-'
+LIMIT 20;
+Results:
+ticker,market_date,price,volume_number
+ETH,10-08-2021,3140.71,1120000.0
+ETH,09-08-2021,3162.93,1440000.0
+ETH,08-08-2021,3012.07,1250000.0
+ETH,07-08-2021,3158.0,64840.0
+ETH,06-08-2021,2889.43,1060000.0
+ETH,05-08-2021,2827.21,1650000.0
+ETH,04-08-2021,2725.29,1230000.0
+ETH,03-08-2021,2506.65,158450.0
+ETH,02-08-2021,2608.04,970670.0
+ETH,01-08-2021,2556.23,1200000.0
+ETH,10-07-2021,2111.12,929320.0
+ETH,09-07-2021,2145.89,1420000.0
+ETH,08-07-2021,2120.22,1820000.0
+
+[Successfully executed]
+2025-07-01 04:52:54 - Thread-753 (execute) - INFO - [Try to execute]
+-- Description: Sort the cleaned data by ticker and market date for easier percentage calculations.
+SELECT "ticker", 
+       "market_date", 
+       "price", 
+       CASE 
+           WHEN "volume" LIKE '%K%' THEN CAST(REPLACE("volume", 'K', '') AS FLOAT) * 1000
+           WHEN "volume" LIKE '%M%' THEN CAST(REPLACE("volume", 'M', '') AS FLOAT) * 1000000
+           ELSE CAST("volume" AS FLOAT) 
+       END AS "volume_number"
+FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+  AND "volume" != '-'
+ORDER BY "ticker", TO_DATE("market_date", 'DD-MM-YYYY')
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:52:54 - Thread-753 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Sort the cleaned data by ticker and market date for easier percentage calculations.
+SELECT "ticker", 
+       "market_date", 
+       "price", 
+       CASE 
+           WHEN "volume" LIKE '%K%' THEN CAST(REPLACE("volume", 'K', '') AS FLOAT) * 1000
+           WHEN "volume" LIKE '%M%' THEN CAST(REPLACE("volume", 'M', '') AS FLOAT) * 1000000
+           ELSE CAST("volume" AS FLOAT) 
+       END AS "volume_number"
+FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+  AND "volume" != '-'
+ORDER BY "ticker", TO_DATE("market_date", 'DD-MM-YYYY')
+LIMIT 20;
+Results:
+ticker,market_date,price,volume_number
+BTC,02-01-2017,1017.0,64950.0
+BTC,03-01-2017,1033.3,54790.0
+BTC,04-01-2017,1135.4,156270.0
+BTC,05-01-2017,989.3,240010.0
+BTC,06-01-2017,886.2,194290.0
+BTC,07-01-2017,888.9,130660.0
+BTC,08-01-2017,900.9,76910.0
+BTC,09-01-2017,899.8,62580.0
+BTC,10-01-2017,904.4,53710.0
+BTC,02-02-2017,1004.0,50860.0
+BTC,03-02-2017,1013.0,61670.0
+BTC,04-02-2017,1031.8,39460.0
+BTC,05-02-2017,1016.1,31060.0
+BTC,06-02-2017,1024.7,32020.000000000004
+
+[Successfully executed]
+2025-07-01 04:52:54 - Thread-753 (execute) - INFO - [Try to execute]
+-- Description: Use a window function to calculate the previous day's volume for each ticker.
+SELECT "ticker", 
+       "market_date", 
+       "price", 
+       "volume_number", 
+       LAG("volume_number") OVER (PARTITION BY "ticker" ORDER BY TO_DATE("market_date", 'DD-MM-YYYY')) AS "previous_volume"
+FROM (
+    SELECT "ticker", 
+           "market_date", 
+           "price", 
+           CASE 
+               WHEN "volume" LIKE '%K%' THEN CAST(REPLACE("volume", 'K', '') AS FLOAT) * 1000
+               WHEN "volume" LIKE '%M%' THEN CAST(REPLACE("volume", 'M', '') AS FLOAT) * 1000000
+               ELSE CAST("volume" AS FLOAT) 
+           END AS "volume_number"
+    FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+    WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+      AND "volume" != '-'
+) subquery
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:52:54 - Thread-753 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Use a window function to calculate the previous day's volume for each ticker.
+SELECT "ticker", 
+       "market_date", 
+       "price", 
+       "volume_number", 
+       LAG("volume_number") OVER (PARTITION BY "ticker" ORDER BY TO_DATE("market_date", 'DD-MM-YYYY')) AS "previous_volume"
+FROM (
+    SELECT "ticker", 
+           "market_date", 
+           "price", 
+           CASE 
+               WHEN "volume" LIKE '%K%' THEN CAST(REPLACE("volume", 'K', '') AS FLOAT) * 1000
+               WHEN "volume" LIKE '%M%' THEN CAST(REPLACE("volume", 'M', '') AS FLOAT) * 1000000
+               ELSE CAST("volume" AS FLOAT) 
+           END AS "volume_number"
+    FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+    WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+      AND "volume" != '-'
+) subquery
+LIMIT 20;
+Results:
+ticker,market_date,price,volume_number,previous_volume
+BTC,02-01-2017,1017.0,64950.0,
+BTC,03-01-2017,1033.3,54790.0,64950.0
+BTC,04-01-2017,1135.4,156270.0,54790.0
+BTC,05-01-2017,989.3,240010.0,156270.0
+BTC,06-01-2017,886.2,194290.0,240010.0
+BTC,07-01-2017,888.9,130660.0,194290.0
+BTC,08-01-2017,900.9,76910.0,130660.0
+BTC,09-01-2017,899.8,62580.0,76910.0
+BTC,10-01-2017,904.4,53710.0,62580.0
+BTC,02-02-2017,1004.0,50860.0,53710.0
+BTC,03-02-2017,1013.0,61670.0,50860.0
+
+[Successfully executed]
+2025-07-01 04:52:54 - Thread-753 (execute) - INFO - [Try to execute]
+-- Description: Calculate the daily percentage change in trading volume for each ticker.
+SELECT "ticker", 
+       "market_date", 
+       "price", 
+       "volume_number", 
+       "previous_volume", 
+       CASE 
+           WHEN "previous_volume" = 0 OR "previous_volume" IS NULL THEN NULL
+           ELSE (("volume_number" - "previous_volume") / "previous_volume") * 100
+       END AS "percentage_change"
+FROM (
+    SELECT "ticker", 
+           "market_date", 
+           "price", 
+           "volume_number", 
+           LAG("volume_number") OVER (PARTITION BY "ticker" ORDER BY TO_DATE("market_date", 'DD-MM-YYYY')) AS "previous_volume"
+    FROM (
+        SELECT "ticker", 
+               "market_date", 
+               "price", 
+               CASE 
+                   WHEN "volume" LIKE '%K%' THEN CAST(REPLACE("volume", 'K', '') AS FLOAT) * 1000
+                   WHEN "volume" LIKE '%M%' THEN CAST(REPLACE("volume", 'M', '') AS FLOAT) * 1000000
+                   ELSE CAST("volume" AS FLOAT) 
+               END AS "volume_number"
+        FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+        WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+          AND "volume" != '-'
+    ) subquery_1
+) subquery_2
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:52:55 - Thread-753 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Calculate the daily percentage change in trading volume for each ticker.
+SELECT "ticker", 
+       "market_date", 
+       "price", 
+       "volume_number", 
+       "previous_volume", 
+       CASE 
+           WHEN "previous_volume" = 0 OR "previous_volume" IS NULL THEN NULL
+           ELSE (("volume_number" - "previous_volume") / "previous_volume") * 100
+       END AS "percentage_change"
+FROM (
+    SELECT "ticker", 
+           "market_date", 
+           "price", 
+           "volume_number", 
+           LAG("volume_number") OVER (PARTITION BY "ticker" ORDER BY TO_DATE("market_date", 'DD-MM-YYYY')) AS "previous_volume"
+    FROM (
+        SELECT "ticker", 
+               "market_date", 
+               "price", 
+               CASE 
+                   WHEN "volume" LIKE '%K%' THEN CAST(REPLACE("volume", 'K', '') AS FLOAT) * 1000
+                   WHEN "volume" LIKE '%M%' THEN CAST(REPLACE("volume", 'M', '') AS FLOAT) * 1000000
+                   ELSE CAST("volume" AS FLOAT) 
+               END AS "volume_number"
+        FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+        WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+          AND "volume" != '-'
+    ) subquery_1
+) subquery_2
+LIMIT 20;
+Results:
+ticker,market_date,price,volume_number,previous_volume,percentage_change
+BTC,02-01-2017,1017.0,64950.0,,
+BTC,03-01-2017,1033.3,54790.0,64950.0,-15.642802155504235
+BTC,04-01-2017,1135.4,156270.0,54790.0,185.21628034312832
+BTC,05-01-2017,989.3,240010.0,156270.0,53.586740897165164
+BTC,06-01-2017,886.2,194290.0,240010.0,-19.049206283071538
+BTC,07-01-2017,888.9,130660.0,194290.0,-32.75001286736322
+BTC,08-01-2017,900.9,76910.0,130660.0,-41.13730292361855
+BTC,09-01-2017,899.8,62580.0,76910.0,-1
+
+[Successfully executed]
+2025-07-01 04:52:55 - Thread-753 (execute) - INFO - [Try to execute]
+-- Description: Filter out rows with invalid percentage changes and sort them for final results.
+SELECT *
+FROM (
+    SELECT "ticker", 
+           "market_date", 
+           "price", 
+           "volume_number", 
+           "previous_volume", 
+           CASE 
+               WHEN "previous_volume" = 0 OR "previous_volume" IS NULL THEN NULL
+               ELSE (("volume_number" - "previous_volume") / "previous_volume") * 100
+           END AS "percentage_change"
+    FROM (
+        SELECT "ticker", 
+               "market_date", 
+               "price", 
+               "volume_number", 
+               LAG("volume_number") OVER (PARTITION BY "ticker" ORDER BY TO_DATE("market_date", 'DD-MM-YYYY')) AS "previous_volume"
+        FROM (
+            SELECT "ticker", 
+                   "market_date", 
+                   "price", 
+                   CASE 
+                       WHEN "volume" LIKE '%K%' THEN CAST(REPLACE("volume", 'K', '') AS FLOAT) * 1000
+                       WHEN "volume" LIKE '%M%' THEN CAST(REPLACE("volume", 'M', '') AS FLOAT) * 1000000
+                       ELSE CAST("volume" AS FLOAT) 
+                   END AS "volume_number"
+            FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+            WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+              AND "volume" != '-'
+        ) subquery_1
+    ) subquery_2
+) final_query
+WHERE "percentage_change" IS NOT NULL
+ORDER BY "ticker", TO_DATE("market_date", 'DD-MM-YYYY')
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:52:55 - Thread-753 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Filter out rows with invalid percentage changes and sort them for final results.
+SELECT *
+FROM (
+    SELECT "ticker", 
+           "market_date", 
+           "price", 
+           "volume_number", 
+           "previous_volume", 
+           CASE 
+               WHEN "previous_volume" = 0 OR "previous_volume" IS NULL THEN NULL
+               ELSE (("volume_number" - "previous_volume") / "previous_volume") * 100
+           END AS "percentage_change"
+    FROM (
+        SELECT "ticker", 
+               "market_date", 
+               "price", 
+               "volume_number", 
+               LAG("volume_number") OVER (PARTITION BY "ticker" ORDER BY TO_DATE("market_date", 'DD-MM-YYYY')) AS "previous_volume"
+        FROM (
+            SELECT "ticker", 
+                   "market_date", 
+                   "price", 
+                   CASE 
+                       WHEN "volume" LIKE '%K%' THEN CAST(REPLACE("volume", 'K', '') AS FLOAT) * 1000
+                       WHEN "volume" LIKE '%M%' THEN CAST(REPLACE("volume", 'M', '') AS FLOAT) * 1000000
+                       ELSE CAST("volume" AS FLOAT) 
+                   END AS "volume_number"
+            FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+            WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+              AND "volume" != '-'
+        ) subquery_1
+    ) subquery_2
+) final_query
+WHERE "percentage_change" IS NOT NULL
+ORDER BY "ticker", TO_DATE("market_date", 'DD-MM-YYYY')
+LIMIT 20;
+Results:
+ticker,market_date,price,volume_number,previous_volume,percentage_change
+BTC,03-01-2017,1033.3,54790.0,64950.0,-15.642802155504235
+BTC,04-01-2017,1135.4,156270.0,54790.0,185.21628034312832
+BTC,05-01-2017,989.3,240010.0,156270.0,53.586740897165164
+BTC,06-01-2017,886.2,194290.0,240010.0,-19.049206283071538
+BTC,07-01-2017,888.9,130660.0,194290.0,-32.75001286736322
+BTC,08-01-2017,900.9,76910.0,130660.0,-41.13730292361855
+BTC,09-01-2017,899.8,62580.0,76910.0,-18.63216746846964
+BTC,10-01-2017,
+
+[Successfully executed]
+2025-07-01 04:52:55 - Thread-753 (execute) - INFO - [Try to execute]
+-- Description: Output ticker, date, and valid volume change percentage.
+SELECT "ticker", 
+       "market_date", 
+       "percentage_change"
+FROM (
+    SELECT *
+    FROM (
+        SELECT "ticker", 
+               "market_date", 
+               "price", 
+               "volume_number", 
+               "previous_volume", 
+               CASE 
+                   WHEN "previous_volume" = 0 OR "previous_volume" IS NULL THEN NULL
+                   ELSE (("volume_number" - "previous_volume") / "previous_volume") * 100
+               END AS "percentage_change"
+        FROM (
+            SELECT "ticker", 
+                   "market_date", 
+                   "price", 
+                   "volume_number", 
+                   LAG("volume_number") OVER (PARTITION BY "ticker" ORDER BY TO_DATE("market_date", 'DD-MM-YYYY')) AS "previous_volume"
+            FROM (
+                SELECT "ticker", 
+                       "market_date", 
+                       "price", 
+                       CASE 
+                           WHEN "volume" LIKE '%K%' THEN CAST(REPLACE("volume", 'K', '') AS FLOAT) * 1000
+                           WHEN "volume" LIKE '%M%' THEN CAST(REPLACE("volume", 'M', '') AS FLOAT) * 1000000
+                           ELSE CAST("volume" AS FLOAT) 
+                       END AS "volume_number"
+                FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+                WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+                  AND "volume" != '-'
+            ) subquery_1
+        ) subquery_2
+    ) final_query
+    WHERE "percentage_change" IS NOT NULL
+) result_set
+ORDER BY "ticker", TO_DATE("market_date", 'DD-MM-YYYY')
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:52:55 - Thread-753 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Output ticker, date, and valid volume change percentage.
+SELECT "ticker", 
+       "market_date", 
+       "percentage_change"
+FROM (
+    SELECT *
+    FROM (
+        SELECT "ticker", 
+               "market_date", 
+               "price", 
+               "volume_number", 
+               "previous_volume", 
+               CASE 
+                   WHEN "previous_volume" = 0 OR "previous_volume" IS NULL THEN NULL
+                   ELSE (("volume_number" - "previous_volume") / "previous_volume") * 100
+               END AS "percentage_change"
+        FROM (
+            SELECT "ticker", 
+                   "market_date", 
+                   "price", 
+                   "volume_number", 
+                   LAG("volume_number") OVER (PARTITION BY "ticker" ORDER BY TO_DATE("market_date", 'DD-MM-YYYY')) AS "previous_volume"
+            FROM (
+                SELECT "ticker", 
+                       "market_date", 
+                       "price", 
+                       CASE 
+                           WHEN "volume" LIKE '%K%' THEN CAST(REPLACE("volume", 'K', '') AS FLOAT) * 1000
+                           WHEN "volume" LIKE '%M%' THEN CAST(REPLACE("volume", 'M', '') AS FLOAT) * 1000000
+                           ELSE CAST("volume" AS FLOAT) 
+                       END AS "volume_number"
+                FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+                WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+                  AND "volume" != '-'
+            ) subquery_1
+        ) subquery_2
+    ) final_query
+    WHERE "percentage_change" IS NOT NULL
+) result_set
+ORDER BY "ticker", TO_DATE("market_date", 'DD-MM-YYYY')
+LIMIT 20;
+Results:
+ticker,market_date,percentage_change
+BTC,03-01-2017,-15.642802155504235
+BTC,04-01-2017,185.21628034312832
+BTC,05-01-2017,53.586740897165164
+BTC,06-01-2017,-19.049206283071538
+BTC,07-01-2017,-32.75001286736322
+BTC,08-01-2017,-41.13730292361855
+BTC,09-01-2017,-18.63216746846964
+BTC,10-01-2017,-14.173857462448067
+BTC,02-02-2017,-5.3062744367901695
+BTC,03-02-2017,21.25442390876917
+BTC,04-02-2017,-36.01426949894601
+BTC,05-02-2017,-21.287379624936644
+BTC,06-02-2017,3.0907920154539714
+
+[Successfully executed]
+2025-07-01 04:52:55 - Thread-753 (execute) - INFO - itercount: 0
+2025-07-01 04:52:55 - Thread-753 (execute) - INFO - [Self-refine]
+Table full name: BANK_SALES_TRADING.BANK_SALES_TRADING.BITCOIN_PRICES
+Column name: price Type: FLOAT
+Column name: volume Type: TEXT
+Column name: market_date Type: TEXT
+Column name: ticker Type: TEXT
+Sample rows:
+[{'ticker': 'ETH', 'market_date': '29-08-2021', 'price': 3177.84, 'volume': '582.04K'}, {'ticker': 'ETH', 'market_date': '27-08-2021', 'price': 3273.58, 'volume': '839.54K'}, {'ticker': 'ETH', 'market_date': '26-08-2021', 'price': 3093.54, 'volume': '118.44K'}, {'ticker': 'ETH', 'market_date': '24-08-2021', 'price': 3173.26, 'volume': '988.82K'}, {'ticker': 'ETH', 'market_date': '23-08-2021', 'price': 3319.49, 'volume': '1.09M'}]
+--------------------------------------------------
+External knowledge that might be helpful: 
+None
+The table structure information is ({database name: {schema name: [table name]}}): 
+{'BANK_SALES_TRADING': {'BANK_SALES_TRADING': ['BITCOIN_PRICES']}}
+
+Some few-shot examples after column exploration may be helpful:
+Query:
+-- Description: Fetch all data from August 1, 2021, to August 10, 2021, with a focus on the needed date range.
+SELECT * 
+FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+LIMIT 20;
+Answer:
+ticker,market_date,price,open,high,low,volume,change
+ETH,10-08-2021,3140.71,3162.81,3232.02,3057.84,1.12M,-0.70%
+ETH,09-08-2021,3162.93,3011.88,3184.84,2899.24,1.44M,5.01%
+ETH,08-08-2021,3012.07,3158.3,3188.49,2949.66,1.25M,-4.62%
+ETH,07-08-2021,3158.0,2889.58,3169.74,2867.58,64.84K,9.29%
+ETH,06-08-2021,2889.43,2827.23,2946.62,2726.04,1.06M,2.20%
+ETH,05-08-2021,2827.21,2725.28,2842.95,2533.51,1.65M,3.74%
+ETH,04-08-2021,2725.29,2506.5,2766.46,2462.32,1.23M,8.72%
+Query:
+-- Description: Retrieve distinct tickers within the specified date range.
+SELECT DISTINCT "ticker"
+FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+LIMIT 20;
+Answer:
+ticker
+ETH
+BTC
+Query:
+-- Description: Retrieve rows with volumes containing special characters ("K", "M") or blanks ("-") within the date range.
+SELECT * 
+FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+  AND ("volume" LIKE '%K%' OR "volume" LIKE '%M%' OR "volume" = '-')
+LIMIT 20;
+Answer:
+ticker,market_date,price,open,high,low,volume,change
+ETH,10-08-2021,3140.71,3162.81,3232.02,3057.84,1.12M,-0.70%
+ETH,09-08-2021,3162.93,3011.88,3184.84,2899.24,1.44M,5.01%
+ETH,08-08-2021,3012.07,3158.3,3188.49,2949.66,1.25M,-4.62%
+ETH,07-08-2021,3158.0,2889.58,3169.74,2867.58,64.84K,9.29%
+ETH,06-08-2021,2889.43,2827.23,2946.62,2726.04,1.06M,2.20%
+ETH,05-08-2021,2827.21,2725.28,2842.95,2533.51,1.65M,3.74%
+ETH,04-08-2021,2725.29,2506.5,2766.46,2462.32,1.23M,8.72%
+Query:
+-- Description: Convert "K" volumes to thousands, "M" volumes to millions, and set "-" volumes to 0.
+SELECT "ticker", 
+       "market_date", 
+       "price", 
+       CASE 
+           WHEN "volume" LIKE '%K%' THEN CAST(REPLACE("volume", 'K', '') AS FLOAT) * 1000
+           WHEN "volume" LIKE '%M%' THEN CAST(REPLACE("volume", 'M', '') AS FLOAT) * 1000000
+           WHEN "volume" = '-' THEN 0
+           ELSE CAST("volume" AS FLOAT)
+       END AS "volume_number"
+FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+LIMIT 20;
+Answer:
+ticker,market_date,price,volume_number
+ETH,10-08-2021,3140.71,1120000.0
+ETH,09-08-2021,3162.93,1440000.0
+ETH,08-08-2021,3012.07,1250000.0
+ETH,07-08-2021,3158.0,64840.0
+ETH,06-08-2021,2889.43,1060000.0
+ETH,05-08-2021,2827.21,1650000.0
+ETH,04-08-2021,2725.29,1230000.0
+ETH,03-08-2021,2506.65,158450.0
+ETH,02-08-2021,2608.04,970670.0
+ETH,01-08-2021,2556.23,1200000.0
+ETH,10-07-2021,2111.12,929320.0
+ETH,09-07-2021,2145.89,1420000.0
+ETH,08-07-2021,2120.22,1820000.0
+Query:
+-- Description: Exclude rows with zero volumes after conversion for percentage calculations.
+SELECT "ticker", 
+       "market_date", 
+       "price", 
+       CASE 
+           WHEN "volume" LIKE '%K%' THEN CAST(REPLACE("volume", 'K', '') AS FLOAT) * 1000
+           WHEN "volume" LIKE '%M%' THEN CAST(REPLACE("volume", 'M', '') AS FLOAT) * 1000000
+           ELSE CAST("volume" AS FLOAT) 
+       END AS "volume_number"
+FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+  AND "volume" != '-'
+LIMIT 20;
+Answer:
+ticker,market_date,price,volume_number
+ETH,10-08-2021,3140.71,1120000.0
+ETH,09-08-2021,3162.93,1440000.0
+ETH,08-08-2021,3012.07,1250000.0
+ETH,07-08-2021,3158.0,64840.0
+ETH,06-08-2021,2889.43,1060000.0
+ETH,05-08-2021,2827.21,1650000.0
+ETH,04-08-2021,2725.29,1230000.0
+ETH,03-08-2021,2506.65,158450.0
+ETH,02-08-2021,2608.04,970670.0
+ETH,01-08-2021,2556.23,1200000.0
+ETH,10-07-2021,2111.12,929320.0
+ETH,09-07-2021,2145.89,1420000.0
+ETH,08-07-2021,2120.22,1820000.0
+Query:
+-- Description: Sort the cleaned data by ticker and market date for easier percentage calculations.
+SELECT "ticker", 
+       "market_date", 
+       "price", 
+       CASE 
+           WHEN "volume" LIKE '%K%' THEN CAST(REPLACE("volume", 'K', '') AS FLOAT) * 1000
+           WHEN "volume" LIKE '%M%' THEN CAST(REPLACE("volume", 'M', '') AS FLOAT) * 1000000
+           ELSE CAST("volume" AS FLOAT) 
+       END AS "volume_number"
+FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+  AND "volume" != '-'
+ORDER BY "ticker", TO_DATE("market_date", 'DD-MM-YYYY')
+LIMIT 20;
+Answer:
+ticker,market_date,price,volume_number
+BTC,02-01-2017,1017.0,64950.0
+BTC,03-01-2017,1033.3,54790.0
+BTC,04-01-2017,1135.4,156270.0
+BTC,05-01-2017,989.3,240010.0
+BTC,06-01-2017,886.2,194290.0
+BTC,07-01-2017,888.9,130660.0
+BTC,08-01-2017,900.9,76910.0
+BTC,09-01-2017,899.8,62580.0
+BTC,10-01-2017,904.4,53710.0
+BTC,02-02-2017,1004.0,50860.0
+BTC,03-02-2017,1013.0,61670.0
+BTC,04-02-2017,1031.8,39460.0
+BTC,05-02-2017,1016.1,31060.0
+BTC,06-02-2017,1024.7,32020.000000000004
+Query:
+-- Description: Use a window function to calculate the previous day's volume for each ticker.
+SELECT "ticker", 
+       "market_date", 
+       "price", 
+       "volume_number", 
+       LAG("volume_number") OVER (PARTITION BY "ticker" ORDER BY TO_DATE("market_date", 'DD-MM-YYYY')) AS "previous_volume"
+FROM (
+    SELECT "ticker", 
+           "market_date", 
+           "price", 
+           CASE 
+               WHEN "volume" LIKE '%K%' THEN CAST(REPLACE("volume", 'K', '') AS FLOAT) * 1000
+               WHEN "volume" LIKE '%M%' THEN CAST(REPLACE("volume", 'M', '') AS FLOAT) * 1000000
+               ELSE CAST("volume" AS FLOAT) 
+           END AS "volume_number"
+    FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+    WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+      AND "volume" != '-'
+) subquery
+LIMIT 20;
+Answer:
+ticker,market_date,price,volume_number,previous_volume
+BTC,02-01-2017,1017.0,64950.0,
+BTC,03-01-2017,1033.3,54790.0,64950.0
+BTC,04-01-2017,1135.4,156270.0,54790.0
+BTC,05-01-2017,989.3,240010.0,156270.0
+BTC,06-01-2017,886.2,194290.0,240010.0
+BTC,07-01-2017,888.9,130660.0,194290.0
+BTC,08-01-2017,900.9,76910.0,130660.0
+BTC,09-01-2017,899.8,62580.0,76910.0
+BTC,10-01-2017,904.4,53710.0,62580.0
+BTC,02-02-2017,1004.0,50860.0,53710.0
+BTC,03-02-2017,1013.0,61670.0,50860.0
+Query:
+-- Description: Calculate the daily percentage change in trading volume for each ticker.
+SELECT "ticker", 
+       "market_date", 
+       "price", 
+       "volume_number", 
+       "previous_volume", 
+       CASE 
+           WHEN "previous_volume" = 0 OR "previous_volume" IS NULL THEN NULL
+           ELSE (("volume_number" - "previous_volume") / "previous_volume") * 100
+       END AS "percentage_change"
+FROM (
+    SELECT "ticker", 
+           "market_date", 
+           "price", 
+           "volume_number", 
+           LAG("volume_number") OVER (PARTITION BY "ticker" ORDER BY TO_DATE("market_date", 'DD-MM-YYYY')) AS "previous_volume"
+    FROM (
+        SELECT "ticker", 
+               "market_date", 
+               "price", 
+               CASE 
+                   WHEN "volume" LIKE '%K%' THEN CAST(REPLACE("volume", 'K', '') AS FLOAT) * 1000
+                   WHEN "volume" LIKE '%M%' THEN CAST(REPLACE("volume", 'M', '') AS FLOAT) * 1000000
+                   ELSE CAST("volume" AS FLOAT) 
+               END AS "volume_number"
+        FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+        WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+          AND "volume" != '-'
+    ) subquery_1
+) subquery_2
+LIMIT 20;
+Answer:
+ticker,market_date,price,volume_number,previous_volume,percentage_change
+BTC,02-01-2017,1017.0,64950.0,,
+BTC,03-01-2017,1033.3,54790.0,64950.0,-15.642802155504235
+BTC,04-01-2017,1135.4,156270.0,54790.0,185.21628034312832
+BTC,05-01-2017,989.3,240010.0,156270.0,53.586740897165164
+BTC,06-01-2017,886.2,194290.0,240010.0,-19.049206283071538
+BTC,07-01-2017,888.9,130660.0,194290.0,-32.75001286736322
+BTC,08-01-2017,900.9,76910.0,130660.0,-41.13730292361855
+BTC,09-01-2017,899.8,62580.0,76910.0,-1
+Query:
+-- Description: Filter out rows with invalid percentage changes and sort them for final results.
+SELECT *
+FROM (
+    SELECT "ticker", 
+           "market_date", 
+           "price", 
+           "volume_number", 
+           "previous_volume", 
+           CASE 
+               WHEN "previous_volume" = 0 OR "previous_volume" IS NULL THEN NULL
+               ELSE (("volume_number" - "previous_volume") / "previous_volume") * 100
+           END AS "percentage_change"
+    FROM (
+        SELECT "ticker", 
+               "market_date", 
+               "price", 
+               "volume_number", 
+               LAG("volume_number") OVER (PARTITION BY "ticker" ORDER BY TO_DATE("market_date", 'DD-MM-YYYY')) AS "previous_volume"
+        FROM (
+            SELECT "ticker", 
+                   "market_date", 
+                   "price", 
+                   CASE 
+                       WHEN "volume" LIKE '%K%' THEN CAST(REPLACE("volume", 'K', '') AS FLOAT) * 1000
+                       WHEN "volume" LIKE '%M%' THEN CAST(REPLACE("volume", 'M', '') AS FLOAT) * 1000000
+                       ELSE CAST("volume" AS FLOAT) 
+                   END AS "volume_number"
+            FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+            WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+              AND "volume" != '-'
+        ) subquery_1
+    ) subquery_2
+) final_query
+WHERE "percentage_change" IS NOT NULL
+ORDER BY "ticker", TO_DATE("market_date", 'DD-MM-YYYY')
+LIMIT 20;
+Answer:
+ticker,market_date,price,volume_number,previous_volume,percentage_change
+BTC,03-01-2017,1033.3,54790.0,64950.0,-15.642802155504235
+BTC,04-01-2017,1135.4,156270.0,54790.0,185.21628034312832
+BTC,05-01-2017,989.3,240010.0,156270.0,53.586740897165164
+BTC,06-01-2017,886.2,194290.0,240010.0,-19.049206283071538
+BTC,07-01-2017,888.9,130660.0,194290.0,-32.75001286736322
+BTC,08-01-2017,900.9,76910.0,130660.0,-41.13730292361855
+BTC,09-01-2017,899.8,62580.0,76910.0,-18.63216746846964
+BTC,10-01-2017,
+Query:
+-- Description: Output ticker, date, and valid volume change percentage.
+SELECT "ticker", 
+       "market_date", 
+       "percentage_change"
+FROM (
+    SELECT *
+    FROM (
+        SELECT "ticker", 
+               "market_date", 
+               "price", 
+               "volume_number", 
+               "previous_volume", 
+               CASE 
+                   WHEN "previous_volume" = 0 OR "previous_volume" IS NULL THEN NULL
+                   ELSE (("volume_number" - "previous_volume") / "previous_volume") * 100
+               END AS "percentage_change"
+        FROM (
+            SELECT "ticker", 
+                   "market_date", 
+                   "price", 
+                   "volume_number", 
+                   LAG("volume_number") OVER (PARTITION BY "ticker" ORDER BY TO_DATE("market_date", 'DD-MM-YYYY')) AS "previous_volume"
+            FROM (
+                SELECT "ticker", 
+                       "market_date", 
+                       "price", 
+                       CASE 
+                           WHEN "volume" LIKE '%K%' THEN CAST(REPLACE("volume", 'K', '') AS FLOAT) * 1000
+                           WHEN "volume" LIKE '%M%' THEN CAST(REPLACE("volume", 'M', '') AS FLOAT) * 1000000
+                           ELSE CAST("volume" AS FLOAT) 
+                       END AS "volume_number"
+                FROM "BANK_SALES_TRADING"."BANK_SALES_TRADING"."BITCOIN_PRICES"
+                WHERE "market_date" BETWEEN '01-08-2021' AND '10-08-2021'
+                  AND "volume" != '-'
+            ) subquery_1
+        ) subquery_2
+    ) final_query
+    WHERE "percentage_change" IS NOT NULL
+) result_set
+ORDER BY "ticker", TO_DATE("market_date", 'DD-MM-YYYY')
+LIMIT 20;
+Answer:
+ticker,market_date,percentage_change
+BTC,03-01-2017,-15.642802155504235
+BTC,04-01-2017,185.21628034312832
+BTC,05-01-2017,53.586740897165164
+BTC,06-01-2017,-19.049206283071538
+BTC,07-01-2017,-32.75001286736322
+BTC,08-01-2017,-41.13730292361855
+BTC,09-01-2017,-18.63216746846964
+BTC,10-01-2017,-14.173857462448067
+BTC,02-02-2017,-5.3062744367901695
+BTC,03-02-2017,21.25442390876917
+BTC,04-02-2017,-36.01426949894601
+BTC,05-02-2017,-21.287379624936644
+BTC,06-02-2017,3.0907920154539714
+Task: Using the "bitcoin_prices" table, please calculate the daily percentage change in trading volume for each ticker from August 1 to August 10, 2021, ensuring that any volume ending in "K" or "M" is accurately converted to thousands or millions, any "-" volume is treated as zero, only non-zero volumes are used to determine the previous day's volume, and the results are ordered by ticker and date.
+Another way to say it: For our upcoming meeting, please provide the daily percentage change in trading volume for all tickers from August 1 to August 10, 2021. Use the Bitcoin transaction data to calculate.
+
+Please think step by step and answer only one complete SQL in snowflake dialect in ```sql``` format.
+SQL usage example: ```sql
+SELECT "COLUMN_NAME" FROM DATABASE.SCHEMA.TABLE WHERE ... ``` (Adjust "DATABASE", "SCHEMA", and "TABLE" to match actual names, ensure all column names are enclosed in double quotations)
+Here are some useful tips for answering:
+When performing a UNION operation on many tables, ensure that all table names are explicitly listed. Union first and then add condition and selection. e.g. SELECT "col1", "col2" FROM (TABLE1 UNION ALL TABLE2) WHERE ...; Don't write sqls as (SELECT col1, col2 FROM TABLE1 WHERE ...) UNION ALL (SELECT col1, col2 FROM TABLE2 WHERE ...); Don't use ['-- Include all', '-- Omit', '-- Continue', '-- Union all', '-- ...', '-- List all', '-- Replace this', '-- Each table', '-- Add other'] to omit any table. Table names here: The table structure information is ({database name: {schema name: [table name]}}): 
+{'BANK_SALES_TRADING': {'BANK_SALES_TRADING': ['BITCOIN_PRICES']}}
+
+When using ORDER BY xxx DESC, add NULLS LAST to exclude null records: ORDER BY xxx DESC NULLS LAST.
+When asked something without stating name or id, return both of them. e.g. Which products ...? The answer should include product_name and product_id.
+When asked percentage decrease, you should return a positive value. e.g. How many percentage points in 2021 decrease compared to ...? The answer should be a positive value indicating the decresed number. Try to use ABS().
+If asked two tables, you should reply with the last one instead of combining two tables. e.g. Identifying the top five states ... examine the state that ranks fourth overall and identify its top five counties. You should only answer top five counties.
+Use ST_DISTANCE to calculate distance between two geographic points for more accurate answer.
+If the task description does not specify the number of decimal places, retain all decimals to four places.
+
+[Self-refine]

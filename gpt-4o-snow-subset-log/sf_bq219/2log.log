@@ -1,0 +1,1035 @@
+2025-07-01 04:41:44 - Thread-483 (execute) - INFO - [Exploration]
+Here are example queries that explore the relevant information in the dataset to incrementally work towards the target analysis.
+
+```sql
+-- Description: View distinct liquor categories to understand available options in the "category_name" column.
+SELECT DISTINCT "category_name" 
+FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES"
+LIMIT 20;
+```
+
+---
+
+```sql
+-- Description: Retrieve distinct date values to assess the time range of data, formatted as "DATE".
+SELECT DISTINCT "date" 
+FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES"
+ORDER BY "date"
+LIMIT 20;
+```
+
+---
+
+```sql
+-- Description: Aggregate total sales volume per month and per liquor category to understand the sales volume trends over time.
+SELECT 
+    DATE_TRUNC('MONTH', "date") AS "sales_month", 
+    "category_name",
+    SUM("volume_sold_liters") AS "total_volume"
+FROM 
+    "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES"
+GROUP BY 
+    DATE_TRUNC('MONTH', "date"), "category_name"
+ORDER BY 
+    "sales_month", "category_name"
+LIMIT 20;
+```
+
+---
+
+```sql
+-- Description: Calculate the total monthly sales volume across all categories per month for normalization purposes.
+SELECT 
+    DATE_TRUNC('MONTH', "date") AS "sales_month", 
+    SUM("volume_sold_liters") AS "monthly_total_volume"
+FROM 
+    "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES"
+GROUP BY 
+    DATE_TRUNC('MONTH', "date")
+ORDER BY 
+    "sales_month"
+LIMIT 20;
+```
+
+---
+
+```sql
+-- Description: Compute the monthly percentage contribution of sales volume for each liquor category.
+SELECT 
+    t1."sales_month", 
+    t1."category_name", 
+    (t1."total_volume" / t2."monthly_total_volume") * 100 AS "monthly_percentage"
+FROM 
+    (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", "category_name", SUM("volume_sold_liters") AS "total_volume" 
+     FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+     GROUP BY DATE_TRUNC('MONTH', "date"), "category_name") t1
+JOIN 
+    (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", SUM("volume_sold_liters") AS "monthly_total_volume" 
+     FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+     GROUP BY DATE_TRUNC('MONTH', "date")) t2
+ON t1."sales_month" = t2."sales_month"
+ORDER BY 
+    t1."sales_month", t1."category_name"
+LIMIT 20;
+```
+
+---
+
+```sql
+-- Description: Filter for liquor categories contributing an average of at least 1% to the monthly sales volume.
+SELECT 
+    "category_name", 
+    AVG("monthly_percentage") AS "avg_monthly_percentage"
+FROM (
+    SELECT 
+        t1."sales_month", 
+        t1."category_name", 
+        (t1."total_volume" / t2."monthly_total_volume") * 100 AS "monthly_percentage"
+    FROM 
+        (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", "category_name", SUM("volume_sold_liters") AS "total_volume" 
+         FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+         GROUP BY DATE_TRUNC('MONTH', "date"), "category_name") t1
+    JOIN 
+        (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", SUM("volume_sold_liters") AS "monthly_total_volume" 
+         FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+         GROUP BY DATE_TRUNC('MONTH', "date")) t2
+    ON t1."sales_month" = t2."sales_month")
+GROUP BY 
+    "category_name"
+HAVING 
+    AVG("monthly_percentage") >= 1
+ORDER BY 
+    "avg_monthly_percentage" DESC
+LIMIT 20;
+```
+
+---
+
+```sql
+-- Description: Retrieve the time periods (number of months) over which 1%-plus categories have monthly contributions to total sales.
+SELECT 
+    "category_name", 
+    COUNT(DISTINCT "sales_month") AS "num_months"
+FROM (
+    SELECT 
+        t1."sales_month", 
+        t1."category_name", 
+        (t1."total_volume" / t2."monthly_total_volume") * 100 AS "monthly_percentage"
+    FROM 
+        (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", "category_name", SUM("volume_sold_liters") AS "total_volume" 
+         FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+         GROUP BY DATE_TRUNC('MONTH', "date"), "category_name") t1
+    JOIN 
+        (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", SUM("volume_sold_liters") AS "monthly_total_volume" 
+         FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+         GROUP BY DATE_TRUNC('MONTH', "date")) t2
+    ON t1."sales_month" = t2."sales_month"
+    WHERE 
+        (t1."total_volume" / t2."monthly_total_volume") * 100 >= 1
+)
+GROUP BY 
+    "category_name"
+HAVING 
+    COUNT(DISTINCT "sales_month") >= 24
+ORDER BY 
+    "num_months" DESC
+LIMIT 20;
+```
+
+---
+
+```sql
+-- Description: Calculate the pairwise Pearson correlation coefficients for the monthly sales percentages of qualifying categories.
+WITH category_percentages AS (
+    SELECT 
+        t1."sales_month", 
+        t1."category_name", 
+        (t1."total_volume" / t2."monthly_total_volume") * 100 AS "monthly_percentage"
+    FROM 
+        (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", "category_name", SUM("volume_sold_liters") AS "total_volume" 
+         FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+         GROUP BY DATE_TRUNC('MONTH', "date"), "category_name") t1
+    JOIN 
+        (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", SUM("volume_sold_liters") AS "monthly_total_volume" 
+         FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+         GROUP BY DATE_TRUNC('MONTH', "date")) t2
+    ON t1."sales_month" = t2."sales_month"
+    WHERE 
+        (t1."total_volume" / t2."monthly_total_volume") * 100 >= 1
+),
+category_pairs AS (
+    SELECT 
+        p1."category_name" AS "category_1", 
+        p2."category_name" AS "category_2", 
+        CORR(p1."monthly_percentage", p2."monthly_percentage") AS "correlation"
+    FROM 
+        category_percentages p1
+    JOIN 
+        category_percentages p2
+    ON 
+        p1."sales_month" = p2."sales_month" AND p1."category_name" < p2."category_name"
+    GROUP BY 
+        p1."category_name", p2."category_name"
+)
+SELECT 
+    "category_1", 
+    "category_2", 
+    "correlation"
+FROM 
+    category_pairs
+ORDER BY 
+    "correlation" ASC
+LIMIT 20;
+```
+
+---
+
+Each query incrementally progresses toward understanding the dataset and solving the task. The final query computes the lowest correlation between monthly sales percentages for qualifying categories.
+[Exploration]
+2025-07-01 04:41:44 - Thread-483 (execute) - INFO - [Try to execute]
+-- Description: View distinct liquor categories to understand available options in the "category_name" column.
+SELECT DISTINCT "category_name" 
+FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:41:45 - Thread-483 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: View distinct liquor categories to understand available options in the "category_name" column.
+SELECT DISTINCT "category_name" 
+FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES"
+LIMIT 20;
+Results:
+category_name
+AMERICAN DRY GINS
+TRIPLE SEC
+IMPORTED DISTILLED SPIRITS SPECIALTY
+IMPORTED BRANDIES
+AMERICAN CORDIALS & LIQUEURS
+AMERICAN VODKAS
+TEMPORARY & SPECIALTY PACKAGES
+COFFEE LIQUEURS
+BLENDED WHISKIES
+COCKTAILS/RTD
+WHITE RUM
+STRAIGHT BOURBON WHISKIES
+STRAIGHT RYE WHISKIES
+CREAM LIQUEURS
+AMERICAN SCHNAPPS
+IMPORTED DRY GINS
+IMPORTED VODKAS
+AMERICAN FLAVORED VODKA
+100% AGAVE TEQUILA
+SCOTCH WHISKIES
+
+[Successfully executed]
+2025-07-01 04:41:45 - Thread-483 (execute) - INFO - [Try to execute]
+-- Description: Retrieve distinct date values to assess the time range of data, formatted as "DATE".
+SELECT DISTINCT "date" 
+FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES"
+ORDER BY "date"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:41:45 - Thread-483 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Retrieve distinct date values to assess the time range of data, formatted as "DATE".
+SELECT DISTINCT "date" 
+FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES"
+ORDER BY "date"
+LIMIT 20;
+Results:
+date
+2012-01-03
+2012-01-04
+2012-01-05
+2012-01-09
+2012-01-10
+2012-01-11
+2012-01-12
+2012-01-16
+2012-01-17
+2012-01-18
+2012-01-19
+2012-01-23
+2012-01-24
+2012-01-25
+2012-01-26
+2012-01-27
+2012-01-30
+2012-01-31
+
+[Successfully executed]
+2025-07-01 04:41:45 - Thread-483 (execute) - INFO - [Try to execute]
+-- Description: Aggregate total sales volume per month and per liquor category to understand the sales volume trends over time.
+SELECT 
+    DATE_TRUNC('MONTH', "date") AS "sales_month", 
+    "category_name",
+    SUM("volume_sold_liters") AS "total_volume"
+FROM 
+    "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES"
+GROUP BY 
+    DATE_TRUNC('MONTH', "date"), "category_name"
+ORDER BY 
+    "sales_month", "category_name"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:41:46 - Thread-483 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Aggregate total sales volume per month and per liquor category to understand the sales volume trends over time.
+SELECT 
+    DATE_TRUNC('MONTH', "date") AS "sales_month", 
+    "category_name",
+    SUM("volume_sold_liters") AS "total_volume"
+FROM 
+    "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES"
+GROUP BY 
+    DATE_TRUNC('MONTH', "date"), "category_name"
+ORDER BY 
+    "sales_month", "category_name"
+LIMIT 20;
+Results:
+sales_month,category_name,total_volume
+2012-01-01,100 PROOF VODKA,14100.75
+2012-01-01,AMERICAN ALCOHOL,2850.0
+2012-01-01,AMERICAN AMARETTO,8013.5
+2012-01-01,AMERICAN COCKTAILS,50729.249999999985
+2012-01-01,AMERICAN DRY GINS,28517.21
+2012-01-01,AMERICAN GRAPE BRANDIES,20746.229999999996
+2012-01-01,AMERICAN SLOE GINS,554.5
+2012-01-01,ANISETTE,51.0
+2012-01-01,APPLE SCHNAPPS,5160.99
+
+[Successfully executed]
+2025-07-01 04:41:46 - Thread-483 (execute) - INFO - [Try to execute]
+-- Description: Calculate the total monthly sales volume across all categories per month for normalization purposes.
+SELECT 
+    DATE_TRUNC('MONTH', "date") AS "sales_month", 
+    SUM("volume_sold_liters") AS "monthly_total_volume"
+FROM 
+    "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES"
+GROUP BY 
+    DATE_TRUNC('MONTH', "date")
+ORDER BY 
+    "sales_month"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:41:47 - Thread-483 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Calculate the total monthly sales volume across all categories per month for normalization purposes.
+SELECT 
+    DATE_TRUNC('MONTH', "date") AS "sales_month", 
+    SUM("volume_sold_liters") AS "monthly_total_volume"
+FROM 
+    "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES"
+GROUP BY 
+    DATE_TRUNC('MONTH', "date")
+ORDER BY 
+    "sales_month"
+LIMIT 20;
+Results:
+sales_month,monthly_total_volume
+2012-01-01,1212082.49
+2012-02-01,1386565.5300000003
+2012-03-01,1352872.9999999993
+2012-04-01,1499566.7799999998
+2012-05-01,1709432.6400000004
+2012-06-01,1618025.9499999997
+2012-07-01,1548759.04
+2012-08-01,1626636.12
+2012-09-01,1308896.5200000003
+2012-10-01,2362800.9300000006
+2012-11-01,1376736.2599999995
+2012-12-01,1752904.1600000001
+
+[Successfully executed]
+2025-07-01 04:41:47 - Thread-483 (execute) - INFO - [Try to execute]
+-- Description: Compute the monthly percentage contribution of sales volume for each liquor category.
+SELECT 
+    t1."sales_month", 
+    t1."category_name", 
+    (t1."total_volume" / t2."monthly_total_volume") * 100 AS "monthly_percentage"
+FROM 
+    (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", "category_name", SUM("volume_sold_liters") AS "total_volume" 
+     FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+     GROUP BY DATE_TRUNC('MONTH', "date"), "category_name") t1
+JOIN 
+    (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", SUM("volume_sold_liters") AS "monthly_total_volume" 
+     FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+     GROUP BY DATE_TRUNC('MONTH', "date")) t2
+ON t1."sales_month" = t2."sales_month"
+ORDER BY 
+    t1."sales_month", t1."category_name"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:41:50 - Thread-483 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Compute the monthly percentage contribution of sales volume for each liquor category.
+SELECT 
+    t1."sales_month", 
+    t1."category_name", 
+    (t1."total_volume" / t2."monthly_total_volume") * 100 AS "monthly_percentage"
+FROM 
+    (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", "category_name", SUM("volume_sold_liters") AS "total_volume" 
+     FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+     GROUP BY DATE_TRUNC('MONTH', "date"), "category_name") t1
+JOIN 
+    (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", SUM("volume_sold_liters") AS "monthly_total_volume" 
+     FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+     GROUP BY DATE_TRUNC('MONTH', "date")) t2
+ON t1."sales_month" = t2."sales_month"
+ORDER BY 
+    t1."sales_month", t1."category_name"
+LIMIT 20;
+Results:
+sales_month,category_name,monthly_percentage
+2012-01-01,100 PROOF VODKA,1.1633490390575647
+2012-01-01,AMERICAN ALCOHOL,0.23513251148442882
+2012-01-01,AMERICAN AMARETTO,0.6611348704492878
+2012-01-01,AMERICAN COCKTAILS,4.185296827446126
+2012-01-01,AMERICAN DRY GINS,2.352744985203112
+2012-01-01,AMERICAN GRAPE BRANDIES,1.711618653941615
+2012-01-01,AMERICAN SLOE GINS,0.045747711444952904
+2012-01-01,ANISETTE,0.004207634416037147
+
+[Successfully executed]
+2025-07-01 04:41:50 - Thread-483 (execute) - INFO - [Try to execute]
+-- Description: Filter for liquor categories contributing an average of at least 1% to the monthly sales volume.
+SELECT 
+    "category_name", 
+    AVG("monthly_percentage") AS "avg_monthly_percentage"
+FROM (
+    SELECT 
+        t1."sales_month", 
+        t1."category_name", 
+        (t1."total_volume" / t2."monthly_total_volume") * 100 AS "monthly_percentage"
+    FROM 
+        (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", "category_name", SUM("volume_sold_liters") AS "total_volume" 
+         FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+         GROUP BY DATE_TRUNC('MONTH', "date"), "category_name") t1
+    JOIN 
+        (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", SUM("volume_sold_liters") AS "monthly_total_volume" 
+         FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+         GROUP BY DATE_TRUNC('MONTH', "date")) t2
+    ON t1."sales_month" = t2."sales_month")
+GROUP BY 
+    "category_name"
+HAVING 
+    AVG("monthly_percentage") >= 1
+ORDER BY 
+    "avg_monthly_percentage" DESC
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:41:53 - Thread-483 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Filter for liquor categories contributing an average of at least 1% to the monthly sales volume.
+SELECT 
+    "category_name", 
+    AVG("monthly_percentage") AS "avg_monthly_percentage"
+FROM (
+    SELECT 
+        t1."sales_month", 
+        t1."category_name", 
+        (t1."total_volume" / t2."monthly_total_volume") * 100 AS "monthly_percentage"
+    FROM 
+        (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", "category_name", SUM("volume_sold_liters") AS "total_volume" 
+         FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+         GROUP BY DATE_TRUNC('MONTH', "date"), "category_name") t1
+    JOIN 
+        (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", SUM("volume_sold_liters") AS "monthly_total_volume" 
+         FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+         GROUP BY DATE_TRUNC('MONTH', "date")) t2
+    ON t1."sales_month" = t2."sales_month")
+GROUP BY 
+    "category_name"
+HAVING 
+    AVG("monthly_percentage") >= 1
+ORDER BY 
+    "avg_monthly_percentage" DESC
+LIMIT 20;
+Results:
+category_name,avg_monthly_percentage
+AMERICAN VODKAS,23.21156067164384
+VODKA 80 PROOF,19.989118145977834
+CANADIAN WHISKIES,12.846569201285467
+SPICED RUM,6.63366832927565
+STRAIGHT BOURBON WHISKIES,4.77922915934246
+PUERTO RICO & VIRGIN ISLANDS RUM,4.380897163822909
+WHISKEY LIQUEUR,4.2394859393384206
+COCKTAILS/RTD,3.8749806651602934
+BLENDED WHISKIES,3.836941878100829
+IMPORTED VODKAS,3.8143087242539204
+TEQUILA,3.776803816848492
+AMERICAN COCKTAILS,3.6147245155504644
+VODKA FLAVORED,3.2600
+
+[Successfully executed]
+2025-07-01 04:41:53 - Thread-483 (execute) - INFO - [Try to execute]
+-- Description: Retrieve the time periods (number of months) over which 1%-plus categories have monthly contributions to total sales.
+SELECT 
+    "category_name", 
+    COUNT(DISTINCT "sales_month") AS "num_months"
+FROM (
+    SELECT 
+        t1."sales_month", 
+        t1."category_name", 
+        (t1."total_volume" / t2."monthly_total_volume") * 100 AS "monthly_percentage"
+    FROM 
+        (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", "category_name", SUM("volume_sold_liters") AS "total_volume" 
+         FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+         GROUP BY DATE_TRUNC('MONTH', "date"), "category_name") t1
+    JOIN 
+        (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", SUM("volume_sold_liters") AS "monthly_total_volume" 
+         FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+         GROUP BY DATE_TRUNC('MONTH', "date")) t2
+    ON t1."sales_month" = t2."sales_month"
+    WHERE 
+        (t1."total_volume" / t2."monthly_total_volume") * 100 >= 1
+)
+GROUP BY 
+    "category_name"
+HAVING 
+    COUNT(DISTINCT "sales_month") >= 24
+ORDER BY 
+    "num_months" DESC
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:41:54 - Thread-483 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Retrieve the time periods (number of months) over which 1%-plus categories have monthly contributions to total sales.
+SELECT 
+    "category_name", 
+    COUNT(DISTINCT "sales_month") AS "num_months"
+FROM (
+    SELECT 
+        t1."sales_month", 
+        t1."category_name", 
+        (t1."total_volume" / t2."monthly_total_volume") * 100 AS "monthly_percentage"
+    FROM 
+        (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", "category_name", SUM("volume_sold_liters") AS "total_volume" 
+         FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+         GROUP BY DATE_TRUNC('MONTH', "date"), "category_name") t1
+    JOIN 
+        (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", SUM("volume_sold_liters") AS "monthly_total_volume" 
+         FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+         GROUP BY DATE_TRUNC('MONTH', "date")) t2
+    ON t1."sales_month" = t2."sales_month"
+    WHERE 
+        (t1."total_volume" / t2."monthly_total_volume") * 100 >= 1
+)
+GROUP BY 
+    "category_name"
+HAVING 
+    COUNT(DISTINCT "sales_month") >= 24
+ORDER BY 
+    "num_months" DESC
+LIMIT 20;
+Results:
+category_name,num_months
+SPICED RUM,153
+BLENDED WHISKIES,153
+IMPORTED VODKAS,153
+WHISKEY LIQUEUR,153
+FLAVORED RUM,153
+STRAIGHT BOURBON WHISKIES,153
+TENNESSEE WHISKIES,153
+AMERICAN DRY GINS,153
+CANADIAN WHISKIES,153
+IMPORTED SCHNAPPS,151
+CREAM LIQUEURS,118
+SCOTCH WHISKIES,109
+WHITE RUM,97
+AMERICAN VODKAS,97
+100% AGAVE TEQUILA,97
+AMERICAN FLAVORED VODKA,97
+AMERICAN SCHNAPPS,97
+AMERICAN BRANDIES,97
+COCKTAILS/RTD,97
+MIXTO TEQUILA,97
+
+[Successfully executed]
+2025-07-01 04:41:54 - Thread-483 (execute) - INFO - [Try to execute]
+-- Description: Calculate the pairwise Pearson correlation coefficients for the monthly sales percentages of qualifying categories.
+WITH category_percentages AS (
+    SELECT 
+        t1."sales_month", 
+        t1."category_name", 
+        (t1."total_volume" / t2."monthly_total_volume") * 100 AS "monthly_percentage"
+    FROM 
+        (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", "category_name", SUM("volume_sold_liters") AS "total_volume" 
+         FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+         GROUP BY DATE_TRUNC('MONTH', "date"), "category_name") t1
+    JOIN 
+        (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", SUM("volume_sold_liters") AS "monthly_total_volume" 
+         FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+         GROUP BY DATE_TRUNC('MONTH', "date")) t2
+    ON t1."sales_month" = t2."sales_month"
+    WHERE 
+        (t1."total_volume" / t2."monthly_total_volume") * 100 >= 1
+),
+category_pairs AS (
+    SELECT 
+        p1."category_name" AS "category_1", 
+        p2."category_name" AS "category_2", 
+        CORR(p1."monthly_percentage", p2."monthly_percentage") AS "correlation"
+    FROM 
+        category_percentages p1
+    JOIN 
+        category_percentages p2
+    ON 
+        p1."sales_month" = p2."sales_month" AND p1."category_name" < p2."category_name"
+    GROUP BY 
+        p1."category_name", p2."category_name"
+)
+SELECT 
+    "category_1", 
+    "category_2", 
+    "correlation"
+FROM 
+    category_pairs
+ORDER BY 
+    "correlation" ASC
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:41:57 - Thread-483 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Calculate the pairwise Pearson correlation coefficients for the monthly sales percentages of qualifying categories.
+WITH category_percentages AS (
+    SELECT 
+        t1."sales_month", 
+        t1."category_name", 
+        (t1."total_volume" / t2."monthly_total_volume") * 100 AS "monthly_percentage"
+    FROM 
+        (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", "category_name", SUM("volume_sold_liters") AS "total_volume" 
+         FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+         GROUP BY DATE_TRUNC('MONTH', "date"), "category_name") t1
+    JOIN 
+        (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", SUM("volume_sold_liters") AS "monthly_total_volume" 
+         FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+         GROUP BY DATE_TRUNC('MONTH', "date")) t2
+    ON t1."sales_month" = t2."sales_month"
+    WHERE 
+        (t1."total_volume" / t2."monthly_total_volume") * 100 >= 1
+),
+category_pairs AS (
+    SELECT 
+        p1."category_name" AS "category_1", 
+        p2."category_name" AS "category_2", 
+        CORR(p1."monthly_percentage", p2."monthly_percentage") AS "correlation"
+    FROM 
+        category_percentages p1
+    JOIN 
+        category_percentages p2
+    ON 
+        p1."sales_month" = p2."sales_month" AND p1."category_name" < p2."category_name"
+    GROUP BY 
+        p1."category_name", p2."category_name"
+)
+SELECT 
+    "category_1", 
+    "category_2", 
+    "correlation"
+FROM 
+    category_pairs
+ORDER BY 
+    "correlation" ASC
+LIMIT 20;
+Results:
+category_1,category_2,correlation
+IMPORTED GRAPE BRANDIES,WHISKEY LIQUEUR,-1.0000000000023994
+CANADIAN WHISKIES,IMPORTED GRAPE BRANDIES,-1.000000000000393
+DECANTERS & SPECIALTY PACKAGES,STRAIGHT RYE WHISKIES,-1.0000000000000344
+IMPORTED GRAPE BRANDIES,SCOTCH WHISKIES,-1.0000000000000187
+IMPORTED GRAPE BRANDIES,IMPORTED SCHNAPPS,-0.9999999999999846
+DECANTERS & SPECIALTY PACKAGES,IMPORTED DRY GINS,-0.9999999999999811
+CREAM LIQUEURS,IMPORTED GRAPE BRANDIES,-0.9999999999999806
+BLENDED WHISKI
+
+[Successfully executed]
+2025-07-01 04:41:57 - Thread-483 (execute) - INFO - itercount: 0
+2025-07-01 04:41:57 - Thread-483 (execute) - INFO - [Self-refine]
+Table full name: IOWA_LIQUOR_SALES.IOWA_LIQUOR_SALES.SALES
+Column name: category_name Type: TEXT Description: Category of the liquor ordered.
+Column name: sale_dollars Type: FLOAT Description: Total cost of liquor order (number of bottles multiplied by the state bottle retail)
+Column name: volume_sold_liters Type: FLOAT Description: Total volume of liquor ordered in liters. (i.e. (Bottle Volume (ml) x Bottles Sold)/1,000)"
+Column name: bottles_sold Type: NUMBER Description: The number of bottles of liquor ordered by the store
+Column name: category Type: TEXT Description: Category code associated with the liquor ordered
+Column name: date Type: DATE Description: Date of order
+Sample rows:
+[{'date': '2012-09-18', 'category': '1082900.0', 'category_name': 'MISC. IMPORTED CORDIALS & LIQUEURS', 'bottles_sold': 3, 'sale_dollars': 104.88, 'volume_sold_liters': 2.25}, {'date': '2018-05-17', 'category': '1082000.0', 'category_name': 'IMPORTED CORDIALS & LIQUEURS', 'bottles_sold': 3, 'sale_dollars': 89.97, 'volume_sold_liters': 2.25}, {'date': '2024-05-16', 'category': '1082100.0', 'category_name': 'IMPORTED CORDIALS & LIQUEURS', 'bottles_sold': 3, 'sale_dollars': 103.41, 'volume_sold_liters': 2.25}, {'date': '2017-05-16', 'category': '1082000.0', 'category_name': 'IMPORTED CORDIALS & LIQUEURS', 'bottles_sold': 3, 'sale_dollars': 89.97, 'volume_sold_liters': 2.25}, {'date': '2021-06-28', 'category': '1082000.0', 'category_name': 'IMPORTED CORDIALS & LIQUEURS', 'bottles_sold': 3, 'sale_dollars': 89.97, 'volume_sold_liters': 2.25}]
+--------------------------------------------------
+External knowledge that might be helpful: 
+None
+The table structure information is ({database name: {schema name: [table name]}}): 
+{'IOWA_LIQUOR_SALES': {'IOWA_LIQUOR_SALES': ['SALES']}}
+
+Some few-shot examples after column exploration may be helpful:
+Query:
+-- Description: View distinct liquor categories to understand available options in the "category_name" column.
+SELECT DISTINCT "category_name" 
+FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES"
+LIMIT 20;
+Answer:
+category_name
+AMERICAN DRY GINS
+TRIPLE SEC
+IMPORTED DISTILLED SPIRITS SPECIALTY
+IMPORTED BRANDIES
+AMERICAN CORDIALS & LIQUEURS
+AMERICAN VODKAS
+TEMPORARY & SPECIALTY PACKAGES
+COFFEE LIQUEURS
+BLENDED WHISKIES
+COCKTAILS/RTD
+WHITE RUM
+STRAIGHT BOURBON WHISKIES
+STRAIGHT RYE WHISKIES
+CREAM LIQUEURS
+AMERICAN SCHNAPPS
+IMPORTED DRY GINS
+IMPORTED VODKAS
+AMERICAN FLAVORED VODKA
+100% AGAVE TEQUILA
+SCOTCH WHISKIES
+Query:
+-- Description: Retrieve distinct date values to assess the time range of data, formatted as "DATE".
+SELECT DISTINCT "date" 
+FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES"
+ORDER BY "date"
+LIMIT 20;
+Answer:
+date
+2012-01-03
+2012-01-04
+2012-01-05
+2012-01-09
+2012-01-10
+2012-01-11
+2012-01-12
+2012-01-16
+2012-01-17
+2012-01-18
+2012-01-19
+2012-01-23
+2012-01-24
+2012-01-25
+2012-01-26
+2012-01-27
+2012-01-30
+2012-01-31
+Query:
+-- Description: Aggregate total sales volume per month and per liquor category to understand the sales volume trends over time.
+SELECT 
+    DATE_TRUNC('MONTH', "date") AS "sales_month", 
+    "category_name",
+    SUM("volume_sold_liters") AS "total_volume"
+FROM 
+    "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES"
+GROUP BY 
+    DATE_TRUNC('MONTH', "date"), "category_name"
+ORDER BY 
+    "sales_month", "category_name"
+LIMIT 20;
+Answer:
+sales_month,category_name,total_volume
+2012-01-01,100 PROOF VODKA,14100.75
+2012-01-01,AMERICAN ALCOHOL,2850.0
+2012-01-01,AMERICAN AMARETTO,8013.5
+2012-01-01,AMERICAN COCKTAILS,50729.249999999985
+2012-01-01,AMERICAN DRY GINS,28517.21
+2012-01-01,AMERICAN GRAPE BRANDIES,20746.229999999996
+2012-01-01,AMERICAN SLOE GINS,554.5
+2012-01-01,ANISETTE,51.0
+2012-01-01,APPLE SCHNAPPS,5160.99
+Query:
+-- Description: Calculate the total monthly sales volume across all categories per month for normalization purposes.
+SELECT 
+    DATE_TRUNC('MONTH', "date") AS "sales_month", 
+    SUM("volume_sold_liters") AS "monthly_total_volume"
+FROM 
+    "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES"
+GROUP BY 
+    DATE_TRUNC('MONTH', "date")
+ORDER BY 
+    "sales_month"
+LIMIT 20;
+Answer:
+sales_month,monthly_total_volume
+2012-01-01,1212082.49
+2012-02-01,1386565.5300000003
+2012-03-01,1352872.9999999993
+2012-04-01,1499566.7799999998
+2012-05-01,1709432.6400000004
+2012-06-01,1618025.9499999997
+2012-07-01,1548759.04
+2012-08-01,1626636.12
+2012-09-01,1308896.5200000003
+2012-10-01,2362800.9300000006
+2012-11-01,1376736.2599999995
+2012-12-01,1752904.1600000001
+Query:
+-- Description: Compute the monthly percentage contribution of sales volume for each liquor category.
+SELECT 
+    t1."sales_month", 
+    t1."category_name", 
+    (t1."total_volume" / t2."monthly_total_volume") * 100 AS "monthly_percentage"
+FROM 
+    (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", "category_name", SUM("volume_sold_liters") AS "total_volume" 
+     FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+     GROUP BY DATE_TRUNC('MONTH', "date"), "category_name") t1
+JOIN 
+    (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", SUM("volume_sold_liters") AS "monthly_total_volume" 
+     FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+     GROUP BY DATE_TRUNC('MONTH', "date")) t2
+ON t1."sales_month" = t2."sales_month"
+ORDER BY 
+    t1."sales_month", t1."category_name"
+LIMIT 20;
+Answer:
+sales_month,category_name,monthly_percentage
+2012-01-01,100 PROOF VODKA,1.1633490390575647
+2012-01-01,AMERICAN ALCOHOL,0.23513251148442882
+2012-01-01,AMERICAN AMARETTO,0.6611348704492878
+2012-01-01,AMERICAN COCKTAILS,4.185296827446126
+2012-01-01,AMERICAN DRY GINS,2.352744985203112
+2012-01-01,AMERICAN GRAPE BRANDIES,1.711618653941615
+2012-01-01,AMERICAN SLOE GINS,0.045747711444952904
+2012-01-01,ANISETTE,0.004207634416037147
+Query:
+-- Description: Filter for liquor categories contributing an average of at least 1% to the monthly sales volume.
+SELECT 
+    "category_name", 
+    AVG("monthly_percentage") AS "avg_monthly_percentage"
+FROM (
+    SELECT 
+        t1."sales_month", 
+        t1."category_name", 
+        (t1."total_volume" / t2."monthly_total_volume") * 100 AS "monthly_percentage"
+    FROM 
+        (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", "category_name", SUM("volume_sold_liters") AS "total_volume" 
+         FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+         GROUP BY DATE_TRUNC('MONTH', "date"), "category_name") t1
+    JOIN 
+        (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", SUM("volume_sold_liters") AS "monthly_total_volume" 
+         FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+         GROUP BY DATE_TRUNC('MONTH', "date")) t2
+    ON t1."sales_month" = t2."sales_month")
+GROUP BY 
+    "category_name"
+HAVING 
+    AVG("monthly_percentage") >= 1
+ORDER BY 
+    "avg_monthly_percentage" DESC
+LIMIT 20;
+Answer:
+category_name,avg_monthly_percentage
+AMERICAN VODKAS,23.21156067164384
+VODKA 80 PROOF,19.989118145977834
+CANADIAN WHISKIES,12.846569201285467
+SPICED RUM,6.63366832927565
+STRAIGHT BOURBON WHISKIES,4.77922915934246
+PUERTO RICO & VIRGIN ISLANDS RUM,4.380897163822909
+WHISKEY LIQUEUR,4.2394859393384206
+COCKTAILS/RTD,3.8749806651602934
+BLENDED WHISKIES,3.836941878100829
+IMPORTED VODKAS,3.8143087242539204
+TEQUILA,3.776803816848492
+AMERICAN COCKTAILS,3.6147245155504644
+VODKA FLAVORED,3.2600
+Query:
+-- Description: Retrieve the time periods (number of months) over which 1%-plus categories have monthly contributions to total sales.
+SELECT 
+    "category_name", 
+    COUNT(DISTINCT "sales_month") AS "num_months"
+FROM (
+    SELECT 
+        t1."sales_month", 
+        t1."category_name", 
+        (t1."total_volume" / t2."monthly_total_volume") * 100 AS "monthly_percentage"
+    FROM 
+        (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", "category_name", SUM("volume_sold_liters") AS "total_volume" 
+         FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+         GROUP BY DATE_TRUNC('MONTH', "date"), "category_name") t1
+    JOIN 
+        (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", SUM("volume_sold_liters") AS "monthly_total_volume" 
+         FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+         GROUP BY DATE_TRUNC('MONTH', "date")) t2
+    ON t1."sales_month" = t2."sales_month"
+    WHERE 
+        (t1."total_volume" / t2."monthly_total_volume") * 100 >= 1
+)
+GROUP BY 
+    "category_name"
+HAVING 
+    COUNT(DISTINCT "sales_month") >= 24
+ORDER BY 
+    "num_months" DESC
+LIMIT 20;
+Answer:
+category_name,num_months
+SPICED RUM,153
+BLENDED WHISKIES,153
+IMPORTED VODKAS,153
+WHISKEY LIQUEUR,153
+FLAVORED RUM,153
+STRAIGHT BOURBON WHISKIES,153
+TENNESSEE WHISKIES,153
+AMERICAN DRY GINS,153
+CANADIAN WHISKIES,153
+IMPORTED SCHNAPPS,151
+CREAM LIQUEURS,118
+SCOTCH WHISKIES,109
+WHITE RUM,97
+AMERICAN VODKAS,97
+100% AGAVE TEQUILA,97
+AMERICAN FLAVORED VODKA,97
+AMERICAN SCHNAPPS,97
+AMERICAN BRANDIES,97
+COCKTAILS/RTD,97
+MIXTO TEQUILA,97
+Query:
+-- Description: Calculate the pairwise Pearson correlation coefficients for the monthly sales percentages of qualifying categories.
+WITH category_percentages AS (
+    SELECT 
+        t1."sales_month", 
+        t1."category_name", 
+        (t1."total_volume" / t2."monthly_total_volume") * 100 AS "monthly_percentage"
+    FROM 
+        (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", "category_name", SUM("volume_sold_liters") AS "total_volume" 
+         FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+         GROUP BY DATE_TRUNC('MONTH', "date"), "category_name") t1
+    JOIN 
+        (SELECT DATE_TRUNC('MONTH', "date") AS "sales_month", SUM("volume_sold_liters") AS "monthly_total_volume" 
+         FROM "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES" 
+         GROUP BY DATE_TRUNC('MONTH', "date")) t2
+    ON t1."sales_month" = t2."sales_month"
+    WHERE 
+        (t1."total_volume" / t2."monthly_total_volume") * 100 >= 1
+),
+category_pairs AS (
+    SELECT 
+        p1."category_name" AS "category_1", 
+        p2."category_name" AS "category_2", 
+        CORR(p1."monthly_percentage", p2."monthly_percentage") AS "correlation"
+    FROM 
+        category_percentages p1
+    JOIN 
+        category_percentages p2
+    ON 
+        p1."sales_month" = p2."sales_month" AND p1."category_name" < p2."category_name"
+    GROUP BY 
+        p1."category_name", p2."category_name"
+)
+SELECT 
+    "category_1", 
+    "category_2", 
+    "correlation"
+FROM 
+    category_pairs
+ORDER BY 
+    "correlation" ASC
+LIMIT 20;
+Answer:
+category_1,category_2,correlation
+IMPORTED GRAPE BRANDIES,WHISKEY LIQUEUR,-1.0000000000023994
+CANADIAN WHISKIES,IMPORTED GRAPE BRANDIES,-1.000000000000393
+DECANTERS & SPECIALTY PACKAGES,STRAIGHT RYE WHISKIES,-1.0000000000000344
+IMPORTED GRAPE BRANDIES,SCOTCH WHISKIES,-1.0000000000000187
+IMPORTED GRAPE BRANDIES,IMPORTED SCHNAPPS,-0.9999999999999846
+DECANTERS & SPECIALTY PACKAGES,IMPORTED DRY GINS,-0.9999999999999811
+CREAM LIQUEURS,IMPORTED GRAPE BRANDIES,-0.9999999999999806
+BLENDED WHISKI
+Task: In the Iowa Liquor Sales dataset, starting from January 1, 2022 through the last fully completed month, which two liquor categories, each contributing an average of at least 1% to the monthly sales volume over at least 24 months of available data, have the lowest Pearson correlation coefficient when comparing their monthly percentages of total liquor sales across those months, and what are their names?
+Another way to say it: Which two liquor categories, each contributing an average of at least 1% to monthly sales volume over 24 months, have the lowest Pearson correlation coefficient in their sales percentages?
+
+Please think step by step and answer only one complete SQL in snowflake dialect in ```sql``` format.
+SQL usage example: ```sql
+SELECT "COLUMN_NAME" FROM DATABASE.SCHEMA.TABLE WHERE ... ``` (Adjust "DATABASE", "SCHEMA", and "TABLE" to match actual names, ensure all column names are enclosed in double quotations)
+Here are some useful tips for answering:
+When performing a UNION operation on many tables, ensure that all table names are explicitly listed. Union first and then add condition and selection. e.g. SELECT "col1", "col2" FROM (TABLE1 UNION ALL TABLE2) WHERE ...; Don't write sqls as (SELECT col1, col2 FROM TABLE1 WHERE ...) UNION ALL (SELECT col1, col2 FROM TABLE2 WHERE ...); Don't use ['-- Include all', '-- Omit', '-- Continue', '-- Union all', '-- ...', '-- List all', '-- Replace this', '-- Each table', '-- Add other'] to omit any table. Table names here: The table structure information is ({database name: {schema name: [table name]}}): 
+{'IOWA_LIQUOR_SALES': {'IOWA_LIQUOR_SALES': ['SALES']}}
+
+When using ORDER BY xxx DESC, add NULLS LAST to exclude null records: ORDER BY xxx DESC NULLS LAST.
+When asked something without stating name or id, return both of them. e.g. Which products ...? The answer should include product_name and product_id.
+When asked percentage decrease, you should return a positive value. e.g. How many percentage points in 2021 decrease compared to ...? The answer should be a positive value indicating the decresed number. Try to use ABS().
+If asked two tables, you should reply with the last one instead of combining two tables. e.g. Identifying the top five states ... examine the state that ranks fourth overall and identify its top five counties. You should only answer top five counties.
+Use ST_DISTANCE to calculate distance between two geographic points for more accurate answer.
+If the task description does not specify the number of decimal places, retain all decimals to four places.
+
+[Self-refine]
+2025-07-01 04:42:19 - Thread-483 (execute) - INFO - [Try to run SQL in self-refine]
+```sql
+WITH filtered_data AS (
+    -- Step 1: Filter data for the desired date range and calculate monthly sales percentages
+    SELECT 
+        DATE_TRUNC('MONTH', "date") AS "sales_month",
+        "category_name",
+        SUM("volume_sold_liters") AS "category_volume",
+        SUM(SUM("volume_sold_liters")) OVER (PARTITION BY DATE_TRUNC('MONTH', "date")) AS "monthly_total_volume",
+        (SUM("volume_sold_liters") / SUM(SUM("volume_sold_liters")) OVER (PARTITION BY DATE_TRUNC('MONTH', "date"))) * 100 AS "monthly_percentage"
+    FROM 
+        "IOWA_LIQUOR_SALES"."IOWA_LIQUOR_SALES"."SALES"
+    WHERE 
+        "date" >= '2022-01-01' 
+        AND "date" < DATE_TRUNC('MONTH', CURRENT_DATE) -- Exclude the current partial month
+    GROUP BY 
+        DATE_TRUNC('MONTH', "date"), "category_name"
+),
+qualifying_categories AS (
+    -- Step 2: Filter categories that contribute at least 1% to monthly sales over at least 24 months
+    SELECT 
+        "category_name"
+    FROM (
+        SELECT 
+            "category_name",
+            COUNT(DISTINCT "sales_month") AS "num_months",
+            AVG("monthly_percentage") AS "avg_monthly_percentage"
+        FROM 
+            filtered_data
+        WHERE 
+            "monthly_percentage" >= 1
+        GROUP BY 
+            "category_name"
+    )
+    WHERE 
+        "num_months" >= 24
+),
+category_percentages AS (
+    -- Step 3: Get the monthly percentages for the qualifying categories
+    SELECT 
+        f."sales_month",
+        f."category_name",
+        f."monthly_percentage"
+    FROM 
+        filtered_data f
+    JOIN 
+        qualifying_categories q
+    ON 
+        f."category_name" = q."category_name"
+),
+category_pairs AS (
+    -- Step 4: Calculate pairwise Pearson correlation coefficients
+    SELECT 
+        p1."category_name" AS "category_1", 
+        p2."category_name" AS "category_2", 
+        CORR(p1."monthly_percentage", p2."monthly_percentage") AS "correlation"
+    FROM 
+        category_percentages p1
+    JOIN 
+        category_percentages p2
+    ON 
+        p1."sales_month" = p2."sales_month" AND p1."category_name" < p2."category_name"
+    GROUP BY 
+        p1."category_name", p2."category_name"
+)
+-- Step 5: Retrieve the pair with the lowest correlation
+SELECT 
+    "category_1", 
+    "category_2", 
+    "correlation"
+FROM 
+    category_pairs
+ORDER BY 
+    "correlation" ASC NULLS LAST
+LIMIT 1;
+```
+[Try to run SQL in self-refine]
+2025-07-01 04:42:23 - Thread-483 (execute) - INFO - Total iteration counts: 0

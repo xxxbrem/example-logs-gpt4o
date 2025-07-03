@@ -1,0 +1,1219 @@
+2025-07-01 04:05:09 - Thread-98 (execute) - INFO - [Exploration]
+```sql
+-- Description: Retrieve distinct patent IDs, titles, and application dates for patents in the 'PATENT' table within the specified CPC categories ('C05' or 'A01G').
+SELECT DISTINCT 
+    p."id" AS "patent_id", 
+    p."title", 
+    ap."date" AS "application_date"
+FROM 
+    PATENTSVIEW.PATENTSVIEW.PATENT p
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.CPC_CURRENT cc
+ON 
+    p."id" = cc."patent_id"
+JOIN
+    PATENTSVIEW.PATENTSVIEW.APPLICATION ap
+ON
+    p."id" = ap."patent_id"
+WHERE 
+    (cc."subsection_id" = 'C05' OR cc."group_id" = 'A01G')
+LIMIT 20;
+```
+
+```sql
+-- Description: Retrieve backward citation counts for patents, filtering by citations made within 1 month before application dates, grouped by patent ID.
+SELECT DISTINCT 
+    p."id" AS "patent_id", 
+    COUNT(DISTINCT uc."citation_id") AS "backward_citation_count"
+FROM 
+    PATENTSVIEW.PATENTSVIEW.PATENT p
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc
+ON 
+    p."id" = uc."citation_id"
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.APPLICATION ap
+ON 
+    p."id" = ap."patent_id"
+WHERE 
+    DATE(uc."date") BETWEEN DATEADD(month, -1, DATE(ap."date")) AND DATE(ap."date")
+GROUP BY 
+    p."id"
+LIMIT 20;
+```
+
+```sql
+-- Description: Retrieve forward citation counts for patents, filtering by citations made within 1 month after application dates, grouped by patent ID.
+SELECT DISTINCT 
+    p."id" AS "patent_id", 
+    COUNT(DISTINCT uc."citation_id") AS "forward_citation_count"
+FROM 
+    PATENTSVIEW.PATENTSVIEW.PATENT p
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc
+ON 
+    p."id" = uc."patent_id"
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.APPLICATION ap
+ON 
+    p."id" = ap."patent_id"
+WHERE 
+    DATE(uc."date") BETWEEN DATE(ap."date") AND DATEADD(month, 1, DATE(ap."date"))
+GROUP BY 
+    p."id"
+LIMIT 20;
+```
+
+```sql
+-- Description: Retrieve the abstract text from the 'PATENT' table for patents that belong to the specified CPC categories ('C05' or 'A01G').
+SELECT DISTINCT 
+    p."id" AS "patent_id", 
+    p."abstract" AS "abstract_text"
+FROM 
+    PATENTSVIEW.PATENTSVIEW.PATENT p
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.CPC_CURRENT cc
+ON 
+    p."id" = cc."patent_id"
+WHERE 
+    (cc."subsection_id" = 'C05' OR cc."group_id" = 'A01G')
+LIMIT 20;
+```
+
+```sql
+-- Description: Filter patents by ensuring at least one backward or forward citation exists within the 1-month period and retrieve all necessary columns for the task.
+SELECT DISTINCT 
+    p."id" AS "patent_id", 
+    p."title", 
+    ap."date" AS "application_date", 
+    p."abstract" AS "abstract_text",
+    (SELECT COUNT(DISTINCT uc1."citation_id") 
+     FROM PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc1 
+     WHERE uc1."citation_id" = p."id" AND 
+           DATE(uc1."date") BETWEEN DATEADD(month, -1, DATE(ap."date")) AND DATE(ap."date")) AS "backward_citation_count",
+    (SELECT COUNT(DISTINCT uc2."citation_id") 
+     FROM PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc2 
+     WHERE uc2."patent_id" = p."id" AND 
+           DATE(uc2."date") BETWEEN DATE(ap."date") AND DATEADD(month, 1, DATE(ap."date"))) AS "forward_citation_count"
+FROM 
+    PATENTSVIEW.PATENTSVIEW.PATENT p
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.CPC_CURRENT cc
+ON 
+    p."id" = cc."patent_id"
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.APPLICATION ap
+ON 
+    p."id" = ap."patent_id"
+WHERE 
+    (cc."subsection_id" = 'C05' OR cc."group_id" = 'A01G')
+    AND ((SELECT COUNT(DISTINCT uc1."citation_id") 
+          FROM PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc1 
+          WHERE uc1."citation_id" = p."id" AND 
+                DATE(uc1."date") BETWEEN DATEADD(month, -1, DATE(ap."date")) AND DATE(ap."date"))) > 0 OR
+         (SELECT COUNT(DISTINCT uc2."citation_id") 
+          FROM PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc2 
+          WHERE uc2."patent_id" = p."id" AND 
+                DATE(uc2."date") BETWEEN DATE(ap."date") AND DATEADD(month, 1, DATE(ap."date"))) > 0)
+ORDER BY 
+    ap."date"
+LIMIT 20;
+```
+
+```sql
+-- Description: Find patents in specific CPC categories with backward citations, forward citations, and all task-relevant columns, using nested subqueries for summaries.
+SELECT DISTINCT 
+    patents_forward."patent_id", 
+    patents_forward."title", 
+    patents_forward."application_date", 
+    patents_forward."abstract_text", 
+    patents_backward."backward_citation_count", 
+    patents_forward."forward_citation_count"
+FROM 
+    (SELECT 
+        p."id" AS "patent_id", 
+        p."title", 
+        ap."date" AS "application_date", 
+        p."abstract" AS "abstract_text",
+        COUNT(DISTINCT uc_f."citation_id") AS "forward_citation_count"
+     FROM 
+        PATENTSVIEW.PATENTSVIEW.PATENT p
+     JOIN 
+        PATENTSVIEW.PATENTSVIEW.CPC_CURRENT cc
+     ON 
+        p."id" = cc."patent_id"
+     JOIN 
+        PATENTSVIEW.PATENTSVIEW.APPLICATION ap
+     ON 
+        p."id" = ap."patent_id"
+     JOIN
+        PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc_f
+     ON 
+        uc_f."patent_id" = p."id"
+     WHERE 
+        (cc."subsection_id" = 'C05' OR cc."group_id" = 'A01G')
+        AND DATE(uc_f."date") BETWEEN DATE(ap."date") AND DATEADD(month, 1, DATE(ap."date"))
+    GROUP BY 
+        p."id", p."title", ap."date", p."abstract") patents_forward
+JOIN 
+    (SELECT 
+        p."id" AS "patent_id", 
+        COUNT(DISTINCT uc_b."citation_id") AS "backward_citation_count"
+     FROM 
+        PATENTSVIEW.PATENTSVIEW.PATENT p
+     JOIN
+        PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc_b
+     ON 
+        uc_b."citation_id" = p."id"
+     JOIN
+        PATENTSVIEW.PATENTSVIEW.APPLICATION ap
+     ON 
+        p."id" = ap."patent_id"
+     WHERE 
+        DATE(uc_b."date") BETWEEN DATEADD(month, -1, DATE(ap."date")) AND DATE(ap."date")
+    GROUP BY 
+        p."id") patents_backward
+ON 
+    patents_forward."patent_id" = patents_backward."patent_id"
+ORDER BY 
+    patents_forward."application_date"
+LIMIT 20;
+```
+[Exploration]
+2025-07-01 04:05:09 - Thread-98 (execute) - INFO - [Try to execute]
+-- Description: Retrieve distinct patent IDs, titles, and application dates for patents in the 'PATENT' table within the specified CPC categories ('C05' or 'A01G').
+SELECT DISTINCT 
+    p."id" AS "patent_id", 
+    p."title", 
+    ap."date" AS "application_date"
+FROM 
+    PATENTSVIEW.PATENTSVIEW.PATENT p
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.CPC_CURRENT cc
+ON 
+    p."id" = cc."patent_id"
+JOIN
+    PATENTSVIEW.PATENTSVIEW.APPLICATION ap
+ON
+    p."id" = ap."patent_id"
+WHERE 
+    (cc."subsection_id" = 'C05' OR cc."group_id" = 'A01G')
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:05:14 - Thread-98 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Retrieve distinct patent IDs, titles, and application dates for patents in the 'PATENT' table within the specified CPC categories ('C05' or 'A01G').
+SELECT DISTINCT 
+    p."id" AS "patent_id", 
+    p."title", 
+    ap."date" AS "application_date"
+FROM 
+    PATENTSVIEW.PATENTSVIEW.PATENT p
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.CPC_CURRENT cc
+ON 
+    p."id" = cc."patent_id"
+JOIN
+    PATENTSVIEW.PATENTSVIEW.APPLICATION ap
+ON
+    p."id" = ap."patent_id"
+WHERE 
+    (cc."subsection_id" = 'C05' OR cc."group_id" = 'A01G')
+LIMIT 20;
+Results:
+patent_id,title,application_date
+10241488,Automated irrigation control system,2017-08-29
+10100550,Foldable tubular element with one rigid degree of freedom,2014-11-06
+4921024,Method and apparatus to fell a tree,1989-10-16
+7415796,Method and apparatus for growing plants,2005-03-08
+9572301,Switch-free multi-cutting mode shearing tool,2014-12-30
+9901949,Water spraying system,2013-06-14
+7648085,Drip emitter,2006-02-22
+4987698,Mushroom cultivation,1988-11-30
+5136807,Arrangement for growing p
+
+[Successfully executed]
+2025-07-01 04:05:14 - Thread-98 (execute) - INFO - [Try to execute]
+-- Description: Retrieve backward citation counts for patents, filtering by citations made within 1 month before application dates, grouped by patent ID.
+SELECT DISTINCT 
+    p."id" AS "patent_id", 
+    COUNT(DISTINCT uc."citation_id") AS "backward_citation_count"
+FROM 
+    PATENTSVIEW.PATENTSVIEW.PATENT p
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc
+ON 
+    p."id" = uc."citation_id"
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.APPLICATION ap
+ON 
+    p."id" = ap."patent_id"
+WHERE 
+    DATE(uc."date") BETWEEN DATEADD(month, -1, DATE(ap."date")) AND DATE(ap."date")
+GROUP BY 
+    p."id"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:05:21 - Thread-98 (execute) - INFO - [Error occurred]
+{'status': 'error', 'error_msg': "##ERROR##100040 (22007): Date '1929-04-00' is not recognized"}
+[Error occurred]
+2025-07-01 04:06:23 - Thread-98 (execute) - INFO - [Corrected SQL]
+### Thinking process:
+The issue stems from invalid date values in either the `APPLICATION` or `USPATENTCITATION` tables, such as '1929-04-00'. Invalid formats prevent the `DATE()` function from executing correctly, which causes the query to fail. The solution is to validate the dates before performing any date-related operations. The `TRY_TO_DATE` function will be used to exclude invalid dates (it returns `NULL` for invalid dates). By applying this filter in the `WHERE` clause, we ensure only rows with valid dates are processed. This approach allows the existing query to work without modification to its intended functionality of counting backward citations within 1 month of the application date.
+
+The corrected query ensures:
+1. Only valid dates are processed from columns `ap.date` (application date) and `uc.date` (citation date).
+2. Backward citations are counted within the specified 1-month range.
+3. Results are grouped by `patent_id`.
+4. The query handles data errors gracefully without altering its behavior.
+
+Final SQL:
+
+```sql
+-- Description: Retrieve backward citation counts for patents, filtering by citations made within 1 month before valid application dates. Excludes invalid dates using TRY_TO_DATE to ensure proper execution.
+SELECT 
+    p."id" AS "patent_id", 
+    COUNT(DISTINCT uc."citation_id") AS "backward_citation_count"
+FROM 
+    PATENTSVIEW.PATENTSVIEW.PATENT p
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc
+ON 
+    p."id" = uc."citation_id"
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.APPLICATION ap
+ON 
+    p."id" = ap."patent_id"
+WHERE 
+    TRY_TO_DATE(ap."date", 'YYYY-MM-DD') IS NOT NULL AND
+    TRY_TO_DATE(uc."date", 'YYYY-MM-DD') IS NOT NULL AND
+    DATE(uc."date") BETWEEN DATEADD(month, -1, DATE(ap."date")) AND DATE(ap."date")
+GROUP BY 
+    p."id"
+LIMIT 20;
+```
+[Corrected SQL]
+2025-07-01 04:06:46 - Thread-98 (execute) - INFO - [Results for corrected sql]
+patent_id,backward_citation_count
+4553081,1
+4919767,1
+4314424,1
+4494043,1
+4593042,1
+4018643,1
+6404391,1
+5821162,1
+4532934,1
+5368659,1
+4204614,1
+4194677,1
+4208098,1
+5809000,1
+6239636,1
+5802037,1
+6025242,1
+4720398,1
+6087679,1
+4737790,1
+
+[Results for corrected sql]
+2025-07-01 04:07:50 - Thread-98 (execute) - INFO - [Corrected other sqls]
+```sql
+-- Description: Retrieve forward citation counts for patents, filtering by citations made within 1 month after valid application dates. Excludes invalid dates using TRY_TO_DATE to ensure proper execution.
+SELECT DISTINCT 
+    p."id" AS "patent_id", 
+    COUNT(DISTINCT uc."citation_id") AS "forward_citation_count"
+FROM 
+    PATENTSVIEW.PATENTSVIEW.PATENT p
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc
+ON 
+    p."id" = uc."patent_id"
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.APPLICATION ap
+ON 
+    p."id" = ap."patent_id"
+WHERE 
+    TRY_TO_DATE(ap."date", 'YYYY-MM-DD') IS NOT NULL AND
+    TRY_TO_DATE(uc."date", 'YYYY-MM-DD') IS NOT NULL AND
+    DATE(uc."date") BETWEEN DATE(ap."date") AND DATEADD(month, 1, DATE(ap."date"))
+GROUP BY 
+    p."id"
+LIMIT 20;
+```
+
+```sql
+-- Description: Retrieve the abstract text from the 'PATENT' table for patents that belong to the specified CPC categories ('C05' or 'A01G'). Excludes invalid application dates using TRY_TO_DATE to ensure proper execution.
+SELECT DISTINCT 
+    p."id" AS "patent_id", 
+    p."abstract" AS "abstract_text"
+FROM 
+    PATENTSVIEW.PATENTSVIEW.PATENT p
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.CPC_CURRENT cc
+ON 
+    p."id" = cc."patent_id"
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.APPLICATION ap
+ON 
+    p."id" = ap."patent_id"
+WHERE 
+    TRY_TO_DATE(ap."date", 'YYYY-MM-DD') IS NOT NULL AND
+    (cc."subsection_id" = 'C05' OR cc."group_id" = 'A01G')
+LIMIT 20;
+```
+
+```sql
+-- Description: Filter patents by ensuring at least one backward or forward citation exists within the 1-month period and retrieve all necessary columns for the task. Excludes invalid application and citation dates using TRY_TO_DATE.
+SELECT DISTINCT 
+    p."id" AS "patent_id", 
+    p."title", 
+    ap."date" AS "application_date", 
+    p."abstract" AS "abstract_text",
+    (SELECT COUNT(DISTINCT uc1."citation_id") 
+     FROM PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc1 
+     WHERE TRY_TO_DATE(uc1."date", 'YYYY-MM-DD') IS NOT NULL AND
+           uc1."citation_id" = p."id" AND 
+           DATE(uc1."date") BETWEEN DATEADD(month, -1, DATE(ap."date")) AND DATE(ap."date")) AS "backward_citation_count",
+    (SELECT COUNT(DISTINCT uc2."citation_id") 
+     FROM PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc2 
+     WHERE TRY_TO_DATE(uc2."date", 'YYYY-MM-DD') IS NOT NULL AND
+           uc2."patent_id" = p."id" AND 
+           DATE(uc2."date") BETWEEN DATE(ap."date") AND DATEADD(month, 1, DATE(ap."date"))) AS "forward_citation_count"
+FROM 
+    PATENTSVIEW.PATENTSVIEW.PATENT p
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.CPC_CURRENT cc
+ON 
+    p."id" = cc."patent_id"
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.APPLICATION ap
+ON 
+    p."id" = ap."patent_id"
+WHERE 
+    TRY_TO_DATE(ap."date", 'YYYY-MM-DD') IS NOT NULL AND
+    (cc."subsection_id" = 'C05' OR cc."group_id" = 'A01G') AND 
+    ((SELECT COUNT(DISTINCT uc1."citation_id") 
+      FROM PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc1 
+      WHERE TRY_TO_DATE(uc1."date", 'YYYY-MM-DD') IS NOT NULL AND
+            uc1."citation_id" = p."id" AND 
+            DATE(uc1."date") BETWEEN DATEADD(month, -1, DATE(ap."date")) AND DATE(ap."date"))) > 0 OR
+     (SELECT COUNT(DISTINCT uc2."citation_id") 
+      FROM PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc2 
+      WHERE TRY_TO_DATE(uc2."date", 'YYYY-MM-DD') IS NOT NULL AND
+            uc2."patent_id" = p."id" AND 
+            DATE(uc2."date") BETWEEN DATE(ap."date") AND DATEADD(month, 1, DATE(ap."date"))) > 0)
+ORDER BY 
+    ap."date"
+LIMIT 20;
+```
+
+```sql
+-- Description: Find patents in specific CPC categories with backward citations, forward citations, and all task-relevant columns, using nested subqueries for summaries. Filters on valid application and citation dates with TRY_TO_DATE.
+SELECT DISTINCT 
+    patents_forward."patent_id", 
+    patents_forward."title", 
+    patents_forward."application_date", 
+    patents_forward."abstract_text", 
+    patents_backward."backward_citation_count", 
+    patents_forward."forward_citation_count"
+FROM 
+    (SELECT 
+        p."id" AS "patent_id", 
+        p."title", 
+        ap."date" AS "application_date", 
+        p."abstract" AS "abstract_text",
+        COUNT(DISTINCT uc_f."citation_id") AS "forward_citation_count"
+     FROM 
+        PATENTSVIEW.PATENTSVIEW.PATENT p
+     JOIN 
+        PATENTSVIEW.PATENTSVIEW.CPC_CURRENT cc
+     ON 
+        p."id" = cc."patent_id"
+     JOIN 
+        PATENTSVIEW.PATENTSVIEW.APPLICATION ap
+     ON 
+        p."id" = ap."patent_id"
+     JOIN
+        PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc_f
+     ON 
+        uc_f."patent_id" = p."id"
+     WHERE 
+        TRY_TO_DATE(ap."date", 'YYYY-MM-DD') IS NOT NULL AND
+        TRY_TO_DATE(uc_f."date", 'YYYY-MM-DD') IS NOT NULL AND
+        (cc."subsection_id" = 'C05' OR cc."group_id" = 'A01G') AND 
+        DATE(uc_f."date") BETWEEN DATE(ap."date") AND DATEADD(month, 1, DATE(ap."date"))
+    GROUP BY 
+        p."id", p."title", ap."date", p."abstract") patents_forward
+JOIN 
+    (SELECT 
+        p."id" AS "patent_id", 
+        COUNT(DISTINCT uc_b."citation_id") AS "backward_citation_count"
+     FROM 
+        PATENTSVIEW.PATENTSVIEW.PATENT p
+     JOIN
+        PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc_b
+     ON 
+        uc_b."citation_id" = p."id"
+     JOIN
+        PATENTSVIEW.PATENTSVIEW.APPLICATION ap
+     ON 
+        p."id" = ap."patent_id"
+     WHERE 
+        TRY_TO_DATE(ap."date", 'YYYY-MM-DD') IS NOT NULL AND
+        TRY_TO_DATE(uc_b."date", 'YYYY-MM-DD') IS NOT NULL AND
+        DATE(uc_b."date") BETWEEN DATEADD(month, -1, DATE(ap."date")) AND DATE(ap."date")
+    GROUP BY 
+        p."id") patents_backward
+ON 
+    patents_forward."patent_id" = patents_backward."patent_id"
+ORDER BY 
+    patents_forward."application_date"
+LIMIT 20;
+```
+[Corrected other sqls]
+2025-07-01 04:07:50 - Thread-98 (execute) - INFO - [Successfully corrected]
+Successfully executed. SQL:
+-- Description: Retrieve backward citation counts for patents, filtering by citations made within 1 month before application dates, grouped by patent ID.
+SELECT DISTINCT 
+    p."id" AS "patent_id", 
+    COUNT(DISTINCT uc."citation_id") AS "backward_citation_count"
+FROM 
+    PATENTSVIEW.PATENTSVIEW.PATENT p
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc
+ON 
+    p."id" = uc."citation_id"
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.APPLICATION ap
+ON 
+    p."id" = ap."patent_id"
+WHERE 
+    DATE(uc."date") BETWEEN DATEADD(month, -1, DATE(ap."date")) AND DATE(ap."date")
+GROUP BY 
+    p."id"
+LIMIT 20;
+Results:
+patent_id,backward_citation_count
+4553081,1
+4919767,1
+4314424,1
+4494043,1
+4593042,1
+4018643,1
+6404391,1
+5821162,1
+4532934,1
+5368659,1
+4204614,1
+4194677,1
+4208098,1
+5809000,1
+6239636,1
+5802037,1
+6025242,1
+4720398,1
+6087679,1
+4737790,1
+
+[Successfully corrected]
+2025-07-01 04:07:50 - Thread-98 (execute) - INFO - [Try to execute]
+-- Description: Retrieve forward citation counts for patents, filtering by citations made within 1 month after valid application dates. Excludes invalid dates using TRY_TO_DATE to ensure proper execution.
+SELECT DISTINCT 
+    p."id" AS "patent_id", 
+    COUNT(DISTINCT uc."citation_id") AS "forward_citation_count"
+FROM 
+    PATENTSVIEW.PATENTSVIEW.PATENT p
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc
+ON 
+    p."id" = uc."patent_id"
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.APPLICATION ap
+ON 
+    p."id" = ap."patent_id"
+WHERE 
+    TRY_TO_DATE(ap."date", 'YYYY-MM-DD') IS NOT NULL AND
+    TRY_TO_DATE(uc."date", 'YYYY-MM-DD') IS NOT NULL AND
+    DATE(uc."date") BETWEEN DATE(ap."date") AND DATEADD(month, 1, DATE(ap."date"))
+GROUP BY 
+    p."id"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:09:19 - Thread-98 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Retrieve forward citation counts for patents, filtering by citations made within 1 month after valid application dates. Excludes invalid dates using TRY_TO_DATE to ensure proper execution.
+SELECT DISTINCT 
+    p."id" AS "patent_id", 
+    COUNT(DISTINCT uc."citation_id") AS "forward_citation_count"
+FROM 
+    PATENTSVIEW.PATENTSVIEW.PATENT p
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc
+ON 
+    p."id" = uc."patent_id"
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.APPLICATION ap
+ON 
+    p."id" = ap."patent_id"
+WHERE 
+    TRY_TO_DATE(ap."date", 'YYYY-MM-DD') IS NOT NULL AND
+    TRY_TO_DATE(uc."date", 'YYYY-MM-DD') IS NOT NULL AND
+    DATE(uc."date") BETWEEN DATE(ap."date") AND DATEADD(month, 1, DATE(ap."date"))
+GROUP BY 
+    p."id"
+LIMIT 20;
+Results:
+patent_id,forward_citation_count
+4648585,1
+D554143,2
+7055151,1
+D855549,1
+4307855,1
+9460339,1
+8592950,1
+9761817,1
+6835552,1
+D672046,1
+5612160,1
+8213119,1
+10024811,1
+6843699,1
+11096900,1
+7069006,1
+6418424,14
+7093393,1
+6870901,2
+D382521,1
+
+[Successfully executed]
+2025-07-01 04:09:19 - Thread-98 (execute) - INFO - [Try to execute]
+-- Description: Retrieve the abstract text from the 'PATENT' table for patents that belong to the specified CPC categories ('C05' or 'A01G'). Excludes invalid application dates using TRY_TO_DATE to ensure proper execution.
+SELECT DISTINCT 
+    p."id" AS "patent_id", 
+    p."abstract" AS "abstract_text"
+FROM 
+    PATENTSVIEW.PATENTSVIEW.PATENT p
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.CPC_CURRENT cc
+ON 
+    p."id" = cc."patent_id"
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.APPLICATION ap
+ON 
+    p."id" = ap."patent_id"
+WHERE 
+    TRY_TO_DATE(ap."date", 'YYYY-MM-DD') IS NOT NULL AND
+    (cc."subsection_id" = 'C05' OR cc."group_id" = 'A01G')
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:09:42 - Thread-98 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Retrieve the abstract text from the 'PATENT' table for patents that belong to the specified CPC categories ('C05' or 'A01G'). Excludes invalid application dates using TRY_TO_DATE to ensure proper execution.
+SELECT DISTINCT 
+    p."id" AS "patent_id", 
+    p."abstract" AS "abstract_text"
+FROM 
+    PATENTSVIEW.PATENTSVIEW.PATENT p
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.CPC_CURRENT cc
+ON 
+    p."id" = cc."patent_id"
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.APPLICATION ap
+ON 
+    p."id" = ap."patent_id"
+WHERE 
+    TRY_TO_DATE(ap."date", 'YYYY-MM-DD') IS NOT NULL AND
+    (cc."subsection_id" = 'C05' OR cc."group_id" = 'A01G')
+LIMIT 20;
+Results:
+patent_id,abstract_text
+9351445,"A novel strain of Pleurotus nebrodensis (Daewang No. 1, Accession No.: KACC93181P) and a method for cultivating it are provided. The novel strain of Pleurotus nebrodensis is different from the existing Pleurotus ferulae in shape and physiological characteristic, has an extra after-ripening period, can be grown at a low temperature of 22 to 25° C. and a low water content (RH) of 60 to 65%, can be cultivated in slightly acid environment of pH 5.5 to 6.5, can utili
+
+[Successfully executed]
+2025-07-01 04:09:42 - Thread-98 (execute) - INFO - [Try to execute]
+-- Description: Filter patents by ensuring at least one backward or forward citation exists within the 1-month period and retrieve all necessary columns for the task. Excludes invalid application and citation dates using TRY_TO_DATE.
+SELECT DISTINCT 
+    p."id" AS "patent_id", 
+    p."title", 
+    ap."date" AS "application_date", 
+    p."abstract" AS "abstract_text",
+    (SELECT COUNT(DISTINCT uc1."citation_id") 
+     FROM PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc1 
+     WHERE TRY_TO_DATE(uc1."date", 'YYYY-MM-DD') IS NOT NULL AND
+           uc1."citation_id" = p."id" AND 
+           DATE(uc1."date") BETWEEN DATEADD(month, -1, DATE(ap."date")) AND DATE(ap."date")) AS "backward_citation_count",
+    (SELECT COUNT(DISTINCT uc2."citation_id") 
+     FROM PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc2 
+     WHERE TRY_TO_DATE(uc2."date", 'YYYY-MM-DD') IS NOT NULL AND
+           uc2."patent_id" = p."id" AND 
+           DATE(uc2."date") BETWEEN DATE(ap."date") AND DATEADD(month, 1, DATE(ap."date"))) AS "forward_citation_count"
+FROM 
+    PATENTSVIEW.PATENTSVIEW.PATENT p
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.CPC_CURRENT cc
+ON 
+    p."id" = cc."patent_id"
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.APPLICATION ap
+ON 
+    p."id" = ap."patent_id"
+WHERE 
+    TRY_TO_DATE(ap."date", 'YYYY-MM-DD') IS NOT NULL AND
+    (cc."subsection_id" = 'C05' OR cc."group_id" = 'A01G') AND 
+    ((SELECT COUNT(DISTINCT uc1."citation_id") 
+      FROM PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc1 
+      WHERE TRY_TO_DATE(uc1."date", 'YYYY-MM-DD') IS NOT NULL AND
+            uc1."citation_id" = p."id" AND 
+            DATE(uc1."date") BETWEEN DATEADD(month, -1, DATE(ap."date")) AND DATE(ap."date"))) > 0 OR
+     (SELECT COUNT(DISTINCT uc2."citation_id") 
+      FROM PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc2 
+      WHERE TRY_TO_DATE(uc2."date", 'YYYY-MM-DD') IS NOT NULL AND
+            uc2."patent_id" = p."id" AND 
+            DATE(uc2."date") BETWEEN DATE(ap."date") AND DATEADD(month, 1, DATE(ap."date"))) > 0)
+ORDER BY 
+    ap."date"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:09:42 - Thread-98 (execute) - INFO - [Error occurred]
+{'status': 'error', 'error_msg': "##ERROR##001003 (42000): SQL compilation error:\nsyntax error line 38 at position 96 unexpected ')'."}
+[Error occurred]
+2025-07-01 04:12:21 - Thread-98 (execute) - INFO - [Corrected SQL]
+### Thinking process:
+
+The goal of this query is to retrieve patents with at least one backward or forward citation within one month of the patent's application date. The query uses subqueries to calculate the citation counts and filters invalid dates using `TRY_TO_DATE`. The syntax error `unexpected ')'` suggests a problem with unmatched or improperly organized parentheses, especially in the `WHERE` clause, which combines multiple conditions and subqueries with `OR`. To fix this:
+
+1. Ensure the subqueries for backward and forward citations are correctly enclosed in parentheses and logically grouped.
+2. Simplify the `WHERE` clause to improve readability and ensure proper grouping of conditions.
+3. Retain the `TRY_TO_DATE` condition for robust handling of invalid date entries.
+4. Keep all required columns (`patent_id`, `title`, `application_date`, `abstract_text`, citation counts) and ensure the query logic is maintained.
+5. Verify that the query sorts the results by application date as required.
+
+The corrections will avoid syntax errors and ensure proper execution.
+
+### Corrected SQL:
+
+```sql
+-- Description: Filter patents by ensuring at least one backward or forward citation exists within the 1-month period and retrieve all necessary columns for the task. Resolve syntax errors by ensuring proper alignment of parentheses, and exclude invalid dates using TRY_TO_DATE.
+SELECT DISTINCT 
+    p."id" AS "patent_id", 
+    p."title", 
+    ap."date" AS "application_date", 
+    p."abstract" AS "abstract_text",
+    (SELECT COUNT(DISTINCT uc1."citation_id") 
+     FROM PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc1 
+     WHERE TRY_TO_DATE(uc1."date", 'YYYY-MM-DD') IS NOT NULL AND
+           uc1."citation_id" = p."id" AND 
+           DATE(uc1."date") BETWEEN DATEADD(month, -1, DATE(ap."date")) AND DATE(ap."date")) AS "backward_citation_count",
+    (SELECT COUNT(DISTINCT uc2."citation_id") 
+     FROM PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc2 
+     WHERE TRY_TO_DATE(uc2."date", 'YYYY-MM-DD') IS NOT NULL AND
+           uc2."patent_id" = p."id" AND 
+           DATE(uc2."date") BETWEEN DATE(ap."date") AND DATEADD(month, 1, DATE(ap."date"))) AS "forward_citation_count"
+FROM 
+    PATENTSVIEW.PATENTSVIEW.PATENT p
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.CPC_CURRENT cc
+ON 
+    p."id" = cc."patent_id"
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.APPLICATION ap
+ON 
+    p."id" = ap."patent_id"
+WHERE 
+    TRY_TO_DATE(ap."date", 'YYYY-MM-DD') IS NOT NULL AND
+    (cc."subsection_id" = 'C05' OR cc."group_id" = 'A01G') AND 
+    (
+        (SELECT COUNT(DISTINCT uc1."citation_id") 
+         FROM PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc1 
+         WHERE TRY_TO_DATE(uc1."date", 'YYYY-MM-DD') IS NOT NULL AND
+               uc1."citation_id" = p."id" AND 
+               DATE(uc1."date") BETWEEN DATEADD(month, -1, DATE(ap."date")) AND DATE(ap."date")) > 0
+        OR 
+        (SELECT COUNT(DISTINCT uc2."citation_id") 
+         FROM PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc2 
+         WHERE TRY_TO_DATE(uc2."date", 'YYYY-MM-DD') IS NOT NULL AND
+               uc2."patent_id" = p."id" AND 
+               DATE(uc2."date") BETWEEN DATE(ap."date") AND DATEADD(month, 1, DATE(ap."date"))) > 0
+    )
+ORDER BY 
+    ap."date"
+LIMIT 20;
+```
+[Corrected SQL]
+2025-07-01 04:13:26 - Thread-98 (execute) - INFO - [Results for corrected sql]
+patent_id,title,application_date,abstract_text,backward_citation_count,forward_citation_count
+4044806,Tree processing machine,1975-02-24," A tree processing machine for felling and processing standing trees into predetermined lengths which includes generally a prime mover capable of turning in a short radius with a relatively short support frame as compared to the prior art mounted on the prime mover, a carriage frame pivotally mounted on the support frame about a roll axis generally vertically
+
+[Results for corrected sql]
+2025-07-01 04:13:58 - Thread-98 (execute) - INFO - [Corrected other sqls]
+```sql
+-- Description: Find patents in specific CPC categories with backward citations, forward citations, and all task-relevant columns using nested subqueries. Filters on valid application and citation dates using TRY_TO_DATE and resolves similar syntax issues by ensuring proper alignment of parentheses.
+SELECT DISTINCT 
+    patents_forward."patent_id", 
+    patents_forward."title", 
+    patents_forward."application_date", 
+    patents_forward."abstract_text", 
+    patents_backward."backward_citation_count", 
+    patents_forward."forward_citation_count"
+FROM 
+    (SELECT 
+        p."id" AS "patent_id", 
+        p."title", 
+        ap."date" AS "application_date", 
+        p."abstract" AS "abstract_text",
+        COUNT(DISTINCT uc_f."citation_id") AS "forward_citation_count"
+     FROM 
+        PATENTSVIEW.PATENTSVIEW.PATENT p
+     JOIN 
+        PATENTSVIEW.PATENTSVIEW.CPC_CURRENT cc
+     ON 
+        p."id" = cc."patent_id"
+     JOIN 
+        PATENTSVIEW.PATENTSVIEW.APPLICATION ap
+     ON 
+        p."id" = ap."patent_id"
+     JOIN
+        PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc_f
+     ON 
+        uc_f."patent_id" = p."id"
+     WHERE 
+        TRY_TO_DATE(ap."date", 'YYYY-MM-DD') IS NOT NULL AND
+        TRY_TO_DATE(uc_f."date", 'YYYY-MM-DD') IS NOT NULL AND
+        (cc."subsection_id" = 'C05' OR cc."group_id" = 'A01G') AND 
+        DATE(uc_f."date") BETWEEN DATE(ap."date") AND DATEADD(month, 1, DATE(ap."date"))
+     GROUP BY 
+        p."id", p."title", ap."date", p."abstract") patents_forward
+JOIN 
+    (SELECT 
+        p."id" AS "patent_id", 
+        COUNT(DISTINCT uc_b."citation_id") AS "backward_citation_count"
+     FROM 
+        PATENTSVIEW.PATENTSVIEW.PATENT p
+     JOIN
+        PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc_b
+     ON 
+        uc_b."citation_id" = p."id"
+     JOIN
+        PATENTSVIEW.PATENTSVIEW.APPLICATION ap
+     ON 
+        p."id" = ap."patent_id"
+     WHERE 
+        TRY_TO_DATE(ap."date", 'YYYY-MM-DD') IS NOT NULL AND
+        TRY_TO_DATE(uc_b."date", 'YYYY-MM-DD') IS NOT NULL AND
+        DATE(uc_b."date") BETWEEN DATEADD(month, -1, DATE(ap."date")) AND DATE(ap."date")
+     GROUP BY 
+        p."id") patents_backward
+ON 
+    patents_forward."patent_id" = patents_backward."patent_id"
+ORDER BY 
+    patents_forward."application_date"
+LIMIT 20;
+```
+[Corrected other sqls]
+2025-07-01 04:13:58 - Thread-98 (execute) - INFO - [Successfully corrected]
+Successfully executed. SQL:
+-- Description: Filter patents by ensuring at least one backward or forward citation exists within the 1-month period and retrieve all necessary columns for the task. Excludes invalid application and citation dates using TRY_TO_DATE.
+SELECT DISTINCT 
+    p."id" AS "patent_id", 
+    p."title", 
+    ap."date" AS "application_date", 
+    p."abstract" AS "abstract_text",
+    (SELECT COUNT(DISTINCT uc1."citation_id") 
+     FROM PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc1 
+     WHERE TRY_TO_DATE(uc1."date", 'YYYY-MM-DD') IS NOT NULL AND
+           uc1."citation_id" = p."id" AND 
+           DATE(uc1."date") BETWEEN DATEADD(month, -1, DATE(ap."date")) AND DATE(ap."date")) AS "backward_citation_count",
+    (SELECT COUNT(DISTINCT uc2."citation_id") 
+     FROM PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc2 
+     WHERE TRY_TO_DATE(uc2."date", 'YYYY-MM-DD') IS NOT NULL AND
+           uc2."patent_id" = p."id" AND 
+           DATE(uc2."date") BETWEEN DATE(ap."date") AND DATEADD(month, 1, DATE(ap."date"))) AS "forward_citation_count"
+FROM 
+    PATENTSVIEW.PATENTSVIEW.PATENT p
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.CPC_CURRENT cc
+ON 
+    p."id" = cc."patent_id"
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.APPLICATION ap
+ON 
+    p."id" = ap."patent_id"
+WHERE 
+    TRY_TO_DATE(ap."date", 'YYYY-MM-DD') IS NOT NULL AND
+    (cc."subsection_id" = 'C05' OR cc."group_id" = 'A01G') AND 
+    ((SELECT COUNT(DISTINCT uc1."citation_id") 
+      FROM PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc1 
+      WHERE TRY_TO_DATE(uc1."date", 'YYYY-MM-DD') IS NOT NULL AND
+            uc1."citation_id" = p."id" AND 
+            DATE(uc1."date") BETWEEN DATEADD(month, -1, DATE(ap."date")) AND DATE(ap."date"))) > 0 OR
+     (SELECT COUNT(DISTINCT uc2."citation_id") 
+      FROM PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc2 
+      WHERE TRY_TO_DATE(uc2."date", 'YYYY-MM-DD') IS NOT NULL AND
+            uc2."patent_id" = p."id" AND 
+            DATE(uc2."date") BETWEEN DATE(ap."date") AND DATEADD(month, 1, DATE(ap."date"))) > 0)
+ORDER BY 
+    ap."date"
+LIMIT 20;
+Results:
+patent_id,title,application_date,abstract_text,backward_citation_count,forward_citation_count
+4044806,Tree processing machine,1975-02-24," A tree processing machine for felling and processing standing trees into predetermined lengths which includes generally a prime mover capable of turning in a short radius with a relatively short support frame as compared to the prior art mounted on the prime mover, a carriage frame pivotally mounted on the support frame about a roll axis generally vertically
+
+[Successfully corrected]
+2025-07-01 04:13:58 - Thread-98 (execute) - INFO - itercount: 0
+2025-07-01 04:13:58 - Thread-98 (execute) - INFO - [Self-refine]
+Table full name: PATENTSVIEW.PATENTSVIEW.BRF_SUM_TEXT
+Column name: uuid Type: TEXT
+Column name: patent_id Type: TEXT
+Column name: text Type: TEXT
+Sample rows:
+[{'uuid': 'trk41aa0c2vx03i8zta2low1w', 'patent_id': '8340917', 'text': 'BACKGROUND Research in many areas of biotechnology, such as drug discovery, disease analysis, and crop improvements, involves matching fragments of sequences that are generated from a sample, with long sequences that represent biological components. For example, the human genome is a double helix of sequences of nucleotides, where one sequence is a complement of the other. There are 4 nucleotides in DNA sequences, more in RNA and protein sequences. Each nucleotide in a DNA sequence is represented by a character from the alphabet {a,c,t,g}. Each strand of the double helix that constitutes the human genome is a sequence of more than 3 billion characters. The 2 strands are not independent. For each character position in one strand, there is a complementary character in the corresponding position of the second strand. The characters a and t are complements of one another, and the characters c and g are complements of one another. Each character is also called a base, hence a genomic sequence is often said to contain more than 3 billion base-pairs (a base and its complement). An average laboratory test of a DNA sample takes hours to days, and typically generates over 100 million test fragments, each having a small number of letters, usually between 36 and 500 letters. Although test fragments are in the form of a single strand, a test fragment must be matched against both strands because it is unknown from which strand the test fragment originates. Typically, the test fragments are individually matched to selected chromosomes in a process that may take many hours or days. Matching between the fragments and the chromosomes typically allows for 1 or 2 errors in the match, such as mismatched letters or surplus characters in the fragment, to account for experimental errors. Some algorithms that perform fragment matching while allowing for errors are called BLAST algorithms. BLAST algorithms utilize in-memory analysis and are computationally intensive. Thus, they are generally inadequate for the high numbers of fragments that are generated for matching.'}, {'uuid': '3su3q8p4ekjd6xhnx2t4jys8t', 'patent_id': '9223704', 'text': 'BACKGROUND The present disclosure relates to a memory access control circuit, and more particularly, to a memory access control circuit, prefetch circuit, memory device and information processing system for gaining burst access to a memory. A processor uses a memory both as an instruction storage area and as a data storage area. Therefore, it is necessary for the processor to access the memory highly frequently during the execution of a program. In order to reduce the burden on the memory resulting from such frequent accesses, a cache memory is provided between the processor and memory. A cache memory manages a plurality of continuous words as a line. Therefore, the plurality of words are filled altogether at the time of a cache mishit. At this time, a burst transfer is used to transfer data from the memory. In order to achieve transfer of a plurality of words using a burst transfer, a system is known which can change the sequence of the words to be transferred by using the wraparound function adapted to wrap around the addresses in a specific range. For example, a data processor has been proposed which allows different types of burst transfer such as four-burst wrap (WRAP4), eight-burst wrap (WRAP8) and 16-burst wrap (WRAP16) to be specified (refer, for example, to Japanese Patent Laid-Open No. 2006-155488). As the memory becomes increasingly layered, a prefetch buffer may be provided between the cache memory and memory. In this case, the size in which the prefetch buffer is managed is likely larger than the line size of the cache memory, thus resulting in a larger burst transfer size. For example, if the processor requests a four-burst wrap, it is likely that the prefetch buffer may request a 16-burst wrap to the memory. If the wraparound function is used in this case, and if the start address is the third word as illustrated in FIG. 7A , the remaining zeroth to second words are not transferred quickly, thus causing the processor to stall. The present disclosure has been made in light of the foregoing, and it is desirable, when generating a wraparound memory access request, different in size from the original, to perform start address conversion so as to reduce the processor stall cycles. According to a first mode of the present disclosure, there are provided a memory access control circuit, prefetch buffer, memory device and information processing system. Each of the memory access control circuit, memory device and information processing system includes a determination section, request generation section and address conversion section. The determination section determines whether a target requested by a first wraparound memory access request from a processor is stored in the prefetch buffer. The request generation section generates a second wraparound memory access request including the target if it is determined that the target is not stored in the prefetch buffer. The address conversion section converts the start address of the first wraparound memory access request according to predetermined rules for use as a start address of the second wraparound memory access request. This speeds up the time it takes to complete the response to the first wraparound memory access request, thus providing reduced processor stall cycles. Further, in the first mode, the address conversion section may achieve the address conversion by replacing a lower bit portion of the unit of burst of the start address of the first wraparound memory access request with a predetermined value. In this case, the address conversion section may achieve the address conversion by replacing, of the start address of the first wraparound memory access request, the lower bit portion appropriate in length to the wraparound size of the first wraparound memory access request with the predetermined value. Further, the address conversion section may achieve the address conversion by replacing the lower bit portion of the start address of the first wraparound memory access request with zeros. In particular, if the first wraparound memory access request is intended to request a four-burst wraparound, and if the second wraparound memory access request is intended to request a 16-burst wraparound, the address conversion section may achieve the address conversion by replacing the lower two bits of the unit of burst of the start address of the first wraparound memory access request with zeros. Further, if the first wraparound memory access request is intended to request a four-burst wraparound, and if the second wraparound memory access request is intended to request an eight-burst wraparound, the address conversion section may achieve the address conversion by replacing the lower two bits of the unit of burst of the start address of the first wraparound memory access request with zeros. Still further, if the first wraparound memory access request is intended to request an eight-burst wraparound, and if the second wraparound memory access request is intended to request a 16-burst wraparound, the address conversion section may achieve the address conversion by replacing the lower three bits of the unit of burst of the start address of the first wraparound memory access request with zeros. The present disclosure performs start address conversion when generating a wraparound memory access request, different in size from the original, thus providing reduced processor stall cycles.'}, {'uuid': 'b0qs060fwm3tavltiwk2ye9wl', 'patent_id': '4140085', 'text': 'The invention relates to a method and an apparatus for controlling the proportion of fuel and air in a combustible fuel-air mixture fed to an internal combustion engine. More particularly, the invention relates to an apparatus in which an oxygen sensor (.lambda.-sensor) monitors the exhaust gas composition and generates a signal which is used in influencing the fuel-air ratio. For this purpose, the sensor signal is compared with a set-point or threshold value. Known in the art are systems which determine the duration of fuel injection control pulses by disposing in the exhaust system a .lambda.-sensor which generates an electrical signal that alternates abruptly between a higher and lower voltage depending on whether the mixture fed to the engine is rich or lean. This output signal is used as the actual value in a control loop and is used by the fuel injection system to determine the duration of the control pulses used to actuate the injection valves. The basic duration of the fuel injection control pulses is determined on the basis of two major variables, i.e., the engine rpm and the air flow rate aspirated by the engine. The fuel injection control pulses are generated in synchronism with crankshaft rotations. In this previously proposed system, an attempt is made to maintain the .lambda. control in the critical temperature domain, where the sensor has a very high internal resistance and is capable only to generate signals which are substantially shifted in voltage, by permitting the threshold or set-point voltage with which the sensor output is compared to follow the changing sensor potential. In this process, however, considerable non-linearities are produced. It is also particularly disadvantageous that aging an a dispersion of the characteristics of the sensor make the adjustment and the control process very difficult in this critical temperature domain. It is a principal object of the present invention to provide a fuel injection system with a method and an apparatus to permit reliable controlled operation of the fuel injection system even at relatively low oxygen sensor temperatures. It is a further object of the invention to provide a circuit for carrying out this method which is simply constructed and relatively inexpensiv
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.FOREIGNCITATION
+Column name: patent_id Type: TEXT
+Column name: category Type: TEXT
+Column name: uuid Type: TEXT
+Column name: date Type: TEXT
+Column name: country Type: TEXT
+Column name: number Type: TEXT
+Sample rows:
+[{'uuid': 'xhj001ca1uk574sktzgyjbpc4', 'patent_id': '7329559', 'date': '2002-12-01', 'number': 'WO 02/099907', 'country': 'WO', 'category': 'cited by other'}, {'uuid': 'wxddvgazkrhjza59ens6ajy6e', 'patent_id': '7870461', 'date': '2002-12-01', 'number': 'WO 02/100026', 'country': 'WO', 'category': 'cited by other'}, {'uuid': 'qhziqthnqr8x58o6to57fw84d', 'patent_id': '8329239', 'date': '2002-12-01', 'number': 'WO 02/100192', 'country': 'WO', 'category': 'cited by other'}, {'uuid': 'bhzwlqdqrw7ohhcskzy601g24', 'patent_id': '10907170', 'date': '2002-12-01', 'number': 'WO 02/100199', 'country': 'WO', 'category': 'cited by applicant'}, {'uuid': 't7cepyiztg16eum41z8m3vkpj', 'patent_id': '9029656', 'date': '2002-12-01', 'number': 'WO 02/100199', 'country': 'WO', 'category': 'cited by applicant'}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.PATENT
+Column name: id Type: TEXT
+Column name: number Type: TEXT
+Column name: title Type: TEXT
+Column name: kind Type: TEXT
+Column name: date Type: TEXT
+Column name: abstract Type: TEXT
+Column name: num_claims Type: NUMBER
+Column name: country Type: TEXT
+Sample rows:
+[{'id': 'D690894', 'number': 'D690894', 'country': 'US', 'date': '2013-10-01', 'abstract': None, 'title': 'Cremation remains keepsake charm', 'kind': 'S1', 'num_claims': 1}, {'id': 'D755392', 'number': 'D755392', 'country': 'US', 'date': '2016-05-03', 'abstract': None, 'title': 'Pulse oximetry sensor', 'kind': 'S1', 'num_claims': 1}, {'id': 'D756281', 'number': 'D756281', 'country': 'US', 'date': '2016-05-17', 'abstract': None, 'title': 'Wheel', 'kind': 'S1', 'num_claims': 1}, {'id': 'D761689', 'number': 'D761689', 'country': 'US', 'date': '2016-07-19', 'abstract': None, 'title': 'Band attachment', 'kind': 'S1', 'num_claims': 1}, {'id': 'D814540', 'number': 'D814540', 'country': 'US', 'date': '2018-04-03', 'abstract': None, 'title': 'Satellite equipment for robot', 'kind': 'S1', 'num_claims': 1}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.USAPPLICATIONCITATION
+Column name: kind Type: TEXT
+Column name: application_id Type: TEXT
+Column name: country Type: TEXT
+Column name: patent_id Type: TEXT
+Column name: uuid Type: TEXT
+Column name: category Type: TEXT
+Column name: date Type: TEXT
+Column name: number Type: TEXT
+Sample rows:
+[{'uuid': 'wckile03msbg8fr0rtxy7b2m3', 'patent_id': '8712582', 'application_id': 'WO 96/13790', 'date': '1996-05-01', 'kind': 'A1', 'number': 'WO 96/13790', 'country': 'US', 'category': 'cited by applicant'}, {'uuid': '18dkuauyvinnam00r3wbfft9o', 'patent_id': '6857775', 'application_id': 'D. 434674', 'date': '2000-12-01', 'kind': 'S', 'number': 'D. 434674', 'country': 'US', 'category': 'cited by other'}, {'uuid': 'c2g37744mvmi7fq9uh7hnrelp', 'patent_id': '10857329', 'application_id': '2001/0000041', 'date': '2001-03-01', 'kind': 'A1', 'number': '2001/0000041', 'country': 'US', 'category': 'cited by examiner'}, {'uuid': 'qpjmbmd0cxewanpp7fp0aj9ck', 'patent_id': '9202758', 'application_id': '2001/0000012', 'date': '2001-03-01', 'kind': 'A1', 'number': '2001/0000012', 'country': 'US', 'category': 'cited by examiner'}, {'uuid': 'jne1x56qvdy444c8op202ord7', 'patent_id': '11072668', 'application_id': '2001/0000039', 'date': '2001-03-01', 'kind': 'A1', 'number': '2001/0000039', 'country': 'US', 'category': 'cited by applicant'}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.USPC
+Column name: patent_id Type: TEXT
+Column name: uuid Type: TEXT
+Sample rows:
+[{'uuid': 'vx63cj017gh32rnj8qou8whzr', 'patent_id': '4733714'}, {'uuid': 'no3fq6xhprzuyjmzloepaacj0', 'patent_id': '4715905'}, {'uuid': '2jzao5tdsvfggvxxi3me6dx17', 'patent_id': '7684187'}, {'uuid': 'jitiqsy2de4rnjmvar48pi5hs', 'patent_id': '5924300'}, {'uuid': '2vz25pigd5urhwqwb0vqvmccs', 'patent_id': '9019701'}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.CPC_GROUP
+Column name: title Type: TEXT
+Column name: id Type: TEXT
+Sample rows:
+[{'id': 'C12Y', 'title': 'ENZYMES'}, {'id': 'D05B', 'title': 'SEWING '}, {'id': 'A46B', 'title': 'BRUSHES '}, {'id': 'D04B', 'title': 'KNITTING'}, {'id': 'B23C', 'title': 'MILLING '}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.IPCR
+Column name: section Type: TEXT
+Column name: patent_id Type: TEXT
+Column name: uuid Type: TEXT
+Column name: subclass Type: TEXT
+Column name: action_date Type: TEXT
+Sample rows:
+[{'uuid': 'fwu2zrloyrwcwdgaktjgkx6mr', 'patent_id': '6530169', 'section': 'F', 'subclass': 'A', 'action_date': None}, {'uuid': 'kavup1p4zsm3wjwhdgwzfb3p0', 'patent_id': '6591733', 'section': 'F', 'subclass': 'A', 'action_date': None}, {'uuid': 'vhdtwcqpo7bz1jpgxthx2goq2', 'patent_id': '5421114', 'section': 'F', 'subclass': 'A', 'action_date': None}, {'uuid': 'ktdz2s1zgy5vjptntpkycb6pv', 'patent_id': '6384193', 'section': 'C', 'subclass': 'A', 'action_date': None}, {'uuid': 'qs706yjmasctoppsibduessiw', 'patent_id': '6405468', 'section': 'F', 'subclass': 'A', 'action_date': None}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.PATENT_LAWYER
+Column name: patent_id Type: TEXT
+Sample rows:
+[{'patent_id': 'D647010'}, {'patent_id': 'D735919'}, {'patent_id': 'D720263'}, {'patent_id': '7514340'}, {'patent_id': '7345545'}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.DETAIL_DESC_TEXT_2021
+Column name: text Type: TEXT
+Column name: patent_id Type: TEXT
+Sample rows:
+[{'patent_id': '10936286', 'text': 'DETAILED DESCRIPTION\n\nPersons of ordinary skill in the art will realize that the following description is illustrative only and not in any way limiting. Other aspects will readily suggest themselves to such skilled persons.\n\nThe present invention improves the efficiency of existing LUT-based FPGA logic cells at implementing up, down and pop counters. When implementing each of these functions, some of the K-input LUTs in some of the logic cells remain available to generate any function of the K inputs to those LUTs.\n\nIn accordance with one aspect of the present invention, an illustrative LUT-based logic cell120that allows improved efficiency for up counters and pop counters is shown inFIG. 4, to which attention is now drawn. Some of the elements of logic cell120ofFIG. 4are common to the logic cells shown in previous drawing figures and will be referred to inFIG. 4using the same reference numerals used to designate those same elements in the previous drawing figures.\n\nThe logic cell120ofFIG. 4includes a K-input LUT shown within dashed lines122formed from a first (K-1)-input LUT124aand a second (K-1)-input LUT124b. The small squares126and128represent the configuration inputs used to define the functions of LUTs124aand124brespectively. Both LUTs124aand124bshare in common the K-1function inputs (In2, In3, . . . InKshown at reference numerals130,132, and134, respectively). A first (2-input) multiplexer136has a first data input coupled to the output F0of the first (K-1)-input LUT124a, a second data input coupled to the output F1of the second (K-1)-input LUT124b, and a select input coupled to a function input In1at reference numeral138of the K-input LUT122. The data output of the first multiplexer136serves as the output of the K-input LUT122and is directly connected to the primary output (Y) of the logic cell the main output of the logic cell120shown at reference numeral48. In one particular instance of the present invention, K=4.\n\nThe logic cell120ofFIG. 4also includes a carry-in input CI42, a counter input QI140, a carry-out output CO44, and a sum output S50. A carry circuit142in the logic cell ofFIG. 4includes a second multiplexer shown inFIG. 4as a 4-input multiplexer32having a first data input coupled to the F0output of the first 3-input LUT124a, a second data input coupled to the F1output of the second 3-input LUT124b, a third data input coupled to a logic-high constant voltage, a fourth data input coupled to a logic-low constant voltage, select inputs shown as small square34coupled to configuration circuitry for the multiplexer32used to choose which one of the inputs of the second carry multiplexer32will be passed to its data output, and a data output denoted G. A third multiplexer is shown inFIG. 4as a 4-input multiplexer36in the carry circuit142of the logic cell ofFIG. 4has a first data input coupled to the counter input QI140of the logic cell120, a second data input coupled to the output of the K-input LUT122at the first multiplexer136, a third data input coupled to a logic-high constant voltage, a fourth data input coupled to a logic-low constant voltage, select inputs shown as a small square38coupled to configuration circuitry for the third multiplexer36used to choose which one of the inputs of the third multiplexer36will be passed to its data output, and a data output denoted P. A carry-out multiplexer shown inFIG. 4as a 2-input multiplexer40in the carry circuit142of the logic cell110ofFIG. 4has a first data input coupled to the data output G of the second multiplexer32, a second data input coupled to the carry-in input CI42of the logic cell120, a select input coupled to the P data output of the third multiplexer36, and a data output coupled to the carry-out output CO44of the logic cell120. An exclusive-OR gate46in the carry circuit142of the logic cell120ofFIG. 4has a first input coupled to the carry-in input CI42of the logic cell120, a second input coupled to the data output P of the third multiplexer36, and an output coupled to the sum output S50of the logic cell120.\n\nIn some implementations of the invention, either of the F0or F1inputs from LUTs124aand124b, or the logic-high constant voltage input can be omitted from the second multiplexer32, and/or the logic-high constant voltage input can be omitted from the third multiplexer36.\n\nThe structural differences between the logic cell120according to the aspect of the invention illustrated inFIG. 4and the prior-art logic cell inFIG. 1are the use of the second 4-input multiplexer36to drive the exclusive-OR gate46that generates the sum output S50, and the addition of a QI counter input140to the logic cell120as shown inFIG. 4.\n\nBroadly, the logic cell120ofFIG. 4has K function inputs, a QI input and a carry input. The particular example shown inFIG. 4includes K function inputs In1138, In2130, IN3132, through InK134. To implement logic cells having larger values of K, additional function inputs can be added, each driving both of LUTs124aand124b. The primary output Y48of the logic cell120presents a value that is any function of the K function inputs. A second output (the carry output CO44) presents a value present on the carry input CI42or an output sourced by the second multiplexer32as selected by the output of the third multiplexer36. The inputs In1, In2, In3, . . . InK, and outputs S and Y are connected to the programmable routing network. The QI input can be driven by the flip-flop associated with the logic cell, as described above in relation toFIG. 2, but need not be driven by the programmable routing network. The carry output CO of one cell directly drives the carry input CI of the next cell in the carry chain, and neither CI nor CO need to be connected to the programmable routing network.\n\nFIG. 5is a block diagram that shows how the logic cell120ofFIG. 4can be used to implement an up counter.FIG. 5shows an N-bit up counter160formed from (N-1) logic cells120-0,120-1, and120-(N-1). As shown inFIG. 5, the second multiplexer32inFIG. 4is set so its output G is the value logic 0, and multiplexer36is set so its output P is the value at input QI140of the logic cell120ofFIG. 4. The carry-in CI input42of the logic cell120representing the lowest significant bit is set to logic 1, and the carry-in input CI42of each of the successive more significant bits is connected to the carry-out output CO44of the adjacent less significant bit logic cell120. Data flip-flops162-0through162-(N-1) each have their data inputs connected to the S output (138inFIG. 4) of the logic cell110included in their respective counter stage. The Q outputs of the flip-flops162-0through162-(N-1) are each connected to the QI input (140inFIG. 4) of the logic cell included in their respective counter stage.\n\nAs shown inFIG. 5, none of the LUT inputs (shown for convenience as In1, In2, In3, . . . InKin an instance of the invention employing K-input LUTs122), nor the Y output, of all of the logic cells (120-0,120-1, and120-(N-1) are utilized in performing the counter function and so each cell can be used to generate any function of the K inputs (In1, In2, In3, . . . InKinFIG. 5) simultaneously with the operation of the up-counter function. This is not possible using any of the prior-art logic cells.\n\nReferring now toFIG. 6, a block diagram shows a variation of the logic cell ofFIG. 4. The logic cell170ofFIG. 6includes many of the same elements present in the logic cell120ofFIG. 4. These elements common to both drawing figures will be referenced using the same reference numerals employed inFIG. 4. The elements common in the logic cell170that are common to the logic cell120are connected as described with reference toFIG. 4.\n\nThe difference between the logic cell170ofFIG. 6and the logic cell120ofFIG. 4is that the logic cell170ofFIG. 6further includes a fourth multiplexer172having a first data input and a second data input. The second data input is an inverting data input. The first and second data inputs are coupled together to the counter input QI140of the logic cell170, and a select input is coupled to configuration circuitry for the logic cell represented by small square174. The output of the fourth multiplexer172is coupled to the first data input of the third multiplexer36.\n\nThe fourth multiplexer172selectively inverts the value present at the QI input134as configured by configuration bit174. The logic cell170ofFIG. 6thus employs the fourth multiplexer172as a programmable inverter to support both an up counter and a down counter function by setting the configuration bit at reference numeral174to pass either the non-inverted or the inverted QI input at reference numeral140. As was the case with the logic cell ofFIG. 4, in some implementations of the invention, either of the F0or F1inputs from the LUTS124aand124b, or the logic-high constant voltage input can be omitted from the second multiplexer32, and/or the logic-high constant voltage input can be omitted from the third multiplexer36.\n\nFIG. 7is a block diagram showing the logic cell ofFIG. 6used to implement a down counter.FIG. 7shows an N-bit counter180that uses (N-1) logic cells. The carry-in CI input of the lowest significant bit is set to logic 0 (instead of to logic 1 in the counter depicted inFIG. 5). As shown inFIG. 7, the output of the second multiplexer32inFIG. 6is set to pass the value logic 1, and the output P of the third multiplexer36is set to pass the value at input QI140of the logic cell170ofFIG. 6inverted by the fourth multiplexer172. As also shown inFIG. 7, all of the LUT inputs of all of the logic cells (0,1, and N-1) can be used to generate any function of the K inputs simultaneously with the operation of the up or down counter function.\n\nOne of the attractive features of the present invention is that, when implementing both up and down counters, as shown respectively inFIG. 5andFIG. 7, the entire K-input LUT portion112of each logic cell120and170that is used remains a
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.MATCH
+Column name: patent_id Type: TEXT
+Column name: publication_number Type: TEXT
+Sample rows:
+[{'patent_id': '3930423', 'publication_number': 'US-3930423-A'}, {'patent_id': '3930679', 'publication_number': 'US-3930679-A'}, {'patent_id': '3930816', 'publication_number': 'US-3930816-A'}, {'patent_id': '3930947', 'publication_number': 'US-3930947-A'}, {'patent_id': '3931452', 'publication_number': 'US-3931452-A'}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.USPATENTCITATION
+Column name: date Type: TEXT
+Column name: category Type: TEXT
+Column name: uuid Type: TEXT
+Column name: patent_id Type: TEXT
+Column name: citation_id Type: TEXT
+Column name: kind Type: TEXT
+Column name: country Type: TEXT
+Sample rows:
+[{'uuid': '57ncvypgc6olzvvyu8cyrup28', 'patent_id': '9089501', 'citation_id': '6966918', 'date': '2005-11-01', 'kind': 'B1', 'country': 'US', 'category': 'cited by applicant'}, {'uuid': 'ku1vpwjzed77n4wajpnj8s0bc', 'patent_id': '8568410', 'citation_id': '6966919', 'date': '2005-11-01', 'kind': 'B2', 'country': 'US', 'category': 'cited by applicant'}, {'uuid': '9y51eyspby8nsi5pgsjqhvqmu', 'patent_id': '8821530', 'citation_id': '6966923', 'date': '2005-11-01', 'kind': 'B2', 'country': 'US', 'category': 'cited by applicant'}, {'uuid': 'itpjgf8np2k8jjc3uw355hp7x', 'patent_id': '10219911', 'citation_id': '6966929', 'date': '2005-11-01', 'kind': 'B2', 'country': 'US', 'category': 'cited by applicant'}, {'uuid': 'm0pa59o492vy0l2so88l0xgs3', 'patent_id': '8518184', 'citation_id': '6966936', 'date': '2005-11-01', 'kind': 'B2', 'country': 'US', 'category': 'cited by applicant'}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.APPLICATION
+Column name: series_code Type: TEXT
+Column name: number Type: TEXT
+Column name: date Type: TEXT
+Column name: id Type: TEXT
+Column name: country Type: TEXT
+Column name: patent_id Type: TEXT
+Sample rows:
+[{'id': 'D/535207', 'patent_id': 'D371814', 'series_code': 'D', 'number': 'D535207', 'country': 'US', 'date': '1990-07-26'}, {'id': 'D002048', 'patent_id': 'D390605', 'series_code': 'D', 'number': 'D002048', 'country': 'US', 'date': '1992-11-30'}, {'id': 'D013068', 'patent_id': 'D395297', 'series_code': 'D', 'number': 'D013068', 'country': 'US', 'date': '1993-09-17'}, {'id': 'D019659', 'patent_id': 'D387555', 'series_code': 'D', 'number': 'D019659', 'country': 'US', 'date': '1994-03-08'}, {'id': 'D019888', 'patent_id': 'D387736', 'series_code': 'D', 'number': 'D019888', 'country': 'US', 'date': '1994-03-11'}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.CPC_SUBSECTION
+Column name: title Type: TEXT
+Column name: id Type: TEXT
+Sample rows:
+[{'id': 'F41', 'title': 'WEAPONS'}, {'id': 'A43', 'title': 'FOOTWEAR'}, {'id': 'A42', 'title': 'HEADWEAR'}, {'id': 'G04', 'title': 'HOROLOGY'}, {'id': 'B61', 'title': 'RAILWAYS'}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.PATENT_ASSIGNEE
+Column name: patent_id Type: TEXT
+Sample rows:
+[{'patent_id': '11179164'}, {'patent_id': '11139018'}, {'patent_id': '11165899'}, {'patent_id': '11168211'}, {'patent_id': '11142954'}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.PATENT_GOVINTORG
+Column name: patent_id Type: TEXT
+Sample rows:
+[{'patent_id': '10074282'}, {'patent_id': '10096097'}, {'patent_id': '10029556'}, {'patent_id': '10127447'}, {'patent_id': '10067112'}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.PATENT_INVENTOR
+Column name: patent_id Type: TEXT
+Sample rows:
+[{'patent_id': '4633115'}, {'patent_id': '7099733'}, {'patent_id': '8373326'}, {'patent_id': '7441399'}, {'patent_id': '6850293'}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.CPC_CURRENT
+Column name: category Type: TEXT
+Column name: group_id Type: TEXT
+Column name: section_id Type: TEXT
+Column name: subsection_id Type: TEXT
+Column name: subgroup_id Type: TEXT
+Column name: uuid Type: TEXT
+Column name: patent_id Type: TEXT
+Sample rows:
+[{'uuid': '0fccb987-5388-476f-8391-f47d2e55a308', 'patent_id': '10396367', 'section_id': 'C', 'subsection_id': 'C08', 'group_id': 'C08K', 'subgroup_id': 'C08K5/3462', 'category': 'inventional'}, {'uuid': 'b51fcbe9-5f0b-478c-9292-7a4e7721bbe9', 'patent_id': '5308489', 'section_id': 'C', 'subsection_id': 'C08', 'group_id': 'C08L', 'subgroup_id': 'C08L101/00', 'category': 'inventional'}, {'uuid': '2313da55-6a74-4330-a280-33125f345769', 'patent_id': '7479522', 'section_id': 'C', 'subsection_id': 'C08', 'group_id': 'C08L', 'subgroup_id': 'C08L51/085', 'category': 'inventional'}, {'uuid': '9703e112-1350-4036-b9e9-8106f486783d', 'patent_id': '6930146', 'section_id': 'C', 'subsection_id': 'C08', 'group_id': 'C08L', 'subgroup_id': 'C08L67/025', 'category': 'inventional'}, {'uuid': 'd0bb650e-2a37-43c5-ab0c-2984c34a94fe', 'patent_id': '7175953', 'section_id': 'C', 'subsection_id': 'C09', 'group_id': 'C09B', 'subgroup_id': 'C09B23/083', 'category': 'inventional'}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.CPC_SUBGROUP
+Column name: title Type: TEXT
+Column name: id Type: TEXT
+Sample rows:
+[{'id': 'G06F12/1416', 'title': 'Accessing, addressing or allocating within memory systems or architectures -Protection against unauthorised use of memory ; or access to memory-by checking the object accessibility, e.g. type of access defined by the memory independently of subject rights '}, {'id': 'B01F15/0234', 'title': 'Accessories for mixers ; ; Auxiliary operations or auxiliary devices; Parts or details of general application-Feed or discharge mechanisms-Feed mechanisms -characterized by the means for feeding the components to the mixer-using gravity, e.g. from a hopper'}, {'id': 'B01F15/0237', 'title': 'Accessories for mixers ; ; Auxiliary operations or auxiliary devices; Parts or details of general application-Feed or discharge mechanisms-Feed mechanisms -characterized by the means for feeding the components to the mixer-using pistons, plungers, syringes'}, {'id': 'F01D15/065', 'title': 'Adaptations of machines or engines for special use; Combinations of engines with devices driven thereby -Adaptations for driving, or combinations with, hand-held tools or the like ; control thereof-with pressure-velocity transformation exclusively in rotor'}, {'id': 'Y10T156/1093', 'title': 'Adhesive bonding and miscellaneous chemical manufacture-Methods of surface bonding and/or assembly therefor-of discrete laminae to single face of additional lamina-All laminae planar and face to face-with covering of discrete laminae with additional lamina'}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.PATENT_CONTRACTAWARDNUMBER
+Column name: patent_id Type: TEXT
+Sample rows:
+[{'patent_id': '10169847'}, {'patent_id': 'PP21965'}, {'patent_id': '4534894'}, {'patent_id': '7267941'}, {'patent_id': '7547509'}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.SUBCLASS_CURRENT
+Column name: title Type: TEXT
+Column name: id Type: TEXT
+Sample rows:
+[{'id': '558/165', 'title': 'Divalent chalcogen, bonded directly to two carbons or to carbon and hydrogen, attached indirectly to phosphorus by acyclic nonionic bonding (wherein the hydrogen may be replaced by substituted or unsubstituted ammonium, or by a Group IA or IIA light metal)'}, {'id': '210/DIG.*', 'title': '1'}, {'id': '514/200', 'title': '1'}, {'id': '514/210.8', 'title': '1'}, {'id': '540/223', 'title': '2'}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.USRELDOC
+Column name: date Type: TEXT
+Column name: reldocno Type: TEXT
+Column name: kind Type: TEXT
+Column name: uuid Type: TEXT
+Column name: patent_id Type: TEXT
+Column name: country Type: TEXT
+Sample rows:
+[{'uuid': 'bg35bwgdg1rmbx1kshsjx1xf7', 'patent_id': '8618696', 'reldocno': '20130154389', 'country': 'US', 'date': '2013-06-20', 'kind': 'A1'}, {'uuid': 'z0i9pkakju0epdip0vtmcadnf', 'patent_id': '10037507', 'reldocno': '20170262782', 'country': 'US', 'date': '2017-09-14', 'kind': 'A1'}, {'uuid': 'itba71z7z5ip113q4tkwt75jf', 'patent_id': '10257822', 'reldocno': '20180302883', 'country': 'US', 'date': '2018-10-18', 'kind': 'A1'}, {'uuid': 'wg0fpahkrne5dj95a79ct5jyp', 'patent_id': '8402331', 'reldocno': '20120239994', 'country': 'US', 'date': '2012-09-20', 'kind': 'A1'}, {'uuid': 'yjpemeqlq1w4054nay25qb5kw', 'patent_id': '8133689', 'reldocno': '20110300560', 'country': 'US', 'date': '2011-12-08', 'kind': 'A1'}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.USPC_CURRENT
+Column name: patent_id Type: TEXT
+Column name: uuid Type: TEXT
+Sample rows:
+[]
+
+--------------------------------------------------
+External knowledge that might be helpful: 
+None
+The table structure information is ({database name: {schema name: [table name]}}): 
+{'PATENTSVIEW': {'PATENTSVIEW': ['BRF_SUM_TEXT', 'FOREIGNCITATION', 'PATENT', 'USAPPLICATIONCITATION', 'USPC', 'CPC_GROUP', 'IPCR', 'PATENT_LAWYER', 'DETAIL_DESC_TEXT_2021', 'MATCH', 'USPATENTCITATION', 'APPLICATION', 'CPC_SUBSECTION', 'PATENT_ASSIGNEE', 'PATENT_GOVINTORG', 'PATENT_INVENTOR', 'CPC_CURRENT', 'CPC_SUBGROUP', 'PATENT_CONTRACTAWARDNUMBER', 'SUBCLASS_CURRENT', 'USRELDOC', 'USPC_CURRENT']}}
+
+Some few-shot examples after column exploration may be helpful:
+Query:
+-- Description: Retrieve distinct patent IDs, titles, and application dates for patents in the 'PATENT' table within the specified CPC categories ('C05' or 'A01G').
+SELECT DISTINCT 
+    p."id" AS "patent_id", 
+    p."title", 
+    ap."date" AS "application_date"
+FROM 
+    PATENTSVIEW.PATENTSVIEW.PATENT p
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.CPC_CURRENT cc
+ON 
+    p."id" = cc."patent_id"
+JOIN
+    PATENTSVIEW.PATENTSVIEW.APPLICATION ap
+ON
+    p."id" = ap."patent_id"
+WHERE 
+    (cc."subsection_id" = 'C05' OR cc."group_id" = 'A01G')
+LIMIT 20;
+Answer:
+patent_id,title,application_date
+10241488,Automated irrigation control system,2017-08-29
+10100550,Foldable tubular element with one rigid degree of freedom,2014-11-06
+4921024,Method and apparatus to fell a tree,1989-10-16
+7415796,Method and apparatus for growing plants,2005-03-08
+9572301,Switch-free multi-cutting mode shearing tool,2014-12-30
+9901949,Water spraying system,2013-06-14
+7648085,Drip emitter,2006-02-22
+4987698,Mushroom cultivation,1988-11-30
+5136807,Arrangement for growing p
+Query:
+-- Description: Retrieve forward citation counts for patents, filtering by citations made within 1 month after valid application dates. Excludes invalid dates using TRY_TO_DATE to ensure proper execution.
+SELECT DISTINCT 
+    p."id" AS "patent_id", 
+    COUNT(DISTINCT uc."citation_id") AS "forward_citation_count"
+FROM 
+    PATENTSVIEW.PATENTSVIEW.PATENT p
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc
+ON 
+    p."id" = uc."patent_id"
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.APPLICATION ap
+ON 
+    p."id" = ap."patent_id"
+WHERE 
+    TRY_TO_DATE(ap."date", 'YYYY-MM-DD') IS NOT NULL AND
+    TRY_TO_DATE(uc."date", 'YYYY-MM-DD') IS NOT NULL AND
+    DATE(uc."date") BETWEEN DATE(ap."date") AND DATEADD(month, 1, DATE(ap."date"))
+GROUP BY 
+    p."id"
+LIMIT 20;
+Answer:
+patent_id,forward_citation_count
+4648585,1
+D554143,2
+7055151,1
+D855549,1
+4307855,1
+9460339,1
+8592950,1
+9761817,1
+6835552,1
+D672046,1
+5612160,1
+8213119,1
+10024811,1
+6843699,1
+11096900,1
+7069006,1
+6418424,14
+7093393,1
+6870901,2
+D382521,1
+Query:
+-- Description: Retrieve the abstract text from the 'PATENT' table for patents that belong to the specified CPC categories ('C05' or 'A01G'). Excludes invalid application dates using TRY_TO_DATE to ensure proper execution.
+SELECT DISTINCT 
+    p."id" AS "patent_id", 
+    p."abstract" AS "abstract_text"
+FROM 
+    PATENTSVIEW.PATENTSVIEW.PATENT p
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.CPC_CURRENT cc
+ON 
+    p."id" = cc."patent_id"
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.APPLICATION ap
+ON 
+    p."id" = ap."patent_id"
+WHERE 
+    TRY_TO_DATE(ap."date", 'YYYY-MM-DD') IS NOT NULL AND
+    (cc."subsection_id" = 'C05' OR cc."group_id" = 'A01G')
+LIMIT 20;
+Answer:
+patent_id,abstract_text
+9351445,"A novel strain of Pleurotus nebrodensis (Daewang No. 1, Accession No.: KACC93181P) and a method for cultivating it are provided. The novel strain of Pleurotus nebrodensis is different from the existing Pleurotus ferulae in shape and physiological characteristic, has an extra after-ripening period, can be grown at a low temperature of 22 to 25° C. and a low water content (RH) of 60 to 65%, can be cultivated in slightly acid environment of pH 5.5 to 6.5, can utili
+Task: Retrieve the following information for U.S. patents: The patent ID, title, and application date. The number of backward citations within 1 month before the application date (i.e., patents that cited the current patent before its application). The number of forward citations within 1 month after the application date (i.e., patents that cited the current patent after its application). The abstract text of the patent. Only include patents that belong to specific CPC categories, such as subsection 'C05' or group 'A01G'. The query should filter patents to include only those that have at least one backward citation or one forward citation in the 1-month period specified. Sort the results by application date and return all matching records.
+Another way to say it: I wonder which patents within CPC subsection 'C05' or group 'A01G' in the USA have at least one forward or backward citations within one month of their application dates. Give me the ids, titles, application date, forward/backward citation counts and summary texts.
+
+Please think step by step and answer only one complete SQL in snowflake dialect in ```sql``` format.
+SQL usage example: ```sql
+SELECT "COLUMN_NAME" FROM DATABASE.SCHEMA.TABLE WHERE ... ``` (Adjust "DATABASE", "SCHEMA", and "TABLE" to match actual names, ensure all column names are enclosed in double quotations)
+Here are some useful tips for answering:
+When performing a UNION operation on many tables, ensure that all table names are explicitly listed. Union first and then add condition and selection. e.g. SELECT "col1", "col2" FROM (TABLE1 UNION ALL TABLE2) WHERE ...; Don't write sqls as (SELECT col1, col2 FROM TABLE1 WHERE ...) UNION ALL (SELECT col1, col2 FROM TABLE2 WHERE ...); Don't use ['-- Include all', '-- Omit', '-- Continue', '-- Union all', '-- ...', '-- List all', '-- Replace this', '-- Each table', '-- Add other'] to omit any table. Table names here: The table structure information is ({database name: {schema name: [table name]}}): 
+{'PATENTSVIEW': {'PATENTSVIEW': ['BRF_SUM_TEXT', 'FOREIGNCITATION', 'PATENT', 'USAPPLICATIONCITATION', 'USPC', 'CPC_GROUP', 'IPCR', 'PATENT_LAWYER', 'DETAIL_DESC_TEXT_2021', 'MATCH', 'USPATENTCITATION', 'APPLICATION', 'CPC_SUBSECTION', 'PATENT_ASSIGNEE', 'PATENT_GOVINTORG', 'PATENT_INVENTOR', 'CPC_CURRENT', 'CPC_SUBGROUP', 'PATENT_CONTRACTAWARDNUMBER', 'SUBCLASS_CURRENT', 'USRELDOC', 'USPC_CURRENT']}}
+
+When using ORDER BY xxx DESC, add NULLS LAST to exclude null records: ORDER BY xxx DESC NULLS LAST.
+When asked something without stating name or id, return both of them. e.g. Which products ...? The answer should include product_name and product_id.
+When asked percentage decrease, you should return a positive value. e.g. How many percentage points in 2021 decrease compared to ...? The answer should be a positive value indicating the decresed number. Try to use ABS().
+If asked two tables, you should reply with the last one instead of combining two tables. e.g. Identifying the top five states ... examine the state that ranks fourth overall and identify its top five counties. You should only answer top five counties.
+Use ST_DISTANCE to calculate distance between two geographic points for more accurate answer.
+If the task description does not specify the number of decimal places, retain all decimals to four places.
+
+[Self-refine]
+2025-07-01 04:14:25 - Thread-98 (execute) - INFO - [Try to run SQL in self-refine]
+```sql
+SELECT DISTINCT 
+    p."id" AS "patent_id", 
+    p."title", 
+    ap."date" AS "application_date", 
+    p."abstract" AS "abstract_text",
+    COALESCE(backward_citation_count.citation_count, 0) AS backward_citation_count,
+    COALESCE(forward_citation_count.citation_count, 0) AS forward_citation_count
+FROM 
+    PATENTSVIEW.PATENTSVIEW.PATENT p
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.APPLICATION ap
+ON 
+    p."id" = ap."patent_id"
+JOIN 
+    PATENTSVIEW.PATENTSVIEW.CPC_CURRENT cc
+ON 
+    p."id" = cc."patent_id"
+LEFT JOIN 
+    (
+        SELECT 
+            uc."patent_id", 
+            COUNT(DISTINCT uc."citation_id") AS citation_count
+        FROM 
+            PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc
+        JOIN 
+            PATENTSVIEW.PATENTSVIEW.APPLICATION ap
+        ON 
+            uc."citation_id" = ap."patent_id"
+        WHERE 
+            TRY_TO_DATE(uc."date", 'YYYY-MM-DD') IS NOT NULL AND
+            TRY_TO_DATE(ap."date", 'YYYY-MM-DD') IS NOT NULL AND
+            DATE(uc."date") BETWEEN DATEADD(day, -30, DATE(ap."date")) AND DATE(ap."date")
+        GROUP BY 
+            uc."patent_id"
+    ) AS backward_citation_count
+ON 
+    p."id" = backward_citation_count."patent_id"
+LEFT JOIN 
+    (
+        SELECT 
+            uc."patent_id", 
+            COUNT(DISTINCT uc."citation_id") AS citation_count
+        FROM 
+            PATENTSVIEW.PATENTSVIEW.USPATENTCITATION uc
+        JOIN 
+            PATENTSVIEW.PATENTSVIEW.APPLICATION ap
+        ON 
+            uc."patent_id" = ap."patent_id"
+        WHERE 
+            TRY_TO_DATE(uc."date", 'YYYY-MM-DD') IS NOT NULL AND
+            TRY_TO_DATE(ap."date", 'YYYY-MM-DD') IS NOT NULL AND
+            DATE(uc."date") BETWEEN DATE(ap."date") AND DATEADD(day, 30, DATE(ap."date"))
+        GROUP BY 
+            uc."patent_id"
+    ) AS forward_citation_count
+ON 
+    p."id" = forward_citation_count."patent_id"
+WHERE 
+    TRY_TO_DATE(ap."date", 'YYYY-MM-DD') IS NOT NULL AND
+    (cc."subsection_id" = 'C05' OR cc."group_id" = 'A01G') AND
+    (COALESCE(backward_citation_count.citation_count, 0) > 0 OR COALESCE(forward_citation_count.citation_count, 0) > 0)
+ORDER BY 
+    ap."date"
+```
+[Try to run SQL in self-refine]
+2025-07-01 04:14:53 - Thread-98 (execute) - INFO - Total iteration counts: 0

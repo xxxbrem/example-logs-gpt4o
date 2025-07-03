@@ -1,0 +1,8 @@
+SELECT "term", "dma_name", "score", "rank", "percent_gain"
+FROM GOOGLE_TRENDS.GOOGLE_TRENDS.TOP_RISING_TERMS
+WHERE "week" = (SELECT MAX("week") 
+                FROM GOOGLE_TRENDS.GOOGLE_TRENDS.TOP_RISING_TERMS
+                WHERE "week" <= DATEADD(YEAR, -1, (SELECT MAX("week") FROM GOOGLE_TRENDS.GOOGLE_TRENDS.TOP_RISING_TERMS)))
+  AND "rank" = 1
+ORDER BY COALESCE("score", 0) DESC NULLS LAST, COALESCE("percent_gain", 0) DESC NULLS LAST
+LIMIT 1;

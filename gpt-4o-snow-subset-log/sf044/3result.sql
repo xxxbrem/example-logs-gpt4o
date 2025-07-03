@@ -1,0 +1,35 @@
+WITH magnificent_7_tickers AS (
+    SELECT 'AAPL' AS "TICKER" UNION ALL
+    SELECT 'AMZN' UNION ALL
+    SELECT 'GOOGL' UNION ALL
+    SELECT 'META' UNION ALL
+    SELECT 'MSFT' UNION ALL
+    SELECT 'NVDA' UNION ALL
+    SELECT 'TSLA'
+),
+price_changes AS (
+    SELECT 
+        sp."TICKER",
+        MIN(CASE WHEN sp."DATE" = '2024-01-01' THEN sp."VALUE" END) AS "START_PRICE",
+        MAX(CASE WHEN sp."DATE" = '2024-06-30' THEN sp."VALUE" END) AS "END_PRICE"
+    FROM 
+        "FINANCE__ECONOMICS"."CYBERSYN"."STOCK_PRICE_TIMESERIES" sp
+    INNER JOIN 
+        magnificent_7_tickers m7 ON sp."TICKER" = m7."TICKER"
+    WHERE 
+        sp."VARIABLE_NAME" = 'Post-Market Close'
+        AND sp."DATE" BETWEEN '2024-01-01' AND '2024-06-30'
+    GROUP BY sp."TICKER"
+)
+SELECT 
+    "TICKER",
+    "START_PRICE",
+    "END_PRICE",
+    CASE 
+        WHEN "START_PRICE" IS NOT NULL AND "END_PRICE" IS NOT NULL THEN 
+            ROUND((("END_PRICE" - "START_PRICE") / "START_PRICE") * 100, 4)
+        ELSE 
+            NULL
+    END AS "PERCENTAGE_CHANGE"
+FROM 
+    price_changes;

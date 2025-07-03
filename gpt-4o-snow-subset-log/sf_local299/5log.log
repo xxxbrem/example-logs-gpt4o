@@ -1,0 +1,889 @@
+2025-07-01 04:52:04 - Thread-734 (execute) - INFO - [Exploration]
+```sql
+-- Description: First, identify each customer's daily running balance by accumulating their transaction amounts (adding for deposits and subtracting for other transaction types). 
+-- Use the SUM window function to calculate running balances grouped by customer and transaction date.
+SELECT 
+    "customer_id", 
+    "txn_date", 
+    SUM(
+        CASE 
+            WHEN "txn_type" = 'deposit' THEN "txn_amount" 
+            ELSE -1 * "txn_amount" 
+        END
+    ) OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "daily_running_balance"
+FROM 
+    "BANK_SALES_TRADING"."BANK_SALES_TRADING"."CUSTOMER_TRANSACTIONS"
+LIMIT 20;
+```
+
+```sql
+-- Description: Next, calculate the 30-day rolling average balance for each customer's daily running balance. 
+-- Values that result in negative averages are converted to 0 using CASE statements.
+SELECT 
+    "customer_id", 
+    "txn_date", 
+    CASE 
+        WHEN AVG("daily_running_balance") OVER (
+            PARTITION BY "customer_id" 
+            ORDER BY "txn_date" 
+            ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
+        ) < 0 THEN 0 
+        ELSE AVG("daily_running_balance") OVER (
+            PARTITION BY "customer_id" 
+            ORDER BY "txn_date" 
+            ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
+        )
+    END AS "30_day_rolling_avg_balance"
+FROM 
+    (
+        SELECT 
+            "customer_id", 
+            "txn_date", 
+            SUM(
+                CASE 
+                    WHEN "txn_type" = 'deposit' THEN "txn_amount" 
+                    ELSE -1 * "txn_amount" 
+                END
+            ) OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "daily_running_balance"
+        FROM 
+            "BANK_SALES_TRADING"."BANK_SALES_TRADING"."CUSTOMER_TRANSACTIONS"
+    )
+LIMIT 20;
+```
+
+```sql
+-- Description: Group rolling averages by month for each customer and find their maximum 30-day average balance within each month.
+-- Extract the month period from "txn_date" and calculate monthly maximum 30-day averages per customer.
+SELECT 
+    "customer_id", 
+    TO_CHAR(DATE_TRUNC('month', TO_DATE("txn_date", 'YYYY-MM-DD')), 'YYYY-MM') AS "month_period", 
+    MAX("30_day_rolling_avg_balance") AS "monthly_max_30_day_avg"
+FROM 
+    (
+        SELECT 
+            "customer_id", 
+            "txn_date", 
+            CASE 
+                WHEN AVG("daily_running_balance") OVER (
+                    PARTITION BY "customer_id" 
+                    ORDER BY "txn_date" 
+                    ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
+                ) < 0 THEN 0 
+                ELSE AVG("daily_running_balance") OVER (
+                    PARTITION BY "customer_id" 
+                    ORDER BY "txn_date" 
+                    ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
+                )
+            END AS "30_day_rolling_avg_balance"
+        FROM 
+            (
+                SELECT 
+                    "customer_id", 
+                    "txn_date", 
+                    SUM(
+                        CASE 
+                            WHEN "txn_type" = 'deposit' THEN "txn_amount" 
+                            ELSE -1 * "txn_amount" 
+                        END
+                    ) OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "daily_running_balance"
+                FROM 
+                    "BANK_SALES_TRADING"."BANK_SALES_TRADING"."CUSTOMER_TRANSACTIONS"
+            )
+    )
+GROUP BY 
+    "customer_id", 
+    TO_CHAR(DATE_TRUNC('month', TO_DATE("txn_date", 'YYYY-MM-DD')), 'YYYY-MM')
+LIMIT 20;
+```
+
+```sql
+-- Description: Summing the maximum 30-day average balances across all customers for each month, while excluding the baseline period.
+-- The baseline period is identified as the first month of transactions for each customer and excluded from the final results.
+WITH Monthly_Max_Per_Customer AS (
+    SELECT 
+        "customer_id", 
+        TO_CHAR(DATE_TRUNC('month', TO_DATE("txn_date", 'YYYY-MM-DD')), 'YYYY-MM') AS "month_period", 
+        MAX("30_day_rolling_avg_balance") AS "monthly_max_30_day_avg"
+    FROM 
+        (
+            SELECT 
+                "customer_id", 
+                "txn_date", 
+                CASE 
+                    WHEN AVG("daily_running_balance") OVER (
+                        PARTITION BY "customer_id" 
+                        ORDER BY "txn_date" 
+                        ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
+                    ) < 0 THEN 0 
+                    ELSE AVG("daily_running_balance") OVER (
+                        PARTITION BY "customer_id" 
+                        ORDER BY "txn_date" 
+                        ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
+                    )
+                END AS "30_day_rolling_avg_balance"
+            FROM 
+                (
+                    SELECT 
+                        "customer_id", 
+                        "txn_date", 
+                        SUM(
+                            CASE 
+                                WHEN "txn_type" = 'deposit' THEN "txn_amount" 
+                                ELSE -1 * "txn_amount" 
+                            END
+                        ) OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "daily_running_balance"
+                    FROM 
+                        "BANK_SALES_TRADING"."BANK_SALES_TRADING"."CUSTOMER_TRANSACTIONS"
+                )
+        )
+    GROUP BY 
+        "customer_id", 
+        TO_CHAR(DATE_TRUNC('month', TO_DATE("txn_date", 'YYYY-MM-DD')), 'YYYY-MM')
+),
+Customer_Baseline AS (
+    SELECT 
+        "customer_id", 
+        MIN(TO_CHAR(DATE_TRUNC('month', TO_DATE("txn_date", 'YYYY-MM-DD')), 'YYYY-MM')) AS "baseline_month"
+    FROM 
+        "BANK_SALES_TRADING"."BANK_SALES_TRADING"."CUSTOMER_TRANSACTIONS"
+    GROUP BY 
+        "customer_id"
+)
+SELECT 
+    m."month_period", 
+    SUM(m."monthly_max_30_day_avg") AS "sum_max_30_day_avg_all_customers"
+FROM 
+    Monthly_Max_Per_Customer m
+LEFT JOIN 
+    Customer_Baseline b
+ON 
+    m."customer_id" = b."customer_id"
+WHERE 
+    m."month_period" != b."baseline_month"
+GROUP BY 
+    m."month_period"
+ORDER BY 
+    m."month_period"
+LIMIT 20;
+```
+[Exploration]
+2025-07-01 04:52:04 - Thread-734 (execute) - INFO - [Try to execute]
+-- Description: First, identify each customer's daily running balance by accumulating their transaction amounts (adding for deposits and subtracting for other transaction types). 
+-- Use the SUM window function to calculate running balances grouped by customer and transaction date.
+SELECT 
+    "customer_id", 
+    "txn_date", 
+    SUM(
+        CASE 
+            WHEN "txn_type" = 'deposit' THEN "txn_amount" 
+            ELSE -1 * "txn_amount" 
+        END
+    ) OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "daily_running_balance"
+FROM 
+    "BANK_SALES_TRADING"."BANK_SALES_TRADING"."CUSTOMER_TRANSACTIONS"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:52:05 - Thread-734 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: First, identify each customer's daily running balance by accumulating their transaction amounts (adding for deposits and subtracting for other transaction types). 
+-- Use the SUM window function to calculate running balances grouped by customer and transaction date.
+SELECT 
+    "customer_id", 
+    "txn_date", 
+    SUM(
+        CASE 
+            WHEN "txn_type" = 'deposit' THEN "txn_amount" 
+            ELSE -1 * "txn_amount" 
+        END
+    ) OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "daily_running_balance"
+FROM 
+    "BANK_SALES_TRADING"."BANK_SALES_TRADING"."CUSTOMER_TRANSACTIONS"
+LIMIT 20;
+Results:
+customer_id,txn_date,daily_running_balance
+324,2020-01-04,538
+324,2020-01-04,1021
+324,2020-01-28,203
+324,2020-02-09,967
+324,2020-03-22,1152
+324,2020-03-29,2139
+324,2020-03-29,1470
+468,2020-01-25,939
+468,2020-01-29,39
+468,2020-02-14,-863
+468,2020-02-19,-155
+468,2020-03-02,-115
+468,2020-03-02,-141
+468,2020-03-18,-917
+10,2020-01-13,556
+10,2020-01-15,-219
+10,2020-01-18,-957
+10,2020-01-18,-1394
+10,2020-01-24,-2140
+10,2020-01-26,-1622
+
+[Successfully executed]
+2025-07-01 04:52:05 - Thread-734 (execute) - INFO - [Try to execute]
+-- Description: Next, calculate the 30-day rolling average balance for each customer's daily running balance. 
+-- Values that result in negative averages are converted to 0 using CASE statements.
+SELECT 
+    "customer_id", 
+    "txn_date", 
+    CASE 
+        WHEN AVG("daily_running_balance") OVER (
+            PARTITION BY "customer_id" 
+            ORDER BY "txn_date" 
+            ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
+        ) < 0 THEN 0 
+        ELSE AVG("daily_running_balance") OVER (
+            PARTITION BY "customer_id" 
+            ORDER BY "txn_date" 
+            ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
+        )
+    END AS "30_day_rolling_avg_balance"
+FROM 
+    (
+        SELECT 
+            "customer_id", 
+            "txn_date", 
+            SUM(
+                CASE 
+                    WHEN "txn_type" = 'deposit' THEN "txn_amount" 
+                    ELSE -1 * "txn_amount" 
+                END
+            ) OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "daily_running_balance"
+        FROM 
+            "BANK_SALES_TRADING"."BANK_SALES_TRADING"."CUSTOMER_TRANSACTIONS"
+    )
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:52:05 - Thread-734 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Next, calculate the 30-day rolling average balance for each customer's daily running balance. 
+-- Values that result in negative averages are converted to 0 using CASE statements.
+SELECT 
+    "customer_id", 
+    "txn_date", 
+    CASE 
+        WHEN AVG("daily_running_balance") OVER (
+            PARTITION BY "customer_id" 
+            ORDER BY "txn_date" 
+            ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
+        ) < 0 THEN 0 
+        ELSE AVG("daily_running_balance") OVER (
+            PARTITION BY "customer_id" 
+            ORDER BY "txn_date" 
+            ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
+        )
+    END AS "30_day_rolling_avg_balance"
+FROM 
+    (
+        SELECT 
+            "customer_id", 
+            "txn_date", 
+            SUM(
+                CASE 
+                    WHEN "txn_type" = 'deposit' THEN "txn_amount" 
+                    ELSE -1 * "txn_amount" 
+                END
+            ) OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "daily_running_balance"
+        FROM 
+            "BANK_SALES_TRADING"."BANK_SALES_TRADING"."CUSTOMER_TRANSACTIONS"
+    )
+LIMIT 20;
+Results:
+customer_id,txn_date,30_day_rolling_avg_balance
+447,2020-01-03,188.000
+447,2020-01-05,568.500
+447,2020-01-05,796.333
+447,2020-01-14,867.250
+447,2020-01-15,1062.000
+447,2020-01-20,1082.333
+447,2020-01-23,1098.428
+447,2020-02-22,1015.750
+447,2020-02-28,907.444
+447,2020-03-13,766.900
+447,2020-03-19,577.727
+447,2020-03-24,422.083
+41,2020-01-30,790.000
+
+[Successfully executed]
+2025-07-01 04:52:05 - Thread-734 (execute) - INFO - [Try to execute]
+-- Description: Group rolling averages by month for each customer and find their maximum 30-day average balance within each month.
+-- Extract the month period from "txn_date" and calculate monthly maximum 30-day averages per customer.
+SELECT 
+    "customer_id", 
+    TO_CHAR(DATE_TRUNC('month', TO_DATE("txn_date", 'YYYY-MM-DD')), 'YYYY-MM') AS "month_period", 
+    MAX("30_day_rolling_avg_balance") AS "monthly_max_30_day_avg"
+FROM 
+    (
+        SELECT 
+            "customer_id", 
+            "txn_date", 
+            CASE 
+                WHEN AVG("daily_running_balance") OVER (
+                    PARTITION BY "customer_id" 
+                    ORDER BY "txn_date" 
+                    ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
+                ) < 0 THEN 0 
+                ELSE AVG("daily_running_balance") OVER (
+                    PARTITION BY "customer_id" 
+                    ORDER BY "txn_date" 
+                    ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
+                )
+            END AS "30_day_rolling_avg_balance"
+        FROM 
+            (
+                SELECT 
+                    "customer_id", 
+                    "txn_date", 
+                    SUM(
+                        CASE 
+                            WHEN "txn_type" = 'deposit' THEN "txn_amount" 
+                            ELSE -1 * "txn_amount" 
+                        END
+                    ) OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "daily_running_balance"
+                FROM 
+                    "BANK_SALES_TRADING"."BANK_SALES_TRADING"."CUSTOMER_TRANSACTIONS"
+            )
+    )
+GROUP BY 
+    "customer_id", 
+    TO_CHAR(DATE_TRUNC('month', TO_DATE("txn_date", 'YYYY-MM-DD')), 'YYYY-MM')
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:52:05 - Thread-734 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Group rolling averages by month for each customer and find their maximum 30-day average balance within each month.
+-- Extract the month period from "txn_date" and calculate monthly maximum 30-day averages per customer.
+SELECT 
+    "customer_id", 
+    TO_CHAR(DATE_TRUNC('month', TO_DATE("txn_date", 'YYYY-MM-DD')), 'YYYY-MM') AS "month_period", 
+    MAX("30_day_rolling_avg_balance") AS "monthly_max_30_day_avg"
+FROM 
+    (
+        SELECT 
+            "customer_id", 
+            "txn_date", 
+            CASE 
+                WHEN AVG("daily_running_balance") OVER (
+                    PARTITION BY "customer_id" 
+                    ORDER BY "txn_date" 
+                    ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
+                ) < 0 THEN 0 
+                ELSE AVG("daily_running_balance") OVER (
+                    PARTITION BY "customer_id" 
+                    ORDER BY "txn_date" 
+                    ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
+                )
+            END AS "30_day_rolling_avg_balance"
+        FROM 
+            (
+                SELECT 
+                    "customer_id", 
+                    "txn_date", 
+                    SUM(
+                        CASE 
+                            WHEN "txn_type" = 'deposit' THEN "txn_amount" 
+                            ELSE -1 * "txn_amount" 
+                        END
+                    ) OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "daily_running_balance"
+                FROM 
+                    "BANK_SALES_TRADING"."BANK_SALES_TRADING"."CUSTOMER_TRANSACTIONS"
+            )
+    )
+GROUP BY 
+    "customer_id", 
+    TO_CHAR(DATE_TRUNC('month', TO_DATE("txn_date", 'YYYY-MM-DD')), 'YYYY-MM')
+LIMIT 20;
+Results:
+customer_id,month_period,monthly_max_30_day_avg
+447,2020-01,1098.428
+447,2020-02,1015.750
+447,2020-03,766.900
+41,2020-01,790.000
+41,2020-02,600.200
+41,2020-03,2065.500
+41,2020-04,2157.611
+369,2020-01,376.000
+369,2020-03,1148.000
+328,2020-01,0.000
+202,2020-01,446.000
+202,2020-02,0.000
+202,2020-03,0.000
+402,2020-02,1096.166
+364,2020-01,563.000
+
+[Successfully executed]
+2025-07-01 04:52:05 - Thread-734 (execute) - INFO - [Try to execute]
+-- Description: Summing the maximum 30-day average balances across all customers for each month, while excluding the baseline period.
+-- The baseline period is identified as the first month of transactions for each customer and excluded from the final results.
+WITH Monthly_Max_Per_Customer AS (
+    SELECT 
+        "customer_id", 
+        TO_CHAR(DATE_TRUNC('month', TO_DATE("txn_date", 'YYYY-MM-DD')), 'YYYY-MM') AS "month_period", 
+        MAX("30_day_rolling_avg_balance") AS "monthly_max_30_day_avg"
+    FROM 
+        (
+            SELECT 
+                "customer_id", 
+                "txn_date", 
+                CASE 
+                    WHEN AVG("daily_running_balance") OVER (
+                        PARTITION BY "customer_id" 
+                        ORDER BY "txn_date" 
+                        ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
+                    ) < 0 THEN 0 
+                    ELSE AVG("daily_running_balance") OVER (
+                        PARTITION BY "customer_id" 
+                        ORDER BY "txn_date" 
+                        ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
+                    )
+                END AS "30_day_rolling_avg_balance"
+            FROM 
+                (
+                    SELECT 
+                        "customer_id", 
+                        "txn_date", 
+                        SUM(
+                            CASE 
+                                WHEN "txn_type" = 'deposit' THEN "txn_amount" 
+                                ELSE -1 * "txn_amount" 
+                            END
+                        ) OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "daily_running_balance"
+                    FROM 
+                        "BANK_SALES_TRADING"."BANK_SALES_TRADING"."CUSTOMER_TRANSACTIONS"
+                )
+        )
+    GROUP BY 
+        "customer_id", 
+        TO_CHAR(DATE_TRUNC('month', TO_DATE("txn_date", 'YYYY-MM-DD')), 'YYYY-MM')
+),
+Customer_Baseline AS (
+    SELECT 
+        "customer_id", 
+        MIN(TO_CHAR(DATE_TRUNC('month', TO_DATE("txn_date", 'YYYY-MM-DD')), 'YYYY-MM')) AS "baseline_month"
+    FROM 
+        "BANK_SALES_TRADING"."BANK_SALES_TRADING"."CUSTOMER_TRANSACTIONS"
+    GROUP BY 
+        "customer_id"
+)
+SELECT 
+    m."month_period", 
+    SUM(m."monthly_max_30_day_avg") AS "sum_max_30_day_avg_all_customers"
+FROM 
+    Monthly_Max_Per_Customer m
+LEFT JOIN 
+    Customer_Baseline b
+ON 
+    m."customer_id" = b."customer_id"
+WHERE 
+    m."month_period" != b."baseline_month"
+GROUP BY 
+    m."month_period"
+ORDER BY 
+    m."month_period"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:52:06 - Thread-734 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Summing the maximum 30-day average balances across all customers for each month, while excluding the baseline period.
+-- The baseline period is identified as the first month of transactions for each customer and excluded from the final results.
+WITH Monthly_Max_Per_Customer AS (
+    SELECT 
+        "customer_id", 
+        TO_CHAR(DATE_TRUNC('month', TO_DATE("txn_date", 'YYYY-MM-DD')), 'YYYY-MM') AS "month_period", 
+        MAX("30_day_rolling_avg_balance") AS "monthly_max_30_day_avg"
+    FROM 
+        (
+            SELECT 
+                "customer_id", 
+                "txn_date", 
+                CASE 
+                    WHEN AVG("daily_running_balance") OVER (
+                        PARTITION BY "customer_id" 
+                        ORDER BY "txn_date" 
+                        ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
+                    ) < 0 THEN 0 
+                    ELSE AVG("daily_running_balance") OVER (
+                        PARTITION BY "customer_id" 
+                        ORDER BY "txn_date" 
+                        ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
+                    )
+                END AS "30_day_rolling_avg_balance"
+            FROM 
+                (
+                    SELECT 
+                        "customer_id", 
+                        "txn_date", 
+                        SUM(
+                            CASE 
+                                WHEN "txn_type" = 'deposit' THEN "txn_amount" 
+                                ELSE -1 * "txn_amount" 
+                            END
+                        ) OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "daily_running_balance"
+                    FROM 
+                        "BANK_SALES_TRADING"."BANK_SALES_TRADING"."CUSTOMER_TRANSACTIONS"
+                )
+        )
+    GROUP BY 
+        "customer_id", 
+        TO_CHAR(DATE_TRUNC('month', TO_DATE("txn_date", 'YYYY-MM-DD')), 'YYYY-MM')
+),
+Customer_Baseline AS (
+    SELECT 
+        "customer_id", 
+        MIN(TO_CHAR(DATE_TRUNC('month', TO_DATE("txn_date", 'YYYY-MM-DD')), 'YYYY-MM')) AS "baseline_month"
+    FROM 
+        "BANK_SALES_TRADING"."BANK_SALES_TRADING"."CUSTOMER_TRANSACTIONS"
+    GROUP BY 
+        "customer_id"
+)
+SELECT 
+    m."month_period", 
+    SUM(m."monthly_max_30_day_avg") AS "sum_max_30_day_avg_all_customers"
+FROM 
+    Monthly_Max_Per_Customer m
+LEFT JOIN 
+    Customer_Baseline b
+ON 
+    m."customer_id" = b."customer_id"
+WHERE 
+    m."month_period" != b."baseline_month"
+GROUP BY 
+    m."month_period"
+ORDER BY 
+    m."month_period"
+LIMIT 20;
+Results:
+month_period,sum_max_30_day_avg_all_customers
+2020-02,242986.264
+2020-03,231207.439
+2020-04,139871.862
+
+[Successfully executed]
+2025-07-01 04:52:06 - Thread-734 (execute) - INFO - itercount: 0
+2025-07-01 04:52:06 - Thread-734 (execute) - INFO - [Self-refine]
+Table full name: BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+Column name: customer_id Type: NUMBER
+Column name: txn_date Type: TEXT
+Column name: txn_amount Type: NUMBER
+Column name: txn_type Type: TEXT
+Sample rows:
+[{'customer_id': 429, 'txn_date': '2020-01-21', 'txn_type': 'deposit', 'txn_amount': 82}, {'customer_id': 155, 'txn_date': '2020-01-10', 'txn_type': 'deposit', 'txn_amount': 712}, {'customer_id': 398, 'txn_date': '2020-01-01', 'txn_type': 'deposit', 'txn_amount': 196}, {'customer_id': 255, 'txn_date': '2020-01-14', 'txn_type': 'deposit', 'txn_amount': 563}, {'customer_id': 373, 'txn_date': '2020-01-18', 'txn_type': 'deposit', 'txn_amount': 596}]
+--------------------------------------------------
+External knowledge that might be helpful: 
+None
+The table structure information is ({database name: {schema name: [table name]}}): 
+{'BANK_SALES_TRADING': {'BANK_SALES_TRADING': ['CUSTOMER_TRANSACTIONS']}}
+
+Some few-shot examples after column exploration may be helpful:
+Query:
+-- Description: First, identify each customer's daily running balance by accumulating their transaction amounts (adding for deposits and subtracting for other transaction types). 
+-- Use the SUM window function to calculate running balances grouped by customer and transaction date.
+SELECT 
+    "customer_id", 
+    "txn_date", 
+    SUM(
+        CASE 
+            WHEN "txn_type" = 'deposit' THEN "txn_amount" 
+            ELSE -1 * "txn_amount" 
+        END
+    ) OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "daily_running_balance"
+FROM 
+    "BANK_SALES_TRADING"."BANK_SALES_TRADING"."CUSTOMER_TRANSACTIONS"
+LIMIT 20;
+Answer:
+customer_id,txn_date,daily_running_balance
+324,2020-01-04,538
+324,2020-01-04,1021
+324,2020-01-28,203
+324,2020-02-09,967
+324,2020-03-22,1152
+324,2020-03-29,2139
+324,2020-03-29,1470
+468,2020-01-25,939
+468,2020-01-29,39
+468,2020-02-14,-863
+468,2020-02-19,-155
+468,2020-03-02,-115
+468,2020-03-02,-141
+468,2020-03-18,-917
+10,2020-01-13,556
+10,2020-01-15,-219
+10,2020-01-18,-957
+10,2020-01-18,-1394
+10,2020-01-24,-2140
+10,2020-01-26,-1622
+Query:
+-- Description: Next, calculate the 30-day rolling average balance for each customer's daily running balance. 
+-- Values that result in negative averages are converted to 0 using CASE statements.
+SELECT 
+    "customer_id", 
+    "txn_date", 
+    CASE 
+        WHEN AVG("daily_running_balance") OVER (
+            PARTITION BY "customer_id" 
+            ORDER BY "txn_date" 
+            ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
+        ) < 0 THEN 0 
+        ELSE AVG("daily_running_balance") OVER (
+            PARTITION BY "customer_id" 
+            ORDER BY "txn_date" 
+            ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
+        )
+    END AS "30_day_rolling_avg_balance"
+FROM 
+    (
+        SELECT 
+            "customer_id", 
+            "txn_date", 
+            SUM(
+                CASE 
+                    WHEN "txn_type" = 'deposit' THEN "txn_amount" 
+                    ELSE -1 * "txn_amount" 
+                END
+            ) OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "daily_running_balance"
+        FROM 
+            "BANK_SALES_TRADING"."BANK_SALES_TRADING"."CUSTOMER_TRANSACTIONS"
+    )
+LIMIT 20;
+Answer:
+customer_id,txn_date,30_day_rolling_avg_balance
+447,2020-01-03,188.000
+447,2020-01-05,568.500
+447,2020-01-05,796.333
+447,2020-01-14,867.250
+447,2020-01-15,1062.000
+447,2020-01-20,1082.333
+447,2020-01-23,1098.428
+447,2020-02-22,1015.750
+447,2020-02-28,907.444
+447,2020-03-13,766.900
+447,2020-03-19,577.727
+447,2020-03-24,422.083
+41,2020-01-30,790.000
+Query:
+-- Description: Group rolling averages by month for each customer and find their maximum 30-day average balance within each month.
+-- Extract the month period from "txn_date" and calculate monthly maximum 30-day averages per customer.
+SELECT 
+    "customer_id", 
+    TO_CHAR(DATE_TRUNC('month', TO_DATE("txn_date", 'YYYY-MM-DD')), 'YYYY-MM') AS "month_period", 
+    MAX("30_day_rolling_avg_balance") AS "monthly_max_30_day_avg"
+FROM 
+    (
+        SELECT 
+            "customer_id", 
+            "txn_date", 
+            CASE 
+                WHEN AVG("daily_running_balance") OVER (
+                    PARTITION BY "customer_id" 
+                    ORDER BY "txn_date" 
+                    ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
+                ) < 0 THEN 0 
+                ELSE AVG("daily_running_balance") OVER (
+                    PARTITION BY "customer_id" 
+                    ORDER BY "txn_date" 
+                    ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
+                )
+            END AS "30_day_rolling_avg_balance"
+        FROM 
+            (
+                SELECT 
+                    "customer_id", 
+                    "txn_date", 
+                    SUM(
+                        CASE 
+                            WHEN "txn_type" = 'deposit' THEN "txn_amount" 
+                            ELSE -1 * "txn_amount" 
+                        END
+                    ) OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "daily_running_balance"
+                FROM 
+                    "BANK_SALES_TRADING"."BANK_SALES_TRADING"."CUSTOMER_TRANSACTIONS"
+            )
+    )
+GROUP BY 
+    "customer_id", 
+    TO_CHAR(DATE_TRUNC('month', TO_DATE("txn_date", 'YYYY-MM-DD')), 'YYYY-MM')
+LIMIT 20;
+Answer:
+customer_id,month_period,monthly_max_30_day_avg
+447,2020-01,1098.428
+447,2020-02,1015.750
+447,2020-03,766.900
+41,2020-01,790.000
+41,2020-02,600.200
+41,2020-03,2065.500
+41,2020-04,2157.611
+369,2020-01,376.000
+369,2020-03,1148.000
+328,2020-01,0.000
+202,2020-01,446.000
+202,2020-02,0.000
+202,2020-03,0.000
+402,2020-02,1096.166
+364,2020-01,563.000
+Query:
+-- Description: Summing the maximum 30-day average balances across all customers for each month, while excluding the baseline period.
+-- The baseline period is identified as the first month of transactions for each customer and excluded from the final results.
+WITH Monthly_Max_Per_Customer AS (
+    SELECT 
+        "customer_id", 
+        TO_CHAR(DATE_TRUNC('month', TO_DATE("txn_date", 'YYYY-MM-DD')), 'YYYY-MM') AS "month_period", 
+        MAX("30_day_rolling_avg_balance") AS "monthly_max_30_day_avg"
+    FROM 
+        (
+            SELECT 
+                "customer_id", 
+                "txn_date", 
+                CASE 
+                    WHEN AVG("daily_running_balance") OVER (
+                        PARTITION BY "customer_id" 
+                        ORDER BY "txn_date" 
+                        ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
+                    ) < 0 THEN 0 
+                    ELSE AVG("daily_running_balance") OVER (
+                        PARTITION BY "customer_id" 
+                        ORDER BY "txn_date" 
+                        ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
+                    )
+                END AS "30_day_rolling_avg_balance"
+            FROM 
+                (
+                    SELECT 
+                        "customer_id", 
+                        "txn_date", 
+                        SUM(
+                            CASE 
+                                WHEN "txn_type" = 'deposit' THEN "txn_amount" 
+                                ELSE -1 * "txn_amount" 
+                            END
+                        ) OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "daily_running_balance"
+                    FROM 
+                        "BANK_SALES_TRADING"."BANK_SALES_TRADING"."CUSTOMER_TRANSACTIONS"
+                )
+        )
+    GROUP BY 
+        "customer_id", 
+        TO_CHAR(DATE_TRUNC('month', TO_DATE("txn_date", 'YYYY-MM-DD')), 'YYYY-MM')
+),
+Customer_Baseline AS (
+    SELECT 
+        "customer_id", 
+        MIN(TO_CHAR(DATE_TRUNC('month', TO_DATE("txn_date", 'YYYY-MM-DD')), 'YYYY-MM')) AS "baseline_month"
+    FROM 
+        "BANK_SALES_TRADING"."BANK_SALES_TRADING"."CUSTOMER_TRANSACTIONS"
+    GROUP BY 
+        "customer_id"
+)
+SELECT 
+    m."month_period", 
+    SUM(m."monthly_max_30_day_avg") AS "sum_max_30_day_avg_all_customers"
+FROM 
+    Monthly_Max_Per_Customer m
+LEFT JOIN 
+    Customer_Baseline b
+ON 
+    m."customer_id" = b."customer_id"
+WHERE 
+    m."month_period" != b."baseline_month"
+GROUP BY 
+    m."month_period"
+ORDER BY 
+    m."month_period"
+LIMIT 20;
+Answer:
+month_period,sum_max_30_day_avg_all_customers
+2020-02,242986.264
+2020-03,231207.439
+2020-04,139871.862
+Task: For a bank database with customer transactions, calculate each customer's daily running balance (where deposits add to the balance and other transaction types subtract). For each customer and each day, compute the 30-day rolling average balance (only after having 30 days of data, and treating negative averages as zero). Then group these daily averages by month and find each customer's maximum 30-day average balance within each month. Sum these maximum values across all customers for each month. Consider the first month of each customer's transaction history as the baseline period and exclude it from the final results, presenting monthly totals of these summed maximum 30-day average balances.
+Another way to say it: Could you calculate each user’s average balance over the past 30 days, computed daily? Then, for each month (based on the 1st of each month), find the highest of these daily averages for each user. Add up these maximum values across all users for each month as the final result. Please use the first month as a baseline for previous balances and exclude it from the output.
+
+Please think step by step and answer only one complete SQL in snowflake dialect in ```sql``` format.
+SQL usage example: ```sql
+SELECT "COLUMN_NAME" FROM DATABASE.SCHEMA.TABLE WHERE ... ``` (Adjust "DATABASE", "SCHEMA", and "TABLE" to match actual names, ensure all column names are enclosed in double quotations)
+Here are some useful tips for answering:
+When performing a UNION operation on many tables, ensure that all table names are explicitly listed. Union first and then add condition and selection. e.g. SELECT "col1", "col2" FROM (TABLE1 UNION ALL TABLE2) WHERE ...; Don't write sqls as (SELECT col1, col2 FROM TABLE1 WHERE ...) UNION ALL (SELECT col1, col2 FROM TABLE2 WHERE ...); Don't use ['-- Include all', '-- Omit', '-- Continue', '-- Union all', '-- ...', '-- List all', '-- Replace this', '-- Each table', '-- Add other'] to omit any table. Table names here: The table structure information is ({database name: {schema name: [table name]}}): 
+{'BANK_SALES_TRADING': {'BANK_SALES_TRADING': ['CUSTOMER_TRANSACTIONS']}}
+
+When using ORDER BY xxx DESC, add NULLS LAST to exclude null records: ORDER BY xxx DESC NULLS LAST.
+When asked something without stating name or id, return both of them. e.g. Which products ...? The answer should include product_name and product_id.
+When asked percentage decrease, you should return a positive value. e.g. How many percentage points in 2021 decrease compared to ...? The answer should be a positive value indicating the decresed number. Try to use ABS().
+If asked two tables, you should reply with the last one instead of combining two tables. e.g. Identifying the top five states ... examine the state that ranks fourth overall and identify its top five counties. You should only answer top five counties.
+Use ST_DISTANCE to calculate distance between two geographic points for more accurate answer.
+If the task description does not specify the number of decimal places, retain all decimals to four places.
+
+[Self-refine]
+2025-07-01 04:52:23 - Thread-734 (execute) - INFO - [Try to run SQL in self-refine]
+```sql
+WITH Daily_Running_Balance AS (
+    SELECT 
+        "customer_id", 
+        "txn_date", 
+        SUM(
+            CASE 
+                WHEN "txn_type" = 'deposit' THEN "txn_amount"
+                ELSE -1 * "txn_amount" 
+            END
+        ) OVER (PARTITION BY "customer_id" ORDER BY TO_DATE("txn_date", 'YYYY-MM-DD') ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "daily_running_balance"
+    FROM 
+        "BANK_SALES_TRADING"."BANK_SALES_TRADING"."CUSTOMER_TRANSACTIONS"
+),
+Rolling_30_Day_Avg AS (
+    SELECT 
+        "customer_id", 
+        "txn_date", 
+        CASE 
+            WHEN AVG("daily_running_balance") OVER (
+                PARTITION BY "customer_id" 
+                ORDER BY TO_DATE("txn_date", 'YYYY-MM-DD') 
+                ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
+            ) < 0 THEN 0 
+            ELSE AVG("daily_running_balance") OVER (
+                PARTITION BY "customer_id" 
+                ORDER BY TO_DATE("txn_date", 'YYYY-MM-DD') 
+                ROWS BETWEEN 29 PRECEDING AND CURRENT ROW
+            )
+        END AS "30_day_rolling_avg_balance"
+    FROM 
+        Daily_Running_Balance
+),
+Monthly_Max_Per_Customer AS (
+    SELECT 
+        "customer_id", 
+        TO_CHAR(DATE_TRUNC('month', TO_DATE("txn_date", 'YYYY-MM-DD')), 'YYYY-MM') AS "month_period", 
+        MAX("30_day_rolling_avg_balance") AS "monthly_max_30_day_avg"
+    FROM 
+        Rolling_30_Day_Avg
+    GROUP BY 
+        "customer_id", 
+        TO_CHAR(DATE_TRUNC('month', TO_DATE("txn_date", 'YYYY-MM-DD')), 'YYYY-MM')
+),
+Customer_Baseline AS (
+    SELECT 
+        "customer_id", 
+        MIN(TO_CHAR(DATE_TRUNC('month', TO_DATE("txn_date", 'YYYY-MM-DD')), 'YYYY-MM')) AS "baseline_month"
+    FROM 
+        "BANK_SALES_TRADING"."BANK_SALES_TRADING"."CUSTOMER_TRANSACTIONS"
+    GROUP BY 
+        "customer_id"
+)
+SELECT 
+    m."month_period", 
+    SUM(m."monthly_max_30_day_avg") AS "sum_max_30_day_avg_all_customers"
+FROM 
+    Monthly_Max_Per_Customer m
+LEFT JOIN 
+    Customer_Baseline b
+ON 
+    m."customer_id" = b."customer_id"
+WHERE 
+    m."month_period" != b."baseline_month"
+GROUP BY 
+    m."month_period"
+ORDER BY 
+    m."month_period"
+```
+[Try to run SQL in self-refine]
+2025-07-01 04:52:23 - Thread-734 (execute) - INFO - Total iteration counts: 0

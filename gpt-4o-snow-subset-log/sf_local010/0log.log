@@ -1,0 +1,157 @@
+2025-07-01 04:47:56 - Thread-641 (execute) - INFO - [Exploration]
+```sql
+-- Description: Retrieve all distinct city names (in English) from the "AIRPORTS_DATA" table to understand how cities are represented.
+SELECT DISTINCT f."value"::VARIANT:"en"::STRING AS "city_en"
+FROM AIRLINES.AIRLINES.AIRPORTS_DATA, LATERAL FLATTEN(input => "city") f
+LIMIT 20;
+```
+
+```sql
+-- Description: Extract the latitude and longitude (coordinates) for each airport from "AIRPORTS_DATA". Coordinates can be used for distance calculation.
+SELECT "airport_code", "coordinates"
+FROM AIRLINES.AIRLINES.AIRPORTS_DATA
+LIMIT 20;
+```
+
+```sql
+-- Description: Retrieve flight data, focusing on departure airports (`departure_airport`) and arrival airports (`arrival_airport`), for analyzing possible city pairs.
+SELECT DISTINCT "departure_airport", "arrival_airport"
+FROM AIRLINES.AIRLINES.FLIGHTS
+LIMIT 20;
+```
+
+```sql
+-- Description: View the mapping between the `aircraft_code` from the "FLIGHTS" table and the `range` (in km) from the "AIRCRAFTS_DATA" table.
+SELECT DISTINCT f."aircraft_code", a."range"
+FROM AIRLINES.AIRLINES.FLIGHTS f
+INNER JOIN AIRLINES.AIRLINES.AIRCRAFTS_DATA a
+ON f."aircraft_code" = a."aircraft_code"
+LIMIT 20;
+```
+
+```sql
+-- Description: Extract all distinct airport-city mappings (in English) for analyzing flight routes between cities.
+SELECT DISTINCT t."airport_code", f.value::VARIANT:"en"::STRING AS "city_en"
+FROM AIRLINES.AIRLINES.AIRPORTS_DATA t, LATERAL FLATTEN(input => t."city") f
+LIMIT 20;
+```
+
+```sql
+-- Description: For flight routes, retrieve departure and arrival airport codes along with scheduled departure times to analyze route frequencies with timestamps.
+SELECT DISTINCT "departure_airport", "arrival_airport", "scheduled_departure"
+FROM AIRLINES.AIRLINES.FLIGHTS
+LIMIT 20;
+```
+
+```sql
+-- Description: View the mapping of each airport's `timezone` based on its airport code. This might be helpful for time-based analyses.
+SELECT DISTINCT "airport_code", "timezone"
+FROM AIRLINES.AIRLINES.AIRPORTS_DATA
+LIMIT 20;
+```
+
+```sql
+-- Description: Retrieve and verify the great-circle distances between coordinates of departure and arrival airports using the Haversine formula for unique flight routes.
+SELECT DISTINCT d."coordinates" AS "departure_coordinates", a."coordinates" AS "arrival_coordinates"
+FROM AIRLINES.AIRLINES.FLIGHTS f
+INNER JOIN AIRLINES.AIRLINES.AIRPORTS_DATA d
+ON f."departure_airport" = d."airport_code"
+INNER JOIN AIRLINES.AIRLINES.AIRPORTS_DATA a
+ON f."arrival_airport" = a."airport_code"
+LIMIT 20;
+```
+
+```sql
+-- Description: Check the normalized city name pairs (departure and arrival) structured lexicographically ("city1", "city2") for uniqueness in routes.
+SELECT DISTINCT LEAST(d.value::VARIANT:"en"::STRING, a.value::VARIANT:"en"::STRING) AS "city1",
+       GREATEST(d.value::VARIANT:"en"::STRING, a.value::VARIANT:"en"::STRING) AS "city2"
+FROM AIRLINES.AIRLINES.FLIGHTS f
+INNER JOIN LATERAL FLATTEN(input => (SELECT "city" FROM AIRLINES.AIRLINES.AIRPORTS_DATA WHERE "airport_code" = f."departure_airport")) d
+INNER JOIN LATERAL FLATTEN(input => (SELECT "city" FROM AIRLINES.AIRLINES.AIRPORTS_DATA WHERE "airport_code" = f."arrival_airport")) a
+LIMIT 20;
+```
+
+```sql
+-- Description: For unique city pairs, calculate the average route distance range in buckets (0, 1000, 2000, ..., 6000+ km).
+SELECT "distance_range", COUNT(*) AS "unique_city_pairs_count"
+FROM (
+  SELECT CASE
+    WHEN AVG(haversine_distance) <= 1000 THEN '0-1000'
+    WHEN AVG(haversine_distance) <= 2000 THEN '1000-2000'
+    WHEN AVG(haversine_distance) <= 3000 THEN '2000-3000'
+    WHEN AVG(haversine_distance) <= 4000 THEN '3000-4000'
+    WHEN AVG(haversine_distance) <= 5000 THEN '4000-5000'
+    WHEN AVG(haversine_distance) <= 6000 THEN '5000-6000'
+    ELSE '6000+'
+  END AS "distance_range"
+  FROM (
+    -- Subquery: Use Haversine formula to calculate the great-circle distances for all unique city pairs.
+    SELECT DISTINCT LEAST(d.value::VARIANT:"en"::STRING, a.value::VARIANT:"en"::STRING) AS "city1",
+           GREATEST(d.value::VARIANT:"en"::STRING, a.value::VARIANT:"en"::STRING) AS "city2",
+           2 * 6371 * ASIN(SQRT(
+             POWER(SIN((a_lon - d_lon) / 2), 2) + COS(d_lat) * COS(a_lat) *
+             POWER(SIN((a_lat - d_lat) / 2), 2)
+           )) AS "haversine_distance"
+    FROM AIRLINES.AIRLINES.FLIGHTS f
+    INNER JOIN AIRLINES.AIRLINES.AIRPORTS_DATA d
+    ON f."departure_airport" = d."airport_code"
+    INNER JOIN AIRLINES.AIRLINES.AIRPORTS_DATA a
+    ON f."arrival_airport" = a."airport_code"
+  ) t
+GROUP BY "distance_range"
+)
+GROUP BY "distance_range"
+ORDER BY "unique_city_pairs_count" ASC
+LIMIT 1;
+```
+[Exploration]
+2025-07-01 04:47:56 - Thread-641 (execute) - INFO - [Try to execute]
+-- Description: Retrieve all distinct city names (in English) from the "AIRPORTS_DATA" table to understand how cities are represented.
+SELECT DISTINCT f."value"::VARIANT:"en"::STRING AS "city_en"
+FROM AIRLINES.AIRLINES.AIRPORTS_DATA, LATERAL FLATTEN(input => "city") f
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:47:57 - Thread-641 (execute) - INFO - [Error occurred]
+{'status': 'error', 'error_msg': '##ERROR##000904 (42000): SQL compilation error: error line 1 at position 16\ninvalid identifier \'F."value"\''}
+[Error occurred]
+2025-07-01 04:48:12 - Thread-641 (execute) - INFO - [Corrected SQL]
+```sql
+-- Description: The error in the previous query stems from an incorrect use of `LATERAL FLATTEN`. The `city` column is not an array but a JSON object with keys like `"en"` and `"ru"`. To extract the English name of the city, there's no need to use `LATERAL FLATTEN`. Instead, we can directly access the `"en"` value by treating the `city` column as a JSON object (`::VARIANT`) and extracting the `"en"` key using `["en"]`. This approach avoids the invalid alias issue and simplifies the query by skipping unnecessary operations.
+
+SELECT DISTINCT "city"::VARIANT["en"]::STRING AS "city_en"
+FROM AIRLINES.AIRLINES.AIRPORTS_DATA
+LIMIT 20;
+```
+[Corrected SQL]
+2025-07-01 04:48:13 - Thread-641 (execute) - INFO - [Results for corrected sql]
+{'status': 'error', 'error_msg': '##ERROR##000904 (42000): SQL compilation error: error line 1 at position 32\ninvalid identifier \'"en"\''}
+[Results for corrected sql]
+2025-07-01 04:48:30 - Thread-641 (execute) - INFO - [Corrected SQL]
+```sql
+-- Description: The initial query fails because the `LATERAL FLATTEN` and JSON parsing syntax is incorrectly applied. Based on the structure of the `city` column in the "AIRPORTS_DATA" table, which is a JSON object containing keys like "en" (English city name) and "ru" (Russian city name), we can directly parse and extract the value associated with the "en" key. Flattening is unnecessary since the `city` column is not an array; it is a simple JSON object. The correct method in Snowflake to access a JSON key is `::VARIANT["key_name"]`. Here, we extract distinct English city names without the mistakes in the previous query.
+
+SELECT DISTINCT "city"::VARIANT["en"]::STRING AS "city_en"
+FROM AIRLINES.AIRLINES.AIRPORTS_DATA
+LIMIT 20;
+```
+[Corrected SQL]
+2025-07-01 04:48:30 - Thread-641 (execute) - INFO - [Results for corrected sql]
+{'status': 'error', 'error_msg': '##ERROR##000904 (42000): SQL compilation error: error line 1 at position 32\ninvalid identifier \'"en"\''}
+[Results for corrected sql]
+2025-07-01 04:48:45 - Thread-641 (execute) - INFO - [Corrected SQL]
+```sql
+-- Description: The initial query generates an error due to improper use of `LATERAL FLATTEN` and incorrect JSON key extraction syntax. 
+-- Upon inspecting the schema, the `city` column in the "AIRPORTS_DATA" table is a JSON object (e.g., {"en": ..., "ru": ...}), 
+-- not an array. This means `LATERAL FLATTEN` is unnecessary because no decomposition is required. 
+-- To extract the "en" key (English city name) from the JSON object, the correct syntax in Snowflake is `::VARIANT["key_name"]`. 
+-- The use of `LATERAL FLATTEN` and invalid key reference `::VARIANT:"en"` should be replaced with direct JSON parsing using `::VARIANT["en"]`. 
+-- Below is the corrected query to retrieve distinct English city names from the JSON column:
+
+SELECT DISTINCT "city"::VARIANT["en"]::STRING AS "city_en"
+FROM AIRLINES.AIRLINES.AIRPORTS_DATA
+LIMIT 20;
+```
+[Corrected SQL]
+2025-07-01 04:48:45 - Thread-641 (execute) - INFO - [Results for corrected sql]
+{'status': 'error', 'error_msg': '##ERROR##000904 (42000): SQL compilation error: error line 1 at position 32\ninvalid identifier \'"en"\''}
+[Results for corrected sql]

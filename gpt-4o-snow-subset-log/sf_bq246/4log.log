@@ -1,0 +1,1542 @@
+2025-07-01 04:06:12 - Thread-104 (execute) - INFO - [Exploration]
+Here is a sequence of well-annotated Snowflake SQL queries attempting to solve the task step-by-step using the provided database schema.
+
+---
+
+### Step 1: Get all U.S. patents and their application dates (from `APPLICATION`) and patent dates (from `PATENT`).
+```sql
+-- Description: Retrieve U.S. patents with their application and patent dates for initial exploration. 
+-- The focus is on identifying the patents for further analysis.
+SELECT a."patent_id", a."date" AS "application_date", p."date" AS "patent_date"
+FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+JOIN PATENTSVIEW.PATENTSVIEW.PATENT p
+ON a."patent_id" = p."id"
+WHERE a."country" = 'US'
+LIMIT 20;
+```
+
+---
+
+### Step 2: Identify backward citations within 1 year before the application date by joining `APPLICATION` and `USPATENTCITATION`.
+```sql
+-- Description: Retrieve patents with their application dates and backward citations made within 1 year 
+-- before the application date (category = 'cited by applicant'). 
+SELECT a."patent_id", a."date" AS "application_date", u."citation_id", u."date" AS "citation_date"
+FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+ON a."patent_id" = u."patent_id"
+WHERE a."country" = 'US'
+  AND u."category" = 'cited by applicant'
+  AND u."date" BETWEEN DATEADD(YEAR, -1, a."date") AND a."date"
+LIMIT 20;
+```
+
+---
+
+### Step 3: Count backward citations within 1 year before the application date for each patent and order descending by the count.
+```sql
+-- Description: Count the number of backward citations within 1 year before the application date
+-- for each U.S. patent and sort them in descending order by number of backward citations. 
+SELECT a."patent_id", COUNT(u."citation_id") AS "backward_citation_count"
+FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+ON a."patent_id" = u."patent_id"
+WHERE a."country" = 'US'
+  AND u."category" = 'cited by applicant'
+  AND u."date" BETWEEN DATEADD(YEAR, -1, a."date") AND a."date"
+GROUP BY a."patent_id"
+ORDER BY "backward_citation_count" DESC
+LIMIT 20;
+```
+
+---
+
+### Step 4: Filter only patents with forward citations within 3 years after the application date using `FOREIGNCITATION`.
+```sql
+-- Description: Retrieve forward citations (from other countries) within 3 years after the application date.
+SELECT a."patent_id", f."number" AS "foreign_citation_number", f."date" AS "citation_date", a."date" AS "application_date"
+FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+JOIN PATENTSVIEW.PATENTSVIEW.FOREIGNCITATION f
+ON a."patent_id" = f."patent_id"
+WHERE f."date" BETWEEN a."date" AND DATEADD(YEAR, 3, a."date")
+LIMIT 20;
+```
+
+---
+
+### Step 5: Count forward citations (U.S. specific) within 3 years after application date using `USPATENTCITATION`.
+```sql
+-- Description: Retrieve and count the forward citations (U.S. patents citing the current patent) 
+-- within 3 years after the application date. 
+SELECT a."patent_id", COUNT(u."patent_id") AS "forward_citation_count"
+FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+ON a."patent_id" = u."citation_id"
+WHERE a."country" = 'US'
+  AND u."category" = 'cited by applicant'
+  AND u."date" BETWEEN a."date" AND DATEADD(YEAR, 3, a."date")
+GROUP BY a."patent_id"
+ORDER BY "forward_citation_count" DESC
+LIMIT 20;
+```
+
+---
+
+### Step 6: Incorporate CPC classification to focus on specific CPC categories and refine results further.
+```sql
+-- Description: Filter patents to include only those in selected CPC categories (e.g., category `A` for agricultural inventions).
+SELECT c."patent_id", c."section_id", c."subsection_id", a."date" AS "application_date"
+FROM PATENTSVIEW.PATENTSVIEW.CPC_CURRENT c
+JOIN PATENTSVIEW.PATENTSVIEW.APPLICATION a
+ON c."patent_id" = a."patent_id"
+WHERE c."section_id" = 'A'  -- Example CPC category focus
+LIMIT 20;
+```
+
+---
+
+### Step 7: Combine backward citation count, forward citation count, and CPC classification for a holistic view.
+```sql
+-- Description: Combine backward citation counts, forward citation counts (U.S. patents), and CPC category filtering.
+WITH BackwardCitations AS (
+  SELECT a."patent_id", COUNT(u."citation_id") AS "backward_citation_count"
+  FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+  JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+  ON a."patent_id" = u."patent_id"
+  WHERE a."country" = 'US'
+    AND u."category" = 'cited by applicant'
+    AND u."date" BETWEEN DATEADD(YEAR, -1, a."date") AND a."date"
+  GROUP BY a."patent_id"
+),
+ForwardCitations AS (
+  SELECT a."patent_id", COUNT(u."patent_id") AS "forward_citation_count"
+  FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+  JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+  ON a."patent_id" = u."citation_id"
+  WHERE a."country" = 'US'
+    AND u."category" = 'cited by applicant'
+    AND u."date" BETWEEN a."date" AND DATEADD(YEAR, 3, a."date")
+  GROUP BY a."patent_id"
+)
+SELECT b."patent_id", b."backward_citation_count", f."forward_citation_count"
+FROM BackwardCitations b
+JOIN ForwardCitations f ON b."patent_id" = f."patent_id"
+LIMIT 20;
+```
+
+---
+
+### Step 8: Identify patents with backward citations in the 1 year before and forward citations in the 1 year after the application date.
+```sql
+-- Description: Filter patents with both backward citations within 1 year before and forward citations 
+-- within 1 year after the application date.
+WITH BackwardAndForwardCitations AS (
+  SELECT a."patent_id", 
+         COUNT(DISTINCT u1."citation_id") AS "backward_citation_count",
+         COUNT(DISTINCT u2."patent_id") AS "forward_citation_count"
+  FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+  LEFT JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u1
+    ON a."patent_id" = u1."patent_id"
+    AND u1."date" BETWEEN DATEADD(YEAR, -1, a."date") AND a."date"
+    AND u1."category" = 'cited by applicant'
+  LEFT JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u2
+    ON a."patent_id" = u2."citation_id"
+    AND u2."date" BETWEEN a."date" AND DATEADD(YEAR, 1, a."date")
+    AND u2."category" = 'cited by applicant'
+  WHERE a."country" = 'US'
+  GROUP BY a."patent_id"
+)
+SELECT "patent_id", "backward_citation_count", "forward_citation_count"
+FROM BackwardAndForwardCitations
+WHERE "backward_citation_count" > 0 AND "forward_citation_count" > 0
+ORDER BY "backward_citation_count" DESC
+LIMIT 20;
+```
+
+---
+
+### Step 9: Focus on patents within a specific CPC category, sorted by backward citations.
+```sql
+-- Description: Combine CPC filtering and backward citations count to narrow down results and 
+-- focus on patents meeting the backward citation requirements in a specific category.
+WITH CPCFiltered AS (
+  SELECT c."patent_id"
+  FROM PATENTSVIEW.PATENTSVIEW.CPC_CURRENT c
+  WHERE c."section_id" = 'C' -- Example filter
+),
+BackwardCitations AS (
+  SELECT a."patent_id", COUNT(u."citation_id") AS "backward_citation_count"
+  FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+  JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+    ON a."patent_id" = u."patent_id"
+  WHERE a."country" = 'US'
+    AND u."category" = 'cited by applicant'
+    AND u."date" BETWEEN DATEADD(YEAR, -1, a."date") AND a."date"
+  GROUP BY a."patent_id"
+)
+SELECT b."patent_id", b."backward_citation_count"
+FROM CPCFiltered c
+JOIN BackwardCitations b ON c."patent_id" = b."patent_id"
+ORDER BY b."backward_citation_count" DESC
+LIMIT 20;
+```
+
+---
+
+### Step 10: Final output of the patent with the most backward citations, and its forward citations within 1 year.
+```sql
+-- Description: Get the patent with the most backward citations and its forward citations 
+-- within 1 year after the application date.
+WITH MostBackwardCited AS (
+  SELECT a."patent_id", COUNT(u."citation_id") AS "backward_citation_count"
+  FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+  JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+    ON a."patent_id" = u."patent_id"
+  WHERE a."country" = 'US'
+    AND u."category" = 'cited by applicant'
+    AND u."date" BETWEEN DATEADD(YEAR, -1, a."date") AND a."date"
+  GROUP BY a."patent_id"
+  ORDER BY "backward_citation_count" DESC
+  LIMIT 1
+),
+ForwardCitations AS (
+  SELECT a."patent_id", COUNT(u."patent_id") AS "forward_citation_count"
+  FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+  JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+    ON a."patent_id" = u."citation_id"
+  WHERE u."date" BETWEEN a."date" AND DATEADD(YEAR, 1, a."date")
+  GROUP BY a."patent_id"
+)
+SELECT m."patent_id", m."backward_citation_count", f."forward_citation_count"
+FROM MostBackwardCited m
+LEFT JOIN ForwardCitations f ON m."patent_id" = f."patent_id"
+LIMIT 1;
+``` 
+
+
+[Exploration]
+2025-07-01 04:06:12 - Thread-104 (execute) - INFO - [Try to execute]
+-- Description: Retrieve U.S. patents with their application and patent dates for initial exploration. 
+-- The focus is on identifying the patents for further analysis.
+SELECT a."patent_id", a."date" AS "application_date", p."date" AS "patent_date"
+FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+JOIN PATENTSVIEW.PATENTSVIEW.PATENT p
+ON a."patent_id" = p."id"
+WHERE a."country" = 'US'
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:06:33 - Thread-104 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Retrieve U.S. patents with their application and patent dates for initial exploration. 
+-- The focus is on identifying the patents for further analysis.
+SELECT a."patent_id", a."date" AS "application_date", p."date" AS "patent_date"
+FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+JOIN PATENTSVIEW.PATENTSVIEW.PATENT p
+ON a."patent_id" = p."id"
+WHERE a."country" = 'US'
+LIMIT 20;
+Results:
+patent_id,application_date,patent_date
+D398007,1993-11-15,1998-09-08
+D395804,1994-11-29,1998-07-07
+D387517,1995-03-21,1997-12-09
+D385253,1995-03-21,1997-10-21
+D390401,1995-03-30,1998-02-10
+D384729,1995-08-30,1997-10-07
+D385343,1995-11-06,1997-10-21
+D386317,1995-12-21,1997-11-18
+D385248,1995-12-27,1997-10-21
+D392146,1996-01-11,1998-03-17
+D392493,1996-03-13,1998-03-24
+D394745,1996-03-14,1998-06-02
+D388167,1996-03-26,1997-12-23
+
+[Successfully executed]
+2025-07-01 04:06:33 - Thread-104 (execute) - INFO - [Try to execute]
+-- Description: Retrieve patents with their application dates and backward citations made within 1 year 
+-- before the application date (category = 'cited by applicant'). 
+SELECT a."patent_id", a."date" AS "application_date", u."citation_id", u."date" AS "citation_date"
+FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+ON a."patent_id" = u."patent_id"
+WHERE a."country" = 'US'
+  AND u."category" = 'cited by applicant'
+  AND u."date" BETWEEN DATEADD(YEAR, -1, a."date") AND a."date"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:07:09 - Thread-104 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Retrieve patents with their application dates and backward citations made within 1 year 
+-- before the application date (category = 'cited by applicant'). 
+SELECT a."patent_id", a."date" AS "application_date", u."citation_id", u."date" AS "citation_date"
+FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+ON a."patent_id" = u."patent_id"
+WHERE a."country" = 'US'
+  AND u."category" = 'cited by applicant'
+  AND u."date" BETWEEN DATEADD(YEAR, -1, a."date") AND a."date"
+LIMIT 20;
+Results:
+patent_id,application_date,citation_id,citation_date
+D824911,2016-01-08,D747321,2016-01-01
+D841970,2016-07-29,D738087,2015-09-01
+D841970,2016-07-29,D740538,2015-10-01
+D841970,2016-07-29,D747089,2016-01-01
+D841970,2016-07-29,D756098,2016-05-01
+D841970,2016-07-29,D752332,2016-03-01
+D841970,2016-07-29,D744223,2015-12-01
+D841970,2016-07-29,D745259,2015-12-01
+D841970,2016-07-29,D746035,2015-12-01
+D841970,2016-07-29,D759364,2016-06-01
+D841970,2016-07-29,D738090,2015-09-01
+
+[Successfully executed]
+2025-07-01 04:07:09 - Thread-104 (execute) - INFO - [Try to execute]
+-- Description: Count the number of backward citations within 1 year before the application date
+-- for each U.S. patent and sort them in descending order by number of backward citations. 
+SELECT a."patent_id", COUNT(u."citation_id") AS "backward_citation_count"
+FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+ON a."patent_id" = u."patent_id"
+WHERE a."country" = 'US'
+  AND u."category" = 'cited by applicant'
+  AND u."date" BETWEEN DATEADD(YEAR, -1, a."date") AND a."date"
+GROUP BY a."patent_id"
+ORDER BY "backward_citation_count" DESC
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:09:04 - Thread-104 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Count the number of backward citations within 1 year before the application date
+-- for each U.S. patent and sort them in descending order by number of backward citations. 
+SELECT a."patent_id", COUNT(u."citation_id") AS "backward_citation_count"
+FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+ON a."patent_id" = u."patent_id"
+WHERE a."country" = 'US'
+  AND u."category" = 'cited by applicant'
+  AND u."date" BETWEEN DATEADD(YEAR, -1, a."date") AND a."date"
+GROUP BY a."patent_id"
+ORDER BY "backward_citation_count" DESC
+LIMIT 20;
+Results:
+patent_id,backward_citation_count
+11103241,301
+11090045,300
+11051807,292
+10779825,272
+10945729,270
+10716565,265
+11000274,265
+10695058,256
+10888322,252
+10835249,248
+10463384,239
+11026680,239
+10765425,236
+9756549,235
+10881399,233
+10433844,232
+10575868,230
+9980729,230
+10537325,229
+10335148,222
+
+[Successfully executed]
+2025-07-01 04:09:04 - Thread-104 (execute) - INFO - [Try to execute]
+-- Description: Retrieve forward citations (from other countries) within 3 years after the application date.
+SELECT a."patent_id", f."number" AS "foreign_citation_number", f."date" AS "citation_date", a."date" AS "application_date"
+FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+JOIN PATENTSVIEW.PATENTSVIEW.FOREIGNCITATION f
+ON a."patent_id" = f."patent_id"
+WHERE f."date" BETWEEN a."date" AND DATEADD(YEAR, 3, a."date")
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:09:34 - Thread-104 (execute) - INFO - [Error occurred]
+{'status': 'error', 'error_msg': "##ERROR##100035 (22007): Timestamp '0000-00-01' is not recognized"}
+[Error occurred]
+2025-07-01 04:10:15 - Thread-104 (execute) - INFO - [Corrected SQL]
+The error suggests that the `f."date"` column contains invalid timestamps such as '0000-00-01', which cannot be recognized by the SQL engine. To resolve this, it is necessary to ensure that we only include rows with valid date values in the query. A practical solution is to filter the `f."date"` column for values within a reasonable and valid range, such as '1900-01-01' to '2100-01-01'. This approach avoids errors while maintaining the integrity of the data being queried.
+
+Here's the corrected SQL query:
+
+```sql
+-- Description: This query retrieves forward citations (from other countries) within 3 years after the application date.
+-- It resolves the error caused by invalid timestamp values in the "f.date" column ('0000-00-01') by filtering out dates outside a valid range ('1900-01-01' to '2100-01-01').
+SELECT a."patent_id", f."number" AS "foreign_citation_number", f."date" AS "citation_date", a."date" AS "application_date"
+FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+JOIN PATENTSVIEW.PATENTSVIEW.FOREIGNCITATION f
+ON a."patent_id" = f."patent_id"
+WHERE f."date" BETWEEN a."date" AND DATEADD(YEAR, 3, a."date")
+  AND f."date" BETWEEN '1900-01-01' AND '2100-01-01'  -- Exclude invalid date values.
+LIMIT 20;
+```
+[Corrected SQL]
+2025-07-01 04:11:50 - Thread-104 (execute) - INFO - [Results for corrected sql]
+{'status': 'error', 'error_msg': "##ERROR##100035 (22007): Timestamp '1901-00-01' is not recognized"}
+[Results for corrected sql]
+2025-07-01 04:12:38 - Thread-104 (execute) - INFO - [Corrected SQL]
+The error occurs because the `f."date"` column contains invalid timestamps like `'1901-00-01'`, which are not properly structured for date comparisons. These values lead to SQL errors when performing operations like `BETWEEN` or `DATEADD`. To address this issue, we need to ensure that only rows with valid dates are processed. Instead of relying blindly on all rows in `f."date"`, we can first validate the column by ensuring it falls within a credible range using `TRY_CAST` (if supported) or filtering for a predefined valid date range (e.g., between `'1900-01-01'` and `'2100-01-01'`).
+
+Here, we will explicitly validate that `f."date"` has values that are successfully castable to `DATE` using `TRY_CAST`. This ensures invalid rows are filtered out, and the rest of the logic functions as expected. 
+
+Here’s the SQL query:
+
+```sql
+-- Description: The query retrieves forward citations (from other countries) within 3 years after the application date.
+-- It handles invalid or malformed timestamps (e.g., '1901-00-01') in the "f.date" column by using "TRY_CAST" to ensure
+-- only valid dates are included in the filtering logic. This avoids runtime errors and ensures accurate results.
+SELECT a."patent_id", f."number" AS "foreign_citation_number", f."date" AS "citation_date", a."date" AS "application_date"
+FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+JOIN PATENTSVIEW.PATENTSVIEW.FOREIGNCITATION f
+ON a."patent_id" = f."patent_id"
+WHERE TRY_CAST(f."date" AS DATE) IS NOT NULL  -- Ensure "f.date" contains valid timestamps
+  AND TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Validate "a.date" as an additional step
+  AND f."date" BETWEEN a."date" AND DATEADD(YEAR, 3, a."date")
+LIMIT 20;
+``` 
+
+### Thinking Process:
+1. **Problem Identification**: The error arises from invalid dates like `'1901-00-01'` in the `f."date"` column, which are unrecognized timestamps.
+2. **Solution Strategy**: Use `TRY_CAST` to validate `f."date"` so that rows with invalid dates are excluded before performing the date comparisons.
+3. **Modifications Made**: Applied `TRY_CAST(f."date" AS DATE)` to filter invalid dates. Similarly, validated `a."date"` to ensure the `APPLICATION` table doesn’t introduce errors.
+4. **SQL Logic**: The query now uses valid timestamps only, ensuring proper date filtering for forward citations within 3 years of the application date.
+[Corrected SQL]
+2025-07-01 04:13:27 - Thread-104 (execute) - INFO - [Results for corrected sql]
+patent_id,foreign_citation_number,citation_date,application_date
+11014349,102018117699,2020-01-01,2019-07-22
+11063265,WO 2019/182874,2019-09-01,2019-08-08
+10878745,10-2020-0071206,2020-06-01,2020-01-17
+10878745,10-2020-0072635,2020-06-01,2020-01-17
+11117731,2019226199,2019-11-01,2019-07-30
+11099826,WQ-2020041569,2020-02-01,2019-10-14
+11086795,10-2020-0126491,2020-11-01,2019-10-23
+11121985,2021040934,2021-03-01,2019-10-24
+11007209,2020097049,2020-05-01,2019-11-18
+
+[Results for corrected sql]
+2025-07-01 04:15:32 - Thread-104 (execute) - INFO - [Corrected other sqls]
+### Corrected SQL Queries:
+
+---
+
+```sql
+-- Description: Retrieve and count the forward citations (U.S. patents citing the current patent)
+-- within 3 years after the application date. Handles invalid or malformed timestamps by using "TRY_CAST"
+-- to ensure valid dates in "a.date" and "u.date".
+SELECT a."patent_id", COUNT(u."patent_id") AS "forward_citation_count"
+FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+ON a."patent_id" = u."citation_id"
+WHERE a."country" = 'US'
+  AND u."category" = 'cited by applicant'
+  AND TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Ensure "a.date" contains valid timestamps
+  AND TRY_CAST(u."date" AS DATE) IS NOT NULL  -- Ensure "u.date" contains valid timestamps
+  AND u."date" BETWEEN a."date" AND DATEADD(YEAR, 3, a."date")
+GROUP BY a."patent_id"
+ORDER BY "forward_citation_count" DESC
+LIMIT 20;
+```
+
+---
+
+```sql
+-- Description: Filter patents to include only those in selected CPC categories (e.g., category `A` for agricultural inventions).
+-- Handles invalid or malformed timestamps in "a.date" using "TRY_CAST" to process only valid dates.
+SELECT c."patent_id", c."section_id", c."subsection_id", a."date" AS "application_date"
+FROM PATENTSVIEW.PATENTSVIEW.CPC_CURRENT c
+JOIN PATENTSVIEW.PATENTSVIEW.APPLICATION a
+ON c."patent_id" = a."patent_id"
+WHERE c."section_id" = 'A'  -- Example CPC category focus
+  AND TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Ensure "a.date" contains valid timestamps
+LIMIT 20;
+```
+
+---
+
+```sql
+-- Description: Combine backward citation counts, forward citation counts (U.S. patents), and CPC category filtering.
+-- Ensures valid timestamps in "a.date" and "u.date" using "TRY_CAST" to process rows with valid dates only.
+WITH BackwardCitations AS (
+  SELECT a."patent_id", COUNT(u."citation_id") AS "backward_citation_count"
+  FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+  JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+  ON a."patent_id" = u."patent_id"
+  WHERE a."country" = 'US'
+    AND u."category" = 'cited by applicant'
+    AND TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Ensure "a.date" contains valid timestamps
+    AND TRY_CAST(u."date" AS DATE) IS NOT NULL  -- Ensure "u.date" contains valid timestamps
+    AND u."date" BETWEEN DATEADD(YEAR, -1, a."date") AND a."date"
+  GROUP BY a."patent_id"
+),
+ForwardCitations AS (
+  SELECT a."patent_id", COUNT(u."patent_id") AS "forward_citation_count"
+  FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+  JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+  ON a."patent_id" = u."citation_id"
+  WHERE a."country" = 'US'
+    AND u."category" = 'cited by applicant'
+    AND TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Ensure "a.date" contains valid timestamps
+    AND TRY_CAST(u."date" AS DATE) IS NOT NULL  -- Ensure "u.date" contains valid timestamps
+    AND u."date" BETWEEN a."date" AND DATEADD(YEAR, 3, a."date")
+  GROUP BY a."patent_id"
+)
+SELECT b."patent_id", b."backward_citation_count", f."forward_citation_count"
+FROM BackwardCitations b
+JOIN ForwardCitations f ON b."patent_id" = f."patent_id"
+LIMIT 20;
+```
+
+---
+
+```sql
+-- Description: Filter patents with both backward citations within 1 year before and forward citations
+-- within 1 year after the application date. Ensures "a.date", "u1.date", and "u2.date" are valid
+-- timestamps using "TRY_CAST".
+WITH BackwardAndForwardCitations AS (
+  SELECT a."patent_id", 
+         COUNT(DISTINCT u1."citation_id") AS "backward_citation_count",
+         COUNT(DISTINCT u2."patent_id") AS "forward_citation_count"
+  FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+  LEFT JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u1
+    ON a."patent_id" = u1."patent_id"
+    AND TRY_CAST(u1."date" AS DATE) IS NOT NULL  -- Validate "u1.date"
+    AND u1."date" BETWEEN DATEADD(YEAR, -1, a."date") AND a."date"
+    AND u1."category" = 'cited by applicant'
+  LEFT JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u2
+    ON a."patent_id" = u2."citation_id"
+    AND TRY_CAST(u2."date" AS DATE) IS NOT NULL  -- Validate "u2.date"
+    AND u2."date" BETWEEN a."date" AND DATEADD(YEAR, 1, a."date")
+    AND u2."category" = 'cited by applicant'
+  WHERE a."country" = 'US'
+    AND TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Validate "a.date"
+  GROUP BY a."patent_id"
+)
+SELECT "patent_id", "backward_citation_count", "forward_citation_count"
+FROM BackwardAndForwardCitations
+WHERE "backward_citation_count" > 0 AND "forward_citation_count" > 0
+ORDER BY "backward_citation_count" DESC
+LIMIT 20;
+```
+
+---
+
+```sql
+-- Description: Combine CPC filtering and backward citations count to narrow down results and
+-- focus on patents meeting the backward citation requirements in a specific category.
+-- Ensures valid timestamps in "a.date" and "u.date" using "TRY_CAST".
+WITH CPCFiltered AS (
+  SELECT c."patent_id"
+  FROM PATENTSVIEW.PATENTSVIEW.CPC_CURRENT c
+  WHERE c."section_id" = 'C'  -- Example CPC category filter
+),
+BackwardCitations AS (
+  SELECT a."patent_id", COUNT(u."citation_id") AS "backward_citation_count"
+  FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+  JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+    ON a."patent_id" = u."patent_id"
+  WHERE a."country" = 'US'
+    AND u."category" = 'cited by applicant'
+    AND TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Ensure "a.date" contains valid timestamps
+    AND TRY_CAST(u."date" AS DATE) IS NOT NULL  -- Ensure "u.date" contains valid timestamps
+    AND u."date" BETWEEN DATEADD(YEAR, -1, a."date") AND a."date"
+  GROUP BY a."patent_id"
+)
+SELECT b."patent_id", b."backward_citation_count"
+FROM CPCFiltered c
+JOIN BackwardCitations b ON c."patent_id" = b."patent_id"
+ORDER BY b."backward_citation_count" DESC
+LIMIT 20;
+```
+
+---
+
+```sql
+-- Description: Get the patent with the most backward citations and its forward citations
+-- within 1 year after the application date. Filters out invalid timestamps using "TRY_CAST".
+WITH MostBackwardCited AS (
+  SELECT a."patent_id", COUNT(u."citation_id") AS "backward_citation_count"
+  FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+  JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+    ON a."patent_id" = u."patent_id"
+  WHERE a."country" = 'US'
+    AND u."category" = 'cited by applicant'
+    AND TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Validate "a.date"
+    AND TRY_CAST(u."date" AS DATE) IS NOT NULL  -- Validate "u.date"
+    AND u."date" BETWEEN DATEADD(YEAR, -1, a."date") AND a."date"
+  GROUP BY a."patent_id"
+  ORDER BY "backward_citation_count" DESC
+  LIMIT 1
+),
+ForwardCitations AS (
+  SELECT a."patent_id", COUNT(u."patent_id") AS "forward_citation_count"
+  FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+  JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+    ON a."patent_id" = u."citation_id"
+  WHERE TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Validate "a.date"
+    AND TRY_CAST(u."date" AS DATE) IS NOT NULL  -- Validate "u.date"
+    AND u."date" BETWEEN a."date" AND DATEADD(YEAR, 1, a."date")
+  GROUP BY a."patent_id"
+)
+SELECT m."patent_id", m."backward_citation_count", f."forward_citation_count"
+FROM MostBackwardCited m
+LEFT JOIN ForwardCitations f ON m."patent_id" = f."patent_id"
+LIMIT 1;
+```
+[Corrected other sqls]
+2025-07-01 04:15:32 - Thread-104 (execute) - INFO - [Successfully corrected]
+Successfully executed. SQL:
+-- Description: Retrieve forward citations (from other countries) within 3 years after the application date.
+SELECT a."patent_id", f."number" AS "foreign_citation_number", f."date" AS "citation_date", a."date" AS "application_date"
+FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+JOIN PATENTSVIEW.PATENTSVIEW.FOREIGNCITATION f
+ON a."patent_id" = f."patent_id"
+WHERE f."date" BETWEEN a."date" AND DATEADD(YEAR, 3, a."date")
+LIMIT 20;
+Results:
+patent_id,foreign_citation_number,citation_date,application_date
+11014349,102018117699,2020-01-01,2019-07-22
+11063265,WO 2019/182874,2019-09-01,2019-08-08
+10878745,10-2020-0071206,2020-06-01,2020-01-17
+10878745,10-2020-0072635,2020-06-01,2020-01-17
+11117731,2019226199,2019-11-01,2019-07-30
+11099826,WQ-2020041569,2020-02-01,2019-10-14
+11086795,10-2020-0126491,2020-11-01,2019-10-23
+11121985,2021040934,2021-03-01,2019-10-24
+11007209,2020097049,2020-05-01,2019-11-18
+
+[Successfully corrected]
+2025-07-01 04:15:32 - Thread-104 (execute) - INFO - [Try to execute]
+-- Description: Retrieve and count the forward citations (U.S. patents citing the current patent)
+-- within 3 years after the application date. Handles invalid or malformed timestamps by using "TRY_CAST"
+-- to ensure valid dates in "a.date" and "u.date".
+SELECT a."patent_id", COUNT(u."patent_id") AS "forward_citation_count"
+FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+ON a."patent_id" = u."citation_id"
+WHERE a."country" = 'US'
+  AND u."category" = 'cited by applicant'
+  AND TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Ensure "a.date" contains valid timestamps
+  AND TRY_CAST(u."date" AS DATE) IS NOT NULL  -- Ensure "u.date" contains valid timestamps
+  AND u."date" BETWEEN a."date" AND DATEADD(YEAR, 3, a."date")
+GROUP BY a."patent_id"
+ORDER BY "forward_citation_count" DESC
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:16:00 - Thread-104 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Retrieve and count the forward citations (U.S. patents citing the current patent)
+-- within 3 years after the application date. Handles invalid or malformed timestamps by using "TRY_CAST"
+-- to ensure valid dates in "a.date" and "u.date".
+SELECT a."patent_id", COUNT(u."patent_id") AS "forward_citation_count"
+FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+ON a."patent_id" = u."citation_id"
+WHERE a."country" = 'US'
+  AND u."category" = 'cited by applicant'
+  AND TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Ensure "a.date" contains valid timestamps
+  AND TRY_CAST(u."date" AS DATE) IS NOT NULL  -- Ensure "u.date" contains valid timestamps
+  AND u."date" BETWEEN a."date" AND DATEADD(YEAR, 3, a."date")
+GROUP BY a."patent_id"
+ORDER BY "forward_citation_count" DESC
+LIMIT 20;
+Results:
+patent_id,forward_citation_count
+7732819,291
+7064346,290
+5744864,289
+6294274,288
+6727522,288
+6563174,287
+7453087,286
+7453065,285
+5731856,285
+7211825,284
+7468304,284
+7411209,284
+7385224,282
+5523520,235
+4683202,185
+6323846,185
+4683195,164
+6233617,161
+6336137,158
+6711565,157
+
+[Successfully executed]
+2025-07-01 04:16:00 - Thread-104 (execute) - INFO - [Try to execute]
+-- Description: Filter patents to include only those in selected CPC categories (e.g., category `A` for agricultural inventions).
+-- Handles invalid or malformed timestamps in "a.date" using "TRY_CAST" to process only valid dates.
+SELECT c."patent_id", c."section_id", c."subsection_id", a."date" AS "application_date"
+FROM PATENTSVIEW.PATENTSVIEW.CPC_CURRENT c
+JOIN PATENTSVIEW.PATENTSVIEW.APPLICATION a
+ON c."patent_id" = a."patent_id"
+WHERE c."section_id" = 'A'  -- Example CPC category focus
+  AND TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Ensure "a.date" contains valid timestamps
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:16:02 - Thread-104 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Filter patents to include only those in selected CPC categories (e.g., category `A` for agricultural inventions).
+-- Handles invalid or malformed timestamps in "a.date" using "TRY_CAST" to process only valid dates.
+SELECT c."patent_id", c."section_id", c."subsection_id", a."date" AS "application_date"
+FROM PATENTSVIEW.PATENTSVIEW.CPC_CURRENT c
+JOIN PATENTSVIEW.PATENTSVIEW.APPLICATION a
+ON c."patent_id" = a."patent_id"
+WHERE c."section_id" = 'A'  -- Example CPC category focus
+  AND TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Ensure "a.date" contains valid timestamps
+LIMIT 20;
+Results:
+patent_id,section_id,subsection_id,application_date
+3961936,A,A01,1967-04-12
+4029768,A,A61,1971-03-16
+4029768,A,A61,1971-03-16
+3952450,A,A63,1972-02-16
+3935303,A,A61,1972-11-01
+3935303,A,A61,1972-11-01
+3935303,A,A61,1972-11-01
+3934721,A,A61,1973-02-15
+4102673,A,A01,1973-02-28
+3931189,A,A61,1973-06-13
+3931189,A,A61,1973-06-13
+3931189,A,A61,1973-06-13
+3933144,A,A47,1973-07-13
+3933144,A,A47,1973-07-13
+
+[Successfully executed]
+2025-07-01 04:16:02 - Thread-104 (execute) - INFO - [Try to execute]
+-- Description: Combine backward citation counts, forward citation counts (U.S. patents), and CPC category filtering.
+-- Ensures valid timestamps in "a.date" and "u.date" using "TRY_CAST" to process rows with valid dates only.
+WITH BackwardCitations AS (
+  SELECT a."patent_id", COUNT(u."citation_id") AS "backward_citation_count"
+  FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+  JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+  ON a."patent_id" = u."patent_id"
+  WHERE a."country" = 'US'
+    AND u."category" = 'cited by applicant'
+    AND TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Ensure "a.date" contains valid timestamps
+    AND TRY_CAST(u."date" AS DATE) IS NOT NULL  -- Ensure "u.date" contains valid timestamps
+    AND u."date" BETWEEN DATEADD(YEAR, -1, a."date") AND a."date"
+  GROUP BY a."patent_id"
+),
+ForwardCitations AS (
+  SELECT a."patent_id", COUNT(u."patent_id") AS "forward_citation_count"
+  FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+  JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+  ON a."patent_id" = u."citation_id"
+  WHERE a."country" = 'US'
+    AND u."category" = 'cited by applicant'
+    AND TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Ensure "a.date" contains valid timestamps
+    AND TRY_CAST(u."date" AS DATE) IS NOT NULL  -- Ensure "u.date" contains valid timestamps
+    AND u."date" BETWEEN a."date" AND DATEADD(YEAR, 3, a."date")
+  GROUP BY a."patent_id"
+)
+SELECT b."patent_id", b."backward_citation_count", f."forward_citation_count"
+FROM BackwardCitations b
+JOIN ForwardCitations f ON b."patent_id" = f."patent_id"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:16:57 - Thread-104 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Combine backward citation counts, forward citation counts (U.S. patents), and CPC category filtering.
+-- Ensures valid timestamps in "a.date" and "u.date" using "TRY_CAST" to process rows with valid dates only.
+WITH BackwardCitations AS (
+  SELECT a."patent_id", COUNT(u."citation_id") AS "backward_citation_count"
+  FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+  JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+  ON a."patent_id" = u."patent_id"
+  WHERE a."country" = 'US'
+    AND u."category" = 'cited by applicant'
+    AND TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Ensure "a.date" contains valid timestamps
+    AND TRY_CAST(u."date" AS DATE) IS NOT NULL  -- Ensure "u.date" contains valid timestamps
+    AND u."date" BETWEEN DATEADD(YEAR, -1, a."date") AND a."date"
+  GROUP BY a."patent_id"
+),
+ForwardCitations AS (
+  SELECT a."patent_id", COUNT(u."patent_id") AS "forward_citation_count"
+  FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+  JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+  ON a."patent_id" = u."citation_id"
+  WHERE a."country" = 'US'
+    AND u."category" = 'cited by applicant'
+    AND TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Ensure "a.date" contains valid timestamps
+    AND TRY_CAST(u."date" AS DATE) IS NOT NULL  -- Ensure "u.date" contains valid timestamps
+    AND u."date" BETWEEN a."date" AND DATEADD(YEAR, 3, a."date")
+  GROUP BY a."patent_id"
+)
+SELECT b."patent_id", b."backward_citation_count", f."forward_citation_count"
+FROM BackwardCitations b
+JOIN ForwardCitations f ON b."patent_id" = f."patent_id"
+LIMIT 20;
+Results:
+patent_id,backward_citation_count,forward_citation_count
+8527520,5,2
+8823319,1,19
+8766272,13,1
+D812147,1,6
+10300016,4,1
+8959796,1,1
+8414661,1,1
+10304347,1,2
+9111105,12,6
+D866134,8,1
+8612375,1,1
+D869432,1,1
+10165128,9,1
+8634761,4,1
+9175751,2,1
+10105248,6,1
+8735884,3,2
+D769937,2,1
+10058393,1,1
+D753381,3,6
+
+[Successfully executed]
+2025-07-01 04:16:57 - Thread-104 (execute) - INFO - [Try to execute]
+-- Description: Filter patents with both backward citations within 1 year before and forward citations
+-- within 1 year after the application date. Ensures "a.date", "u1.date", and "u2.date" are valid
+-- timestamps using "TRY_CAST".
+WITH BackwardAndForwardCitations AS (
+  SELECT a."patent_id", 
+         COUNT(DISTINCT u1."citation_id") AS "backward_citation_count",
+         COUNT(DISTINCT u2."patent_id") AS "forward_citation_count"
+  FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+  LEFT JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u1
+    ON a."patent_id" = u1."patent_id"
+    AND TRY_CAST(u1."date" AS DATE) IS NOT NULL  -- Validate "u1.date"
+    AND u1."date" BETWEEN DATEADD(YEAR, -1, a."date") AND a."date"
+    AND u1."category" = 'cited by applicant'
+  LEFT JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u2
+    ON a."patent_id" = u2."citation_id"
+    AND TRY_CAST(u2."date" AS DATE) IS NOT NULL  -- Validate "u2.date"
+    AND u2."date" BETWEEN a."date" AND DATEADD(YEAR, 1, a."date")
+    AND u2."category" = 'cited by applicant'
+  WHERE a."country" = 'US'
+    AND TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Validate "a.date"
+  GROUP BY a."patent_id"
+)
+SELECT "patent_id", "backward_citation_count", "forward_citation_count"
+FROM BackwardAndForwardCitations
+WHERE "backward_citation_count" > 0 AND "forward_citation_count" > 0
+ORDER BY "backward_citation_count" DESC
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:17:38 - Thread-104 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Filter patents with both backward citations within 1 year before and forward citations
+-- within 1 year after the application date. Ensures "a.date", "u1.date", and "u2.date" are valid
+-- timestamps using "TRY_CAST".
+WITH BackwardAndForwardCitations AS (
+  SELECT a."patent_id", 
+         COUNT(DISTINCT u1."citation_id") AS "backward_citation_count",
+         COUNT(DISTINCT u2."patent_id") AS "forward_citation_count"
+  FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+  LEFT JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u1
+    ON a."patent_id" = u1."patent_id"
+    AND TRY_CAST(u1."date" AS DATE) IS NOT NULL  -- Validate "u1.date"
+    AND u1."date" BETWEEN DATEADD(YEAR, -1, a."date") AND a."date"
+    AND u1."category" = 'cited by applicant'
+  LEFT JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u2
+    ON a."patent_id" = u2."citation_id"
+    AND TRY_CAST(u2."date" AS DATE) IS NOT NULL  -- Validate "u2.date"
+    AND u2."date" BETWEEN a."date" AND DATEADD(YEAR, 1, a."date")
+    AND u2."category" = 'cited by applicant'
+  WHERE a."country" = 'US'
+    AND TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Validate "a.date"
+  GROUP BY a."patent_id"
+)
+SELECT "patent_id", "backward_citation_count", "forward_citation_count"
+FROM BackwardAndForwardCitations
+WHERE "backward_citation_count" > 0 AND "forward_citation_count" > 0
+ORDER BY "backward_citation_count" DESC
+LIMIT 20;
+Results:
+patent_id,backward_citation_count,forward_citation_count
+D840069,147,5
+D857940,118,4
+D859709,118,5
+9585663,102,37
+8971160,94,1
+9159345,60,1
+10478107,58,3
+10804959,57,1
+9837249,51,4
+9111575,49,5
+10265094,46,2
+9004396,43,4
+10796260,42,3
+9837284,40,3
+8780968,40,2
+9554738,38,2
+10713387,38,3
+10371889,38,17
+10405199,34,16
+8448641,33,3
+
+[Successfully executed]
+2025-07-01 04:17:38 - Thread-104 (execute) - INFO - [Try to execute]
+-- Description: Combine CPC filtering and backward citations count to narrow down results and
+-- focus on patents meeting the backward citation requirements in a specific category.
+-- Ensures valid timestamps in "a.date" and "u.date" using "TRY_CAST".
+WITH CPCFiltered AS (
+  SELECT c."patent_id"
+  FROM PATENTSVIEW.PATENTSVIEW.CPC_CURRENT c
+  WHERE c."section_id" = 'C'  -- Example CPC category filter
+),
+BackwardCitations AS (
+  SELECT a."patent_id", COUNT(u."citation_id") AS "backward_citation_count"
+  FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+  JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+    ON a."patent_id" = u."patent_id"
+  WHERE a."country" = 'US'
+    AND u."category" = 'cited by applicant'
+    AND TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Ensure "a.date" contains valid timestamps
+    AND TRY_CAST(u."date" AS DATE) IS NOT NULL  -- Ensure "u.date" contains valid timestamps
+    AND u."date" BETWEEN DATEADD(YEAR, -1, a."date") AND a."date"
+  GROUP BY a."patent_id"
+)
+SELECT b."patent_id", b."backward_citation_count"
+FROM CPCFiltered c
+JOIN BackwardCitations b ON c."patent_id" = b."patent_id"
+ORDER BY b."backward_citation_count" DESC
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:17:56 - Thread-104 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Combine CPC filtering and backward citations count to narrow down results and
+-- focus on patents meeting the backward citation requirements in a specific category.
+-- Ensures valid timestamps in "a.date" and "u.date" using "TRY_CAST".
+WITH CPCFiltered AS (
+  SELECT c."patent_id"
+  FROM PATENTSVIEW.PATENTSVIEW.CPC_CURRENT c
+  WHERE c."section_id" = 'C'  -- Example CPC category filter
+),
+BackwardCitations AS (
+  SELECT a."patent_id", COUNT(u."citation_id") AS "backward_citation_count"
+  FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+  JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+    ON a."patent_id" = u."patent_id"
+  WHERE a."country" = 'US'
+    AND u."category" = 'cited by applicant'
+    AND TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Ensure "a.date" contains valid timestamps
+    AND TRY_CAST(u."date" AS DATE) IS NOT NULL  -- Ensure "u.date" contains valid timestamps
+    AND u."date" BETWEEN DATEADD(YEAR, -1, a."date") AND a."date"
+  GROUP BY a."patent_id"
+)
+SELECT b."patent_id", b."backward_citation_count"
+FROM CPCFiltered c
+JOIN BackwardCitations b ON c."patent_id" = b."patent_id"
+ORDER BY b."backward_citation_count" DESC
+LIMIT 20;
+Results:
+patent_id,backward_citation_count
+9181319,85
+9181319,85
+11069510,75
+10546729,64
+10546729,64
+10546729,64
+10546729,64
+10546729,64
+9220755,62
+9220755,62
+9220755,62
+9220755,62
+9220755,62
+9220755,62
+9220755,62
+9220755,62
+9220755,62
+9220755,62
+9220755,62
+9220755,62
+
+[Successfully executed]
+2025-07-01 04:17:56 - Thread-104 (execute) - INFO - [Try to execute]
+-- Description: Get the patent with the most backward citations and its forward citations
+-- within 1 year after the application date. Filters out invalid timestamps using "TRY_CAST".
+WITH MostBackwardCited AS (
+  SELECT a."patent_id", COUNT(u."citation_id") AS "backward_citation_count"
+  FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+  JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+    ON a."patent_id" = u."patent_id"
+  WHERE a."country" = 'US'
+    AND u."category" = 'cited by applicant'
+    AND TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Validate "a.date"
+    AND TRY_CAST(u."date" AS DATE) IS NOT NULL  -- Validate "u.date"
+    AND u."date" BETWEEN DATEADD(YEAR, -1, a."date") AND a."date"
+  GROUP BY a."patent_id"
+  ORDER BY "backward_citation_count" DESC
+  LIMIT 1
+),
+ForwardCitations AS (
+  SELECT a."patent_id", COUNT(u."patent_id") AS "forward_citation_count"
+  FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+  JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+    ON a."patent_id" = u."citation_id"
+  WHERE TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Validate "a.date"
+    AND TRY_CAST(u."date" AS DATE) IS NOT NULL  -- Validate "u.date"
+    AND u."date" BETWEEN a."date" AND DATEADD(YEAR, 1, a."date")
+  GROUP BY a."patent_id"
+)
+SELECT m."patent_id", m."backward_citation_count", f."forward_citation_count"
+FROM MostBackwardCited m
+LEFT JOIN ForwardCitations f ON m."patent_id" = f."patent_id"
+LIMIT 1;
+[Try to execute]
+2025-07-01 04:18:03 - Thread-104 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Get the patent with the most backward citations and its forward citations
+-- within 1 year after the application date. Filters out invalid timestamps using "TRY_CAST".
+WITH MostBackwardCited AS (
+  SELECT a."patent_id", COUNT(u."citation_id") AS "backward_citation_count"
+  FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+  JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+    ON a."patent_id" = u."patent_id"
+  WHERE a."country" = 'US'
+    AND u."category" = 'cited by applicant'
+    AND TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Validate "a.date"
+    AND TRY_CAST(u."date" AS DATE) IS NOT NULL  -- Validate "u.date"
+    AND u."date" BETWEEN DATEADD(YEAR, -1, a."date") AND a."date"
+  GROUP BY a."patent_id"
+  ORDER BY "backward_citation_count" DESC
+  LIMIT 1
+),
+ForwardCitations AS (
+  SELECT a."patent_id", COUNT(u."patent_id") AS "forward_citation_count"
+  FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+  JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+    ON a."patent_id" = u."citation_id"
+  WHERE TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Validate "a.date"
+    AND TRY_CAST(u."date" AS DATE) IS NOT NULL  -- Validate "u.date"
+    AND u."date" BETWEEN a."date" AND DATEADD(YEAR, 1, a."date")
+  GROUP BY a."patent_id"
+)
+SELECT m."patent_id", m."backward_citation_count", f."forward_citation_count"
+FROM MostBackwardCited m
+LEFT JOIN ForwardCitations f ON m."patent_id" = f."patent_id"
+LIMIT 1;
+Results:
+patent_id,backward_citation_count,forward_citation_count
+11103241,301,
+
+[Successfully executed]
+2025-07-01 04:18:03 - Thread-104 (execute) - INFO - itercount: 0
+2025-07-01 04:18:03 - Thread-104 (execute) - INFO - [Self-refine]
+Table full name: PATENTSVIEW.PATENTSVIEW.FOREIGNCITATION
+Column name: patent_id Type: TEXT
+Column name: category Type: TEXT
+Column name: uuid Type: TEXT
+Column name: sequence Type: NUMBER
+Column name: date Type: TEXT
+Column name: country Type: TEXT
+Column name: number Type: TEXT
+Sample rows:
+[{'uuid': 'xhj001ca1uk574sktzgyjbpc4', 'patent_id': '7329559', 'date': '2002-12-01', 'number': 'WO 02/099907', 'country': 'WO', 'category': 'cited by other', 'sequence': 116}, {'uuid': 'wxddvgazkrhjza59ens6ajy6e', 'patent_id': '7870461', 'date': '2002-12-01', 'number': 'WO 02/100026', 'country': 'WO', 'category': 'cited by other', 'sequence': 1}, {'uuid': 'qhziqthnqr8x58o6to57fw84d', 'patent_id': '8329239', 'date': '2002-12-01', 'number': 'WO 02/100192', 'country': 'WO', 'category': 'cited by other', 'sequence': 0}, {'uuid': 'bhzwlqdqrw7ohhcskzy601g24', 'patent_id': '10907170', 'date': '2002-12-01', 'number': 'WO 02/100199', 'country': 'WO', 'category': 'cited by applicant', 'sequence': 6}, {'uuid': 't7cepyiztg16eum41z8m3vkpj', 'patent_id': '9029656', 'date': '2002-12-01', 'number': 'WO 02/100199', 'country': 'WO', 'category': 'cited by applicant', 'sequence': 7}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.PATENT
+Column name: id Type: TEXT
+Column name: number Type: TEXT
+Column name: title Type: TEXT
+Column name: kind Type: TEXT
+Column name: type Type: TEXT
+Column name: date Type: TEXT
+Column name: abstract Type: TEXT
+Column name: num_claims Type: NUMBER
+Column name: country Type: TEXT
+Sample rows:
+[{'id': 'D690894', 'type': 'design', 'number': 'D690894', 'country': 'US', 'date': '2013-10-01', 'abstract': None, 'title': 'Cremation remains keepsake charm', 'kind': 'S1', 'num_claims': 1}, {'id': 'D755392', 'type': 'design', 'number': 'D755392', 'country': 'US', 'date': '2016-05-03', 'abstract': None, 'title': 'Pulse oximetry sensor', 'kind': 'S1', 'num_claims': 1}, {'id': 'D756281', 'type': 'design', 'number': 'D756281', 'country': 'US', 'date': '2016-05-17', 'abstract': None, 'title': 'Wheel', 'kind': 'S1', 'num_claims': 1}, {'id': 'D761689', 'type': 'design', 'number': 'D761689', 'country': 'US', 'date': '2016-07-19', 'abstract': None, 'title': 'Band attachment', 'kind': 'S1', 'num_claims': 1}, {'id': 'D814540', 'type': 'design', 'number': 'D814540', 'country': 'US', 'date': '2018-04-03', 'abstract': None, 'title': 'Satellite equipment for robot', 'kind': 'S1', 'num_claims': 1}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.USPC
+Column name: patent_id Type: TEXT
+Column name: sequence Type: NUMBER
+Column name: uuid Type: TEXT
+Column name: subclass_id Type: TEXT
+Column name: mainclass_id Type: TEXT
+Sample rows:
+[{'uuid': 'vx63cj017gh32rnj8qou8whzr', 'patent_id': '4733714', 'mainclass_id': '164', 'subclass_id': '164/306', 'sequence': 6}, {'uuid': 'no3fq6xhprzuyjmzloepaacj0', 'patent_id': '4715905', 'mainclass_id': '164', 'subclass_id': '164/480', 'sequence': 6}, {'uuid': '2jzao5tdsvfggvxxi3me6dx17', 'patent_id': '7684187', 'mainclass_id': '165', 'subclass_id': '165/121', 'sequence': 6}, {'uuid': 'jitiqsy2de4rnjmvar48pi5hs', 'patent_id': '5924300', 'mainclass_id': '165', 'subclass_id': '165/122', 'sequence': 6}, {'uuid': '2vz25pigd5urhwqwb0vqvmccs', 'patent_id': '9019701', 'mainclass_id': '165', 'subclass_id': '165/122', 'sequence': 6}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.NBER_SUBCATEGORY
+Column name: id Type: TEXT
+Column name: title Type: TEXT
+Sample rows:
+[{'id': '31', 'title': 'Drugs'}, {'id': '15', 'title': 'Resins'}, {'id': '12', 'title': 'Coating'}, {'id': '33', 'title': 'Genetics'}, {'id': '68', 'title': 'Receptacles'}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.CPC_GROUP
+Column name: title Type: TEXT
+Column name: id Type: TEXT
+Sample rows:
+[{'id': 'C12Y', 'title': 'ENZYMES'}, {'id': 'D05B', 'title': 'SEWING '}, {'id': 'A46B', 'title': 'BRUSHES '}, {'id': 'D04B', 'title': 'KNITTING'}, {'id': 'B23C', 'title': 'MILLING '}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.PATENT_LAWYER
+Column name: patent_id Type: TEXT
+Sample rows:
+[{'patent_id': 'D647010'}, {'patent_id': 'D735919'}, {'patent_id': 'D720263'}, {'patent_id': '7514340'}, {'patent_id': '7345545'}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.USPATENTCITATION
+Column name: date Type: TEXT
+Column name: category Type: TEXT
+Column name: uuid Type: TEXT
+Column name: sequence Type: NUMBER
+Column name: patent_id Type: TEXT
+Column name: citation_id Type: TEXT
+Column name: kind Type: TEXT
+Column name: country Type: TEXT
+Sample rows:
+[{'uuid': '57ncvypgc6olzvvyu8cyrup28', 'patent_id': '9089501', 'citation_id': '6966918', 'date': '2005-11-01', 'kind': 'B1', 'country': 'US', 'category': 'cited by applicant', 'sequence': 66}, {'uuid': 'ku1vpwjzed77n4wajpnj8s0bc', 'patent_id': '8568410', 'citation_id': '6966919', 'date': '2005-11-01', 'kind': 'B2', 'country': 'US', 'category': 'cited by applicant', 'sequence': 574}, {'uuid': '9y51eyspby8nsi5pgsjqhvqmu', 'patent_id': '8821530', 'citation_id': '6966923', 'date': '2005-11-01', 'kind': 'B2', 'country': 'US', 'category': 'cited by applicant', 'sequence': 28}, {'uuid': 'itpjgf8np2k8jjc3uw355hp7x', 'patent_id': '10219911', 'citation_id': '6966929', 'date': '2005-11-01', 'kind': 'B2', 'country': 'US', 'category': 'cited by applicant', 'sequence': 164}, {'uuid': 'm0pa59o492vy0l2so88l0xgs3', 'patent_id': '8518184', 'citation_id': '6966936', 'date': '2005-11-01', 'kind': 'B2', 'country': 'US', 'category': 'cited by applicant', 'sequence': 273}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.APPLICATION
+Column name: series_code Type: TEXT
+Column name: number Type: TEXT
+Column name: date Type: TEXT
+Column name: id Type: TEXT
+Column name: country Type: TEXT
+Column name: patent_id Type: TEXT
+Sample rows:
+[{'id': 'D/535207', 'patent_id': 'D371814', 'series_code': 'D', 'number': 'D535207', 'country': 'US', 'date': '1990-07-26'}, {'id': 'D002048', 'patent_id': 'D390605', 'series_code': 'D', 'number': 'D002048', 'country': 'US', 'date': '1992-11-30'}, {'id': 'D013068', 'patent_id': 'D395297', 'series_code': 'D', 'number': 'D013068', 'country': 'US', 'date': '1993-09-17'}, {'id': 'D019659', 'patent_id': 'D387555', 'series_code': 'D', 'number': 'D019659', 'country': 'US', 'date': '1994-03-08'}, {'id': 'D019888', 'patent_id': 'D387736', 'series_code': 'D', 'number': 'D019888', 'country': 'US', 'date': '1994-03-11'}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.CPC_SUBSECTION
+Column name: title Type: TEXT
+Column name: id Type: TEXT
+Sample rows:
+[{'id': 'F41', 'title': 'WEAPONS'}, {'id': 'A43', 'title': 'FOOTWEAR'}, {'id': 'A42', 'title': 'HEADWEAR'}, {'id': 'G04', 'title': 'HOROLOGY'}, {'id': 'B61', 'title': 'RAILWAYS'}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.PATENT_ASSIGNEE
+Column name: patent_id Type: TEXT
+Sample rows:
+[{'patent_id': '11179164'}, {'patent_id': '11139018'}, {'patent_id': '11165899'}, {'patent_id': '11168211'}, {'patent_id': '11142954'}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.PATENT_GOVINTORG
+Column name: patent_id Type: TEXT
+Sample rows:
+[{'patent_id': '10074282'}, {'patent_id': '10096097'}, {'patent_id': '10029556'}, {'patent_id': '10127447'}, {'patent_id': '10067112'}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.PATENT_INVENTOR
+Column name: patent_id Type: TEXT
+Sample rows:
+[{'patent_id': '4633115'}, {'patent_id': '7099733'}, {'patent_id': '8373326'}, {'patent_id': '7441399'}, {'patent_id': '6850293'}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.CPC_CURRENT
+Column name: category Type: TEXT
+Column name: group_id Type: TEXT
+Column name: section_id Type: TEXT
+Column name: subsection_id Type: TEXT
+Column name: subgroup_id Type: TEXT
+Column name: sequence Type: NUMBER
+Column name: uuid Type: TEXT
+Column name: patent_id Type: TEXT
+Sample rows:
+[{'uuid': '0fccb987-5388-476f-8391-f47d2e55a308', 'patent_id': '10396367', 'section_id': 'C', 'subsection_id': 'C08', 'group_id': 'C08K', 'subgroup_id': 'C08K5/3462', 'category': 'inventional', 'sequence': 4}, {'uuid': 'b51fcbe9-5f0b-478c-9292-7a4e7721bbe9', 'patent_id': '5308489', 'section_id': 'C', 'subsection_id': 'C08', 'group_id': 'C08L', 'subgroup_id': 'C08L101/00', 'category': 'inventional', 'sequence': 4}, {'uuid': '2313da55-6a74-4330-a280-33125f345769', 'patent_id': '7479522', 'section_id': 'C', 'subsection_id': 'C08', 'group_id': 'C08L', 'subgroup_id': 'C08L51/085', 'category': 'inventional', 'sequence': 4}, {'uuid': '9703e112-1350-4036-b9e9-8106f486783d', 'patent_id': '6930146', 'section_id': 'C', 'subsection_id': 'C08', 'group_id': 'C08L', 'subgroup_id': 'C08L67/025', 'category': 'inventional', 'sequence': 4}, {'uuid': 'd0bb650e-2a37-43c5-ab0c-2984c34a94fe', 'patent_id': '7175953', 'section_id': 'C', 'subsection_id': 'C09', 'group_id': 'C09B', 'subgroup_id': 'C09B23/083', 'category': 'inventional', 'sequence': 4}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.CPC_SUBGROUP
+Column name: title Type: TEXT
+Column name: id Type: TEXT
+Sample rows:
+[{'id': 'G06F12/1416', 'title': 'Accessing, addressing or allocating within memory systems or architectures -Protection against unauthorised use of memory ; or access to memory-by checking the object accessibility, e.g. type of access defined by the memory independently of subject rights '}, {'id': 'B01F15/0234', 'title': 'Accessories for mixers ; ; Auxiliary operations or auxiliary devices; Parts or details of general application-Feed or discharge mechanisms-Feed mechanisms -characterized by the means for feeding the components to the mixer-using gravity, e.g. from a hopper'}, {'id': 'B01F15/0237', 'title': 'Accessories for mixers ; ; Auxiliary operations or auxiliary devices; Parts or details of general application-Feed or discharge mechanisms-Feed mechanisms -characterized by the means for feeding the components to the mixer-using pistons, plungers, syringes'}, {'id': 'F01D15/065', 'title': 'Adaptations of machines or engines for special use; Combinations of engines with devices driven thereby -Adaptations for driving, or combinations with, hand-held tools or the like ; control thereof-with pressure-velocity transformation exclusively in rotor'}, {'id': 'Y10T156/1093', 'title': 'Adhesive bonding and miscellaneous chemical manufacture-Methods of surface bonding and/or assembly therefor-of discrete laminae to single face of additional lamina-All laminae planar and face to face-with covering of discrete laminae with additional lamina'}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.PATENT_CONTRACTAWARDNUMBER
+Column name: patent_id Type: TEXT
+Sample rows:
+[{'patent_id': '10169847'}, {'patent_id': 'PP21965'}, {'patent_id': '4534894'}, {'patent_id': '7267941'}, {'patent_id': '7547509'}]
+--------------------------------------------------
+Table full name: PATENTSVIEW.PATENTSVIEW.USPC_CURRENT
+Column name: sequence Type: NUMBER
+Column name: patent_id Type: TEXT
+Column name: subclass_id Type: TEXT
+Column name: mainclass_id Type: TEXT
+Column name: uuid Type: TEXT
+Sample rows:
+[]
+
+--------------------------------------------------
+External knowledge that might be helpful: 
+None
+The table structure information is ({database name: {schema name: [table name]}}): 
+{'PATENTSVIEW': {'PATENTSVIEW': ['FOREIGNCITATION', 'PATENT', 'USPC', 'NBER_SUBCATEGORY', 'CPC_GROUP', 'PATENT_LAWYER', 'USPATENTCITATION', 'APPLICATION', 'CPC_SUBSECTION', 'PATENT_ASSIGNEE', 'PATENT_GOVINTORG', 'PATENT_INVENTOR', 'CPC_CURRENT', 'CPC_SUBGROUP', 'PATENT_CONTRACTAWARDNUMBER', 'USPC_CURRENT']}}
+
+Some few-shot examples after column exploration may be helpful:
+Query:
+-- Description: Retrieve U.S. patents with their application and patent dates for initial exploration. 
+-- The focus is on identifying the patents for further analysis.
+SELECT a."patent_id", a."date" AS "application_date", p."date" AS "patent_date"
+FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+JOIN PATENTSVIEW.PATENTSVIEW.PATENT p
+ON a."patent_id" = p."id"
+WHERE a."country" = 'US'
+LIMIT 20;
+Answer:
+patent_id,application_date,patent_date
+D398007,1993-11-15,1998-09-08
+D395804,1994-11-29,1998-07-07
+D387517,1995-03-21,1997-12-09
+D385253,1995-03-21,1997-10-21
+D390401,1995-03-30,1998-02-10
+D384729,1995-08-30,1997-10-07
+D385343,1995-11-06,1997-10-21
+D386317,1995-12-21,1997-11-18
+D385248,1995-12-27,1997-10-21
+D392146,1996-01-11,1998-03-17
+D392493,1996-03-13,1998-03-24
+D394745,1996-03-14,1998-06-02
+D388167,1996-03-26,1997-12-23
+Query:
+-- Description: Retrieve patents with their application dates and backward citations made within 1 year 
+-- before the application date (category = 'cited by applicant'). 
+SELECT a."patent_id", a."date" AS "application_date", u."citation_id", u."date" AS "citation_date"
+FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+ON a."patent_id" = u."patent_id"
+WHERE a."country" = 'US'
+  AND u."category" = 'cited by applicant'
+  AND u."date" BETWEEN DATEADD(YEAR, -1, a."date") AND a."date"
+LIMIT 20;
+Answer:
+patent_id,application_date,citation_id,citation_date
+D824911,2016-01-08,D747321,2016-01-01
+D841970,2016-07-29,D738087,2015-09-01
+D841970,2016-07-29,D740538,2015-10-01
+D841970,2016-07-29,D747089,2016-01-01
+D841970,2016-07-29,D756098,2016-05-01
+D841970,2016-07-29,D752332,2016-03-01
+D841970,2016-07-29,D744223,2015-12-01
+D841970,2016-07-29,D745259,2015-12-01
+D841970,2016-07-29,D746035,2015-12-01
+D841970,2016-07-29,D759364,2016-06-01
+D841970,2016-07-29,D738090,2015-09-01
+Query:
+-- Description: Count the number of backward citations within 1 year before the application date
+-- for each U.S. patent and sort them in descending order by number of backward citations. 
+SELECT a."patent_id", COUNT(u."citation_id") AS "backward_citation_count"
+FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+ON a."patent_id" = u."patent_id"
+WHERE a."country" = 'US'
+  AND u."category" = 'cited by applicant'
+  AND u."date" BETWEEN DATEADD(YEAR, -1, a."date") AND a."date"
+GROUP BY a."patent_id"
+ORDER BY "backward_citation_count" DESC
+LIMIT 20;
+Answer:
+patent_id,backward_citation_count
+11103241,301
+11090045,300
+11051807,292
+10779825,272
+10945729,270
+10716565,265
+11000274,265
+10695058,256
+10888322,252
+10835249,248
+10463384,239
+11026680,239
+10765425,236
+9756549,235
+10881399,233
+10433844,232
+10575868,230
+9980729,230
+10537325,229
+10335148,222
+Query:
+-- Description: Retrieve and count the forward citations (U.S. patents citing the current patent)
+-- within 3 years after the application date. Handles invalid or malformed timestamps by using "TRY_CAST"
+-- to ensure valid dates in "a.date" and "u.date".
+SELECT a."patent_id", COUNT(u."patent_id") AS "forward_citation_count"
+FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+ON a."patent_id" = u."citation_id"
+WHERE a."country" = 'US'
+  AND u."category" = 'cited by applicant'
+  AND TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Ensure "a.date" contains valid timestamps
+  AND TRY_CAST(u."date" AS DATE) IS NOT NULL  -- Ensure "u.date" contains valid timestamps
+  AND u."date" BETWEEN a."date" AND DATEADD(YEAR, 3, a."date")
+GROUP BY a."patent_id"
+ORDER BY "forward_citation_count" DESC
+LIMIT 20;
+Answer:
+patent_id,forward_citation_count
+7732819,291
+7064346,290
+5744864,289
+6294274,288
+6727522,288
+6563174,287
+7453087,286
+7453065,285
+5731856,285
+7211825,284
+7468304,284
+7411209,284
+7385224,282
+5523520,235
+4683202,185
+6323846,185
+4683195,164
+6233617,161
+6336137,158
+6711565,157
+Query:
+-- Description: Filter patents to include only those in selected CPC categories (e.g., category `A` for agricultural inventions).
+-- Handles invalid or malformed timestamps in "a.date" using "TRY_CAST" to process only valid dates.
+SELECT c."patent_id", c."section_id", c."subsection_id", a."date" AS "application_date"
+FROM PATENTSVIEW.PATENTSVIEW.CPC_CURRENT c
+JOIN PATENTSVIEW.PATENTSVIEW.APPLICATION a
+ON c."patent_id" = a."patent_id"
+WHERE c."section_id" = 'A'  -- Example CPC category focus
+  AND TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Ensure "a.date" contains valid timestamps
+LIMIT 20;
+Answer:
+patent_id,section_id,subsection_id,application_date
+3961936,A,A01,1967-04-12
+4029768,A,A61,1971-03-16
+4029768,A,A61,1971-03-16
+3952450,A,A63,1972-02-16
+3935303,A,A61,1972-11-01
+3935303,A,A61,1972-11-01
+3935303,A,A61,1972-11-01
+3934721,A,A61,1973-02-15
+4102673,A,A01,1973-02-28
+3931189,A,A61,1973-06-13
+3931189,A,A61,1973-06-13
+3931189,A,A61,1973-06-13
+3933144,A,A47,1973-07-13
+3933144,A,A47,1973-07-13
+Query:
+-- Description: Combine backward citation counts, forward citation counts (U.S. patents), and CPC category filtering.
+-- Ensures valid timestamps in "a.date" and "u.date" using "TRY_CAST" to process rows with valid dates only.
+WITH BackwardCitations AS (
+  SELECT a."patent_id", COUNT(u."citation_id") AS "backward_citation_count"
+  FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+  JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+  ON a."patent_id" = u."patent_id"
+  WHERE a."country" = 'US'
+    AND u."category" = 'cited by applicant'
+    AND TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Ensure "a.date" contains valid timestamps
+    AND TRY_CAST(u."date" AS DATE) IS NOT NULL  -- Ensure "u.date" contains valid timestamps
+    AND u."date" BETWEEN DATEADD(YEAR, -1, a."date") AND a."date"
+  GROUP BY a."patent_id"
+),
+ForwardCitations AS (
+  SELECT a."patent_id", COUNT(u."patent_id") AS "forward_citation_count"
+  FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+  JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+  ON a."patent_id" = u."citation_id"
+  WHERE a."country" = 'US'
+    AND u."category" = 'cited by applicant'
+    AND TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Ensure "a.date" contains valid timestamps
+    AND TRY_CAST(u."date" AS DATE) IS NOT NULL  -- Ensure "u.date" contains valid timestamps
+    AND u."date" BETWEEN a."date" AND DATEADD(YEAR, 3, a."date")
+  GROUP BY a."patent_id"
+)
+SELECT b."patent_id", b."backward_citation_count", f."forward_citation_count"
+FROM BackwardCitations b
+JOIN ForwardCitations f ON b."patent_id" = f."patent_id"
+LIMIT 20;
+Answer:
+patent_id,backward_citation_count,forward_citation_count
+8527520,5,2
+8823319,1,19
+8766272,13,1
+D812147,1,6
+10300016,4,1
+8959796,1,1
+8414661,1,1
+10304347,1,2
+9111105,12,6
+D866134,8,1
+8612375,1,1
+D869432,1,1
+10165128,9,1
+8634761,4,1
+9175751,2,1
+10105248,6,1
+8735884,3,2
+D769937,2,1
+10058393,1,1
+D753381,3,6
+Query:
+-- Description: Filter patents with both backward citations within 1 year before and forward citations
+-- within 1 year after the application date. Ensures "a.date", "u1.date", and "u2.date" are valid
+-- timestamps using "TRY_CAST".
+WITH BackwardAndForwardCitations AS (
+  SELECT a."patent_id", 
+         COUNT(DISTINCT u1."citation_id") AS "backward_citation_count",
+         COUNT(DISTINCT u2."patent_id") AS "forward_citation_count"
+  FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+  LEFT JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u1
+    ON a."patent_id" = u1."patent_id"
+    AND TRY_CAST(u1."date" AS DATE) IS NOT NULL  -- Validate "u1.date"
+    AND u1."date" BETWEEN DATEADD(YEAR, -1, a."date") AND a."date"
+    AND u1."category" = 'cited by applicant'
+  LEFT JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u2
+    ON a."patent_id" = u2."citation_id"
+    AND TRY_CAST(u2."date" AS DATE) IS NOT NULL  -- Validate "u2.date"
+    AND u2."date" BETWEEN a."date" AND DATEADD(YEAR, 1, a."date")
+    AND u2."category" = 'cited by applicant'
+  WHERE a."country" = 'US'
+    AND TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Validate "a.date"
+  GROUP BY a."patent_id"
+)
+SELECT "patent_id", "backward_citation_count", "forward_citation_count"
+FROM BackwardAndForwardCitations
+WHERE "backward_citation_count" > 0 AND "forward_citation_count" > 0
+ORDER BY "backward_citation_count" DESC
+LIMIT 20;
+Answer:
+patent_id,backward_citation_count,forward_citation_count
+D840069,147,5
+D857940,118,4
+D859709,118,5
+9585663,102,37
+8971160,94,1
+9159345,60,1
+10478107,58,3
+10804959,57,1
+9837249,51,4
+9111575,49,5
+10265094,46,2
+9004396,43,4
+10796260,42,3
+9837284,40,3
+8780968,40,2
+9554738,38,2
+10713387,38,3
+10371889,38,17
+10405199,34,16
+8448641,33,3
+Query:
+-- Description: Combine CPC filtering and backward citations count to narrow down results and
+-- focus on patents meeting the backward citation requirements in a specific category.
+-- Ensures valid timestamps in "a.date" and "u.date" using "TRY_CAST".
+WITH CPCFiltered AS (
+  SELECT c."patent_id"
+  FROM PATENTSVIEW.PATENTSVIEW.CPC_CURRENT c
+  WHERE c."section_id" = 'C'  -- Example CPC category filter
+),
+BackwardCitations AS (
+  SELECT a."patent_id", COUNT(u."citation_id") AS "backward_citation_count"
+  FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+  JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+    ON a."patent_id" = u."patent_id"
+  WHERE a."country" = 'US'
+    AND u."category" = 'cited by applicant'
+    AND TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Ensure "a.date" contains valid timestamps
+    AND TRY_CAST(u."date" AS DATE) IS NOT NULL  -- Ensure "u.date" contains valid timestamps
+    AND u."date" BETWEEN DATEADD(YEAR, -1, a."date") AND a."date"
+  GROUP BY a."patent_id"
+)
+SELECT b."patent_id", b."backward_citation_count"
+FROM CPCFiltered c
+JOIN BackwardCitations b ON c."patent_id" = b."patent_id"
+ORDER BY b."backward_citation_count" DESC
+LIMIT 20;
+Answer:
+patent_id,backward_citation_count
+9181319,85
+9181319,85
+11069510,75
+10546729,64
+10546729,64
+10546729,64
+10546729,64
+10546729,64
+9220755,62
+9220755,62
+9220755,62
+9220755,62
+9220755,62
+9220755,62
+9220755,62
+9220755,62
+9220755,62
+9220755,62
+9220755,62
+9220755,62
+Query:
+-- Description: Get the patent with the most backward citations and its forward citations
+-- within 1 year after the application date. Filters out invalid timestamps using "TRY_CAST".
+WITH MostBackwardCited AS (
+  SELECT a."patent_id", COUNT(u."citation_id") AS "backward_citation_count"
+  FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+  JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+    ON a."patent_id" = u."patent_id"
+  WHERE a."country" = 'US'
+    AND u."category" = 'cited by applicant'
+    AND TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Validate "a.date"
+    AND TRY_CAST(u."date" AS DATE) IS NOT NULL  -- Validate "u.date"
+    AND u."date" BETWEEN DATEADD(YEAR, -1, a."date") AND a."date"
+  GROUP BY a."patent_id"
+  ORDER BY "backward_citation_count" DESC
+  LIMIT 1
+),
+ForwardCitations AS (
+  SELECT a."patent_id", COUNT(u."patent_id") AS "forward_citation_count"
+  FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+  JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+    ON a."patent_id" = u."citation_id"
+  WHERE TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Validate "a.date"
+    AND TRY_CAST(u."date" AS DATE) IS NOT NULL  -- Validate "u.date"
+    AND u."date" BETWEEN a."date" AND DATEADD(YEAR, 1, a."date")
+  GROUP BY a."patent_id"
+)
+SELECT m."patent_id", m."backward_citation_count", f."forward_citation_count"
+FROM MostBackwardCited m
+LEFT JOIN ForwardCitations f ON m."patent_id" = f."patent_id"
+LIMIT 1;
+Answer:
+patent_id,backward_citation_count,forward_citation_count
+11103241,301,
+Task: Retrieve U.S. patents with the number of forward citations within the first 3 years after the patent application date (i.e., patents citing the current patent within 3 years). Only include patents with both backward citations within 1 year before the application date and forward citations within 1 year after the application date. The query should focus on specific CPC categories, sort results by backward citations in descending order, and return the patent with the most backward citations, limiting to one result.
+Another way to say it: Can you figure out the number of forward citations within 1 years from the application date for the patent that has the most backward citations within 1 years from application among all U.S. patents?
+
+Please think step by step and answer only one complete SQL in snowflake dialect in ```sql``` format.
+SQL usage example: ```sql
+SELECT "COLUMN_NAME" FROM DATABASE.SCHEMA.TABLE WHERE ... ``` (Adjust "DATABASE", "SCHEMA", and "TABLE" to match actual names, ensure all column names are enclosed in double quotations)
+Here are some useful tips for answering:
+When performing a UNION operation on many tables, ensure that all table names are explicitly listed. Union first and then add condition and selection. e.g. SELECT "col1", "col2" FROM (TABLE1 UNION ALL TABLE2) WHERE ...; Don't write sqls as (SELECT col1, col2 FROM TABLE1 WHERE ...) UNION ALL (SELECT col1, col2 FROM TABLE2 WHERE ...); Don't use ['-- Include all', '-- Omit', '-- Continue', '-- Union all', '-- ...', '-- List all', '-- Replace this', '-- Each table', '-- Add other'] to omit any table. Table names here: The table structure information is ({database name: {schema name: [table name]}}): 
+{'PATENTSVIEW': {'PATENTSVIEW': ['FOREIGNCITATION', 'PATENT', 'USPC', 'NBER_SUBCATEGORY', 'CPC_GROUP', 'PATENT_LAWYER', 'USPATENTCITATION', 'APPLICATION', 'CPC_SUBSECTION', 'PATENT_ASSIGNEE', 'PATENT_GOVINTORG', 'PATENT_INVENTOR', 'CPC_CURRENT', 'CPC_SUBGROUP', 'PATENT_CONTRACTAWARDNUMBER', 'USPC_CURRENT']}}
+
+When using ORDER BY xxx DESC, add NULLS LAST to exclude null records: ORDER BY xxx DESC NULLS LAST.
+When asked something without stating name or id, return both of them. e.g. Which products ...? The answer should include product_name and product_id.
+When asked percentage decrease, you should return a positive value. e.g. How many percentage points in 2021 decrease compared to ...? The answer should be a positive value indicating the decresed number. Try to use ABS().
+If asked two tables, you should reply with the last one instead of combining two tables. e.g. Identifying the top five states ... examine the state that ranks fourth overall and identify its top five counties. You should only answer top five counties.
+Use ST_DISTANCE to calculate distance between two geographic points for more accurate answer.
+If the task description does not specify the number of decimal places, retain all decimals to four places.
+
+[Self-refine]
+2025-07-01 04:18:20 - Thread-104 (execute) - INFO - [Try to run SQL in self-refine]
+```sql
+WITH BackwardCitations AS (
+  SELECT a."patent_id", COUNT(u."citation_id") AS "backward_citation_count", a."date" AS "application_date"
+  FROM PATENTSVIEW.PATENTSVIEW.APPLICATION a
+  JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+    ON a."patent_id" = u."patent_id"
+  WHERE a."country" = 'US'
+    AND u."category" = 'cited by applicant'
+    AND TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Ensure valid "a.date" timestamps
+    AND TRY_CAST(u."date" AS DATE) IS NOT NULL  -- Ensure valid "u.date" timestamps
+    AND u."date" BETWEEN DATEADD(YEAR, -1, TRY_CAST(a."date" AS DATE)) AND TRY_CAST(a."date" AS DATE)
+  GROUP BY a."patent_id", a."date"
+  ORDER BY "backward_citation_count" DESC NULLS LAST
+  LIMIT 1  -- Get the patent with the most backward citations
+),
+ForwardCitations AS (
+  SELECT a."patent_id", COUNT(u."patent_id") AS "forward_citation_count"
+  FROM BackwardCitations b
+  JOIN PATENTSVIEW.PATENTSVIEW.APPLICATION a
+    ON b."patent_id" = a."patent_id"
+  JOIN PATENTSVIEW.PATENTSVIEW.USPATENTCITATION u
+    ON a."patent_id" = u."citation_id"
+  WHERE TRY_CAST(a."date" AS DATE) IS NOT NULL  -- Ensure valid "a.date" timestamps
+    AND TRY_CAST(u."date" AS DATE) IS NOT NULL  -- Ensure valid "u.date" timestamps
+    AND u."date" BETWEEN TRY_CAST(a."date" AS DATE) AND DATEADD(YEAR, 1, TRY_CAST(a."date" AS DATE))
+  GROUP BY a."patent_id"
+)
+SELECT b."patent_id", b."backward_citation_count", f."forward_citation_count"
+FROM BackwardCitations b
+LEFT JOIN ForwardCitations f ON b."patent_id" = f."patent_id"
+LIMIT 1;
+```
+[Try to run SQL in self-refine]
+2025-07-01 04:18:21 - Thread-104 (execute) - INFO - Total iteration counts: 0

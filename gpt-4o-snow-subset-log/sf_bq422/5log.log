@@ -1,0 +1,1115 @@
+2025-07-01 04:41:19 - Thread-478 (execute) - INFO - [Exploration]
+Here is the step-by-step breakdown leading to the final solution for your task, written with annotations to explain each query:
+
+```sql
+-- Description:
+-- Identify CT images in the `nlst` collection and their slice intervals (calculated as the difference between adjacent unique `SliceLocation` values)
+-- Filtered only for `Modality = CT` and `collection_id = 'nlst'`
+SELECT 
+    "PatientID", 
+    "SeriesInstanceUID", 
+    "SliceLocation" 
+FROM IDC.IDC_V17.DICOM_ALL 
+WHERE "Modality" = 'CT' AND "collection_id" = 'nlst'
+ORDER BY "PatientID", "SeriesInstanceUID", "SliceLocation" ASC
+LIMIT 20;
+```
+
+```sql
+-- Description:
+-- Find unique exposure values for CT images in the `nlst` collection. This step will help calculate exposure difference.
+-- Filtered only for `Modality = CT` and `collection_id = 'nlst'`
+SELECT 
+    "PatientID", 
+    "SeriesInstanceUID", 
+    "Exposure" 
+FROM IDC.IDC_V17.DICOM_ALL 
+WHERE "Modality" = 'CT' AND "collection_id" = 'nlst' AND "Exposure" IS NOT NULL
+GROUP BY "PatientID", "SeriesInstanceUID", "Exposure"
+ORDER BY "PatientID", "SeriesInstanceUID" ASC
+LIMIT 20;
+```
+
+```sql
+-- Description:
+-- Retrieve the instance sizes for all images in each series in the `nlst` collection to calculate the series size.
+-- This step is specific to determining sizes of series grouped by `SeriesInstanceUID`.
+SELECT 
+    "PatientID", 
+    "SeriesInstanceUID", 
+    SUM("instance_size") AS "SeriesSize"
+FROM IDC.IDC_V17.DICOM_ALL 
+WHERE "Modality" = 'CT' AND "collection_id" = 'nlst'
+GROUP BY "PatientID", "SeriesInstanceUID"
+ORDER BY "PatientID", "SeriesInstanceUID" ASC
+LIMIT 20;
+```
+
+```sql
+-- Description:
+-- Extract unique `SliceLocation` values for patients and calculate the maximum and minimum slice locations in each series.
+-- This query retrieves a patient’s full slice location range across series.
+SELECT 
+    "PatientID", 
+    "SeriesInstanceUID", 
+    MAX(CAST("SliceLocation" AS FLOAT)) - MIN(CAST("SliceLocation" AS FLOAT)) AS "SliceInterval"
+FROM IDC.IDC_V17.DICOM_ALL
+WHERE "Modality" = 'CT' AND "collection_id" = 'nlst' AND "SliceLocation" IS NOT NULL
+GROUP BY "PatientID", "SeriesInstanceUID"
+ORDER BY "SliceInterval" DESC
+LIMIT 20;
+```
+
+```sql
+-- Description:
+-- Calculate the difference between maximum and minimum unique exposure values for patients across their series.
+-- This query retrieves a patient’s full exposure range across series.
+SELECT 
+    "PatientID", 
+    MAX(CAST("Exposure" AS FLOAT)) - MIN(CAST("Exposure" AS FLOAT)) AS "ExposureDifference"
+FROM IDC.IDC_V17.DICOM_ALL
+WHERE "Modality" = 'CT' AND "collection_id" = 'nlst' AND "Exposure" IS NOT NULL
+GROUP BY "PatientID"
+ORDER BY "ExposureDifference" DESC
+LIMIT 20;
+```
+
+```sql
+-- Description:
+-- List the top 3 patients with the highest slice interval differences. 
+-- This query serves as a starting point to calculate these patients’ average series sizes.
+SELECT 
+    "PatientID", 
+    SUM("SeriesSize") / COUNT(DISTINCT "SeriesInstanceUID") AS "AvgSeriesSizeMiB"
+FROM (
+    SELECT 
+        "PatientID", 
+        "SeriesInstanceUID", 
+        SUM("instance_size") / (1024*1024) AS "SeriesSize"
+    FROM IDC.IDC_V17.DICOM_ALL 
+    WHERE "Modality" = 'CT' AND "collection_id" = 'nlst'
+    GROUP BY "PatientID", "SeriesInstanceUID"
+) T
+WHERE "PatientID" IN (
+    SELECT "PatientID" 
+    FROM (
+        SELECT "PatientID", MAX(CAST("SliceLocation" AS FLOAT)) - MIN(CAST("SliceLocation" AS FLOAT)) AS "SliceInterval"
+        FROM IDC.IDC_V17.DICOM_ALL
+        WHERE "Modality" = 'CT' AND "collection_id" = 'nlst' AND "SliceLocation" IS NOT NULL
+        GROUP BY "PatientID"
+    ) T2
+    ORDER BY "SliceInterval" DESC
+    LIMIT 3
+)
+GROUP BY "PatientID"
+ORDER BY "AvgSeriesSizeMiB" DESC
+LIMIT 20;
+```
+
+```sql
+-- Description:
+-- List the top 3 patients with the highest exposure differences.
+-- This query serves as a starting point to calculate these patients’ average series sizes.
+SELECT 
+    "PatientID", 
+    SUM("SeriesSize") / COUNT(DISTINCT "SeriesInstanceUID") AS "AvgSeriesSizeMiB"
+FROM (
+    SELECT 
+        "PatientID", 
+        "SeriesInstanceUID", 
+        SUM("instance_size") / (1024*1024) AS "SeriesSize"
+    FROM IDC.IDC_V17.DICOM_ALL 
+    WHERE "Modality" = 'CT' AND "collection_id" = 'nlst'
+    GROUP BY "PatientID", "SeriesInstanceUID"
+) T
+WHERE "PatientID" IN (
+    SELECT "PatientID" 
+    FROM (
+        SELECT "PatientID", MAX(CAST("Exposure" AS FLOAT)) - MIN(CAST("Exposure" AS FLOAT)) AS "ExposureDifference"
+        FROM IDC.IDC_V17.DICOM_ALL
+        WHERE "Modality" = 'CT' AND "collection_id" = 'nlst' AND "Exposure" IS NOT NULL
+        GROUP BY "PatientID"
+    ) T2
+    ORDER BY "ExposureDifference" DESC
+    LIMIT 3
+)
+GROUP BY "PatientID"
+ORDER BY "AvgSeriesSizeMiB" DESC
+LIMIT 20;
+```
+
+```sql
+-- Description:
+-- Final summary of the output for both metrics: 1) Top 3 by `SliceInterval` and 2) Top 3 by `ExposureDifference`.
+-- This query combines results to present in two labeled groups.
+SELECT
+  'Top 3 by Slice Interval' AS "Group",
+  AVG("AvgSeriesSizeMiB") AS "AverageSeriesSize"
+FROM (
+    SELECT 
+        "PatientID", 
+        SUM("SeriesSize") / COUNT(DISTINCT "SeriesInstanceUID") AS "AvgSeriesSizeMiB"
+    FROM (
+        SELECT 
+            "PatientID", 
+            "SeriesInstanceUID", 
+            SUM("instance_size") / (1024*1024) AS "SeriesSize"
+        FROM IDC.IDC_V17.DICOM_ALL 
+        WHERE "Modality" = 'CT' AND "collection_id" = 'nlst'
+        GROUP BY "PatientID", "SeriesInstanceUID"
+    ) T
+    WHERE "PatientID" IN (
+        SELECT "PatientID" 
+        FROM (
+            SELECT "PatientID", MAX(CAST("SliceLocation" AS FLOAT)) - MIN(CAST("SliceLocation" AS FLOAT)) AS "SliceInterval"
+            FROM IDC.IDC_V17.DICOM_ALL
+            WHERE "Modality" = 'CT' AND "collection_id" = 'nlst' AND "SliceLocation" IS NOT NULL
+            GROUP BY "PatientID"
+        ) T2
+        ORDER BY "SliceInterval" DESC
+        LIMIT 3
+    )
+    GROUP BY "PatientID"
+    UNION ALL
+    SELECT 
+        'Top 3 by Max Exposure' AS "Group",
+        AVG("AvgSeriesSizeMiB") AS "AverageSeriesSize"
+    FROM (
+        SELECT 
+            "PatientID", 
+            SUM("SeriesSize") / COUNT(DISTINCT "SeriesInstanceUID") AS "AvgSeriesSizeMiB"
+        FROM (
+            SELECT 
+                "PatientID", 
+                "SeriesInstanceUID", 
+                SUM("instance_size") / (1024*1024) AS "SeriesSize"
+            FROM IDC.IDC_V17.DICOM_ALL 
+            WHERE "Modality" = 'CT' AND "collection_id" = 'nlst'
+            GROUP BY "PatientID", "SeriesInstanceUID"
+        ) T
+        WHERE "PatientID" IN (
+            SELECT "PatientID" 
+            FROM (
+                SELECT "PatientID", MAX(CAST("Exposure" AS FLOAT)) - MIN(CAST("Exposure" AS FLOAT)) AS "ExposureDifference"
+                FROM IDC.IDC_V17.DICOM_ALL
+                WHERE "Modality" = 'CT' AND "collection_id" = 'nlst' AND "Exposure" IS NOT NULL
+                GROUP BY "PatientID"
+            ) T2
+            ORDER BY "ExposureDifference" DESC
+            LIMIT 3
+        )
+        GROUP BY "PatientID"
+    )
+);
+```
+[Exploration]
+2025-07-01 04:41:19 - Thread-478 (execute) - INFO - [Try to execute]
+-- Description:
+-- Identify CT images in the `nlst` collection and their slice intervals (calculated as the difference between adjacent unique `SliceLocation` values)
+-- Filtered only for `Modality = CT` and `collection_id = 'nlst'`
+SELECT 
+    "PatientID", 
+    "SeriesInstanceUID", 
+    "SliceLocation" 
+FROM IDC.IDC_V17.DICOM_ALL 
+WHERE "Modality" = 'CT' AND "collection_id" = 'nlst'
+ORDER BY "PatientID", "SeriesInstanceUID", "SliceLocation" ASC
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:41:21 - Thread-478 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description:
+-- Identify CT images in the `nlst` collection and their slice intervals (calculated as the difference between adjacent unique `SliceLocation` values)
+-- Filtered only for `Modality = CT` and `collection_id = 'nlst'`
+SELECT 
+    "PatientID", 
+    "SeriesInstanceUID", 
+    "SliceLocation" 
+FROM IDC.IDC_V17.DICOM_ALL 
+WHERE "Modality" = 'CT' AND "collection_id" = 'nlst'
+ORDER BY "PatientID", "SeriesInstanceUID", "SliceLocation" ASC
+LIMIT 20;
+Results:
+PatientID,SeriesInstanceUID,SliceLocation
+100002,1.2.840.113654.2.55.122344168497038128022524906545138736420,-119.724998
+100002,1.2.840.113654.2.55.122344168497038128022524906545138736420,-129.725006
+100002,1.2.840.113654.2.55.122344168497038128022524906545138736420,-197.225006
+100002,1.2.840.113654.2.55.122344168497038128022524906545138736420,-272.225006
+100002,1.2.840.113654.2.55.122344168497038128022524906545138736420,-297.225006
+100002,1.2.840.113654.2.55.122344168497038128022524906545
+
+[Successfully executed]
+2025-07-01 04:41:21 - Thread-478 (execute) - INFO - [Try to execute]
+-- Description:
+-- Find unique exposure values for CT images in the `nlst` collection. This step will help calculate exposure difference.
+-- Filtered only for `Modality = CT` and `collection_id = 'nlst'`
+SELECT 
+    "PatientID", 
+    "SeriesInstanceUID", 
+    "Exposure" 
+FROM IDC.IDC_V17.DICOM_ALL 
+WHERE "Modality" = 'CT' AND "collection_id" = 'nlst' AND "Exposure" IS NOT NULL
+GROUP BY "PatientID", "SeriesInstanceUID", "Exposure"
+ORDER BY "PatientID", "SeriesInstanceUID" ASC
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:41:23 - Thread-478 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description:
+-- Find unique exposure values for CT images in the `nlst` collection. This step will help calculate exposure difference.
+-- Filtered only for `Modality = CT` and `collection_id = 'nlst'`
+SELECT 
+    "PatientID", 
+    "SeriesInstanceUID", 
+    "Exposure" 
+FROM IDC.IDC_V17.DICOM_ALL 
+WHERE "Modality" = 'CT' AND "collection_id" = 'nlst' AND "Exposure" IS NOT NULL
+GROUP BY "PatientID", "SeriesInstanceUID", "Exposure"
+ORDER BY "PatientID", "SeriesInstanceUID" ASC
+LIMIT 20;
+Results:
+PatientID,SeriesInstanceUID,Exposure
+100002,1.2.840.113654.2.55.122344168497038128022524906545138736420,1799
+100002,1.2.840.113654.2.55.21461438679308812574178613217680405233,1852
+100002,1.2.840.113654.2.55.229650531101716203536241646069123704792,1759
+100002,1.2.840.113654.2.55.257926562693607663865369179341285235858,1759
+100002,1.2.840.113654.2.55.283399418711252976131557177419186072875,1852
+100002,1.2.840.113654.2.55.97114726565566537928831413367474015470,1799
+100004,1.2.840.113654.2.55
+
+[Successfully executed]
+2025-07-01 04:41:23 - Thread-478 (execute) - INFO - [Try to execute]
+-- Description:
+-- Retrieve the instance sizes for all images in each series in the `nlst` collection to calculate the series size.
+-- This step is specific to determining sizes of series grouped by `SeriesInstanceUID`.
+SELECT 
+    "PatientID", 
+    "SeriesInstanceUID", 
+    SUM("instance_size") AS "SeriesSize"
+FROM IDC.IDC_V17.DICOM_ALL 
+WHERE "Modality" = 'CT' AND "collection_id" = 'nlst'
+GROUP BY "PatientID", "SeriesInstanceUID"
+ORDER BY "PatientID", "SeriesInstanceUID" ASC
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:41:24 - Thread-478 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description:
+-- Retrieve the instance sizes for all images in each series in the `nlst` collection to calculate the series size.
+-- This step is specific to determining sizes of series grouped by `SeriesInstanceUID`.
+SELECT 
+    "PatientID", 
+    "SeriesInstanceUID", 
+    SUM("instance_size") AS "SeriesSize"
+FROM IDC.IDC_V17.DICOM_ALL 
+WHERE "Modality" = 'CT' AND "collection_id" = 'nlst'
+GROUP BY "PatientID", "SeriesInstanceUID"
+ORDER BY "PatientID", "SeriesInstanceUID" ASC
+LIMIT 20;
+Results:
+PatientID,SeriesInstanceUID,SeriesSize
+100002,1.2.840.113654.2.55.122344168497038128022524906545138736420,3159536
+100002,1.2.840.113654.2.55.21461438679308812574178613217680405233,1579810
+100002,1.2.840.113654.2.55.229650531101716203536241646069123704792,2633014
+100002,1.2.840.113654.2.55.257926562693607663865369179341285235858,526612
+100002,1.2.840.113654.2.55.283399418711252976131557177419186072875,2633066
+100002,1.2.840.113654.2.55.97114726565566537928831413367474015470,3686138
+100004,
+
+[Successfully executed]
+2025-07-01 04:41:24 - Thread-478 (execute) - INFO - [Try to execute]
+-- Description:
+-- Extract unique `SliceLocation` values for patients and calculate the maximum and minimum slice locations in each series.
+-- This query retrieves a patient’s full slice location range across series.
+SELECT 
+    "PatientID", 
+    "SeriesInstanceUID", 
+    MAX(CAST("SliceLocation" AS FLOAT)) - MIN(CAST("SliceLocation" AS FLOAT)) AS "SliceInterval"
+FROM IDC.IDC_V17.DICOM_ALL
+WHERE "Modality" = 'CT' AND "collection_id" = 'nlst' AND "SliceLocation" IS NOT NULL
+GROUP BY "PatientID", "SeriesInstanceUID"
+ORDER BY "SliceInterval" DESC
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:41:25 - Thread-478 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description:
+-- Extract unique `SliceLocation` values for patients and calculate the maximum and minimum slice locations in each series.
+-- This query retrieves a patient’s full slice location range across series.
+SELECT 
+    "PatientID", 
+    "SeriesInstanceUID", 
+    MAX(CAST("SliceLocation" AS FLOAT)) - MIN(CAST("SliceLocation" AS FLOAT)) AS "SliceInterval"
+FROM IDC.IDC_V17.DICOM_ALL
+WHERE "Modality" = 'CT' AND "collection_id" = 'nlst' AND "SliceLocation" IS NOT NULL
+GROUP BY "PatientID", "SeriesInstanceUID"
+ORDER BY "SliceInterval" DESC
+LIMIT 20;
+Results:
+PatientID,SeriesInstanceUID,SliceInterval
+123669,1.2.840.113654.2.55.284380789748132792705066612318681327222,437.5
+212726,1.3.6.1.4.1.14519.5.2.1.7009.9004.315874160108103417232782408880,420.000001
+217640,1.3.6.1.4.1.14519.5.2.1.7009.9004.127853643169107304776004096381,415.5
+216085,1.3.6.1.4.1.14519.5.2.1.7009.9004.294450177857068329661177887575,406.5
+102826,1.2.840.113654.2.55.4877033276043245709268459440032122297,404.0
+215448,1.3.6.1.4.1.14519.5.2.1.7009.9004.2366320308930112633319898763
+
+[Successfully executed]
+2025-07-01 04:41:25 - Thread-478 (execute) - INFO - [Try to execute]
+-- Description:
+-- Calculate the difference between maximum and minimum unique exposure values for patients across their series.
+-- This query retrieves a patient’s full exposure range across series.
+SELECT 
+    "PatientID", 
+    MAX(CAST("Exposure" AS FLOAT)) - MIN(CAST("Exposure" AS FLOAT)) AS "ExposureDifference"
+FROM IDC.IDC_V17.DICOM_ALL
+WHERE "Modality" = 'CT' AND "collection_id" = 'nlst' AND "Exposure" IS NOT NULL
+GROUP BY "PatientID"
+ORDER BY "ExposureDifference" DESC
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:41:26 - Thread-478 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description:
+-- Calculate the difference between maximum and minimum unique exposure values for patients across their series.
+-- This query retrieves a patient’s full exposure range across series.
+SELECT 
+    "PatientID", 
+    MAX(CAST("Exposure" AS FLOAT)) - MIN(CAST("Exposure" AS FLOAT)) AS "ExposureDifference"
+FROM IDC.IDC_V17.DICOM_ALL
+WHERE "Modality" = 'CT' AND "collection_id" = 'nlst' AND "Exposure" IS NOT NULL
+GROUP BY "PatientID"
+ORDER BY "ExposureDifference" DESC
+LIMIT 20;
+Results:
+PatientID,ExposureDifference
+212691,7740.0
+109153,7170.0
+109939,7120.0
+130623,6806.0
+116786,6203.0
+121597,6081.0
+204900,5946.0
+217306,5359.0
+217604,5196.0
+104457,4961.0
+215936,4713.0
+120794,4480.0
+210706,4442.0
+205938,4333.0
+105362,4240.0
+213994,4220.0
+216538,4208.0
+208108,4208.0
+210200,4191.0
+205293,4187.0
+
+[Successfully executed]
+2025-07-01 04:41:26 - Thread-478 (execute) - INFO - [Try to execute]
+-- Description:
+-- List the top 3 patients with the highest slice interval differences. 
+-- This query serves as a starting point to calculate these patients’ average series sizes.
+SELECT 
+    "PatientID", 
+    SUM("SeriesSize") / COUNT(DISTINCT "SeriesInstanceUID") AS "AvgSeriesSizeMiB"
+FROM (
+    SELECT 
+        "PatientID", 
+        "SeriesInstanceUID", 
+        SUM("instance_size") / (1024*1024) AS "SeriesSize"
+    FROM IDC.IDC_V17.DICOM_ALL 
+    WHERE "Modality" = 'CT' AND "collection_id" = 'nlst'
+    GROUP BY "PatientID", "SeriesInstanceUID"
+) T
+WHERE "PatientID" IN (
+    SELECT "PatientID" 
+    FROM (
+        SELECT "PatientID", MAX(CAST("SliceLocation" AS FLOAT)) - MIN(CAST("SliceLocation" AS FLOAT)) AS "SliceInterval"
+        FROM IDC.IDC_V17.DICOM_ALL
+        WHERE "Modality" = 'CT' AND "collection_id" = 'nlst' AND "SliceLocation" IS NOT NULL
+        GROUP BY "PatientID"
+    ) T2
+    ORDER BY "SliceInterval" DESC
+    LIMIT 3
+)
+GROUP BY "PatientID"
+ORDER BY "AvgSeriesSizeMiB" DESC
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:41:29 - Thread-478 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description:
+-- List the top 3 patients with the highest slice interval differences. 
+-- This query serves as a starting point to calculate these patients’ average series sizes.
+SELECT 
+    "PatientID", 
+    SUM("SeriesSize") / COUNT(DISTINCT "SeriesInstanceUID") AS "AvgSeriesSizeMiB"
+FROM (
+    SELECT 
+        "PatientID", 
+        "SeriesInstanceUID", 
+        SUM("instance_size") / (1024*1024) AS "SeriesSize"
+    FROM IDC.IDC_V17.DICOM_ALL 
+    WHERE "Modality" = 'CT' AND "collection_id" = 'nlst'
+    GROUP BY "PatientID", "SeriesInstanceUID"
+) T
+WHERE "PatientID" IN (
+    SELECT "PatientID" 
+    FROM (
+        SELECT "PatientID", MAX(CAST("SliceLocation" AS FLOAT)) - MIN(CAST("SliceLocation" AS FLOAT)) AS "SliceInterval"
+        FROM IDC.IDC_V17.DICOM_ALL
+        WHERE "Modality" = 'CT' AND "collection_id" = 'nlst' AND "SliceLocation" IS NOT NULL
+        GROUP BY "PatientID"
+    ) T2
+    ORDER BY "SliceInterval" DESC
+    LIMIT 3
+)
+GROUP BY "PatientID"
+ORDER BY "AvgSeriesSizeMiB" DESC
+LIMIT 20;
+Results:
+PatientID,AvgSeriesSizeMiB
+111871,2.549048538462
+104196,1.969705076923
+112516,1.815230230769
+
+[Successfully executed]
+2025-07-01 04:41:29 - Thread-478 (execute) - INFO - [Try to execute]
+-- Description:
+-- List the top 3 patients with the highest exposure differences.
+-- This query serves as a starting point to calculate these patients’ average series sizes.
+SELECT 
+    "PatientID", 
+    SUM("SeriesSize") / COUNT(DISTINCT "SeriesInstanceUID") AS "AvgSeriesSizeMiB"
+FROM (
+    SELECT 
+        "PatientID", 
+        "SeriesInstanceUID", 
+        SUM("instance_size") / (1024*1024) AS "SeriesSize"
+    FROM IDC.IDC_V17.DICOM_ALL 
+    WHERE "Modality" = 'CT' AND "collection_id" = 'nlst'
+    GROUP BY "PatientID", "SeriesInstanceUID"
+) T
+WHERE "PatientID" IN (
+    SELECT "PatientID" 
+    FROM (
+        SELECT "PatientID", MAX(CAST("Exposure" AS FLOAT)) - MIN(CAST("Exposure" AS FLOAT)) AS "ExposureDifference"
+        FROM IDC.IDC_V17.DICOM_ALL
+        WHERE "Modality" = 'CT' AND "collection_id" = 'nlst' AND "Exposure" IS NOT NULL
+        GROUP BY "PatientID"
+    ) T2
+    ORDER BY "ExposureDifference" DESC
+    LIMIT 3
+)
+GROUP BY "PatientID"
+ORDER BY "AvgSeriesSizeMiB" DESC
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:41:31 - Thread-478 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description:
+-- List the top 3 patients with the highest exposure differences.
+-- This query serves as a starting point to calculate these patients’ average series sizes.
+SELECT 
+    "PatientID", 
+    SUM("SeriesSize") / COUNT(DISTINCT "SeriesInstanceUID") AS "AvgSeriesSizeMiB"
+FROM (
+    SELECT 
+        "PatientID", 
+        "SeriesInstanceUID", 
+        SUM("instance_size") / (1024*1024) AS "SeriesSize"
+    FROM IDC.IDC_V17.DICOM_ALL 
+    WHERE "Modality" = 'CT' AND "collection_id" = 'nlst'
+    GROUP BY "PatientID", "SeriesInstanceUID"
+) T
+WHERE "PatientID" IN (
+    SELECT "PatientID" 
+    FROM (
+        SELECT "PatientID", MAX(CAST("Exposure" AS FLOAT)) - MIN(CAST("Exposure" AS FLOAT)) AS "ExposureDifference"
+        FROM IDC.IDC_V17.DICOM_ALL
+        WHERE "Modality" = 'CT' AND "collection_id" = 'nlst' AND "Exposure" IS NOT NULL
+        GROUP BY "PatientID"
+    ) T2
+    ORDER BY "ExposureDifference" DESC
+    LIMIT 3
+)
+GROUP BY "PatientID"
+ORDER BY "AvgSeriesSizeMiB" DESC
+LIMIT 20;
+Results:
+PatientID,AvgSeriesSizeMiB
+109939,2.510589400000
+212691,1.633676000000
+109153,1.243711500000
+
+[Successfully executed]
+2025-07-01 04:41:31 - Thread-478 (execute) - INFO - [Try to execute]
+-- Description:
+-- Final summary of the output for both metrics: 1) Top 3 by `SliceInterval` and 2) Top 3 by `ExposureDifference`.
+-- This query combines results to present in two labeled groups.
+SELECT
+  'Top 3 by Slice Interval' AS "Group",
+  AVG("AvgSeriesSizeMiB") AS "AverageSeriesSize"
+FROM (
+    SELECT 
+        "PatientID", 
+        SUM("SeriesSize") / COUNT(DISTINCT "SeriesInstanceUID") AS "AvgSeriesSizeMiB"
+    FROM (
+        SELECT 
+            "PatientID", 
+            "SeriesInstanceUID", 
+            SUM("instance_size") / (1024*1024) AS "SeriesSize"
+        FROM IDC.IDC_V17.DICOM_ALL 
+        WHERE "Modality" = 'CT' AND "collection_id" = 'nlst'
+        GROUP BY "PatientID", "SeriesInstanceUID"
+    ) T
+    WHERE "PatientID" IN (
+        SELECT "PatientID" 
+        FROM (
+            SELECT "PatientID", MAX(CAST("SliceLocation" AS FLOAT)) - MIN(CAST("SliceLocation" AS FLOAT)) AS "SliceInterval"
+            FROM IDC.IDC_V17.DICOM_ALL
+            WHERE "Modality" = 'CT' AND "collection_id" = 'nlst' AND "SliceLocation" IS NOT NULL
+            GROUP BY "PatientID"
+        ) T2
+        ORDER BY "SliceInterval" DESC
+        LIMIT 3
+    )
+    GROUP BY "PatientID"
+    UNION ALL
+    SELECT 
+        'Top 3 by Max Exposure' AS "Group",
+        AVG("AvgSeriesSizeMiB") AS "AverageSeriesSize"
+    FROM (
+        SELECT 
+            "PatientID", 
+            SUM("SeriesSize") / COUNT(DISTINCT "SeriesInstanceUID") AS "AvgSeriesSizeMiB"
+        FROM (
+            SELECT 
+                "PatientID", 
+                "SeriesInstanceUID", 
+                SUM("instance_size") / (1024*1024) AS "SeriesSize"
+            FROM IDC.IDC_V17.DICOM_ALL 
+            WHERE "Modality" = 'CT' AND "collection_id" = 'nlst'
+            GROUP BY "PatientID", "SeriesInstanceUID"
+        ) T
+        WHERE "PatientID" IN (
+            SELECT "PatientID" 
+            FROM (
+                SELECT "PatientID", MAX(CAST("Exposure" AS FLOAT)) - MIN(CAST("Exposure" AS FLOAT)) AS "ExposureDifference"
+                FROM IDC.IDC_V17.DICOM_ALL
+                WHERE "Modality" = 'CT' AND "collection_id" = 'nlst' AND "Exposure" IS NOT NULL
+                GROUP BY "PatientID"
+            ) T2
+            ORDER BY "ExposureDifference" DESC
+            LIMIT 3
+        )
+        GROUP BY "PatientID"
+    )
+);
+[Try to execute]
+2025-07-01 04:41:35 - Thread-478 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description:
+-- Final summary of the output for both metrics: 1) Top 3 by `SliceInterval` and 2) Top 3 by `ExposureDifference`.
+-- This query combines results to present in two labeled groups.
+SELECT
+  'Top 3 by Slice Interval' AS "Group",
+  AVG("AvgSeriesSizeMiB") AS "AverageSeriesSize"
+FROM (
+    SELECT 
+        "PatientID", 
+        SUM("SeriesSize") / COUNT(DISTINCT "SeriesInstanceUID") AS "AvgSeriesSizeMiB"
+    FROM (
+        SELECT 
+            "PatientID", 
+            "SeriesInstanceUID", 
+            SUM("instance_size") / (1024*1024) AS "SeriesSize"
+        FROM IDC.IDC_V17.DICOM_ALL 
+        WHERE "Modality" = 'CT' AND "collection_id" = 'nlst'
+        GROUP BY "PatientID", "SeriesInstanceUID"
+    ) T
+    WHERE "PatientID" IN (
+        SELECT "PatientID" 
+        FROM (
+            SELECT "PatientID", MAX(CAST("SliceLocation" AS FLOAT)) - MIN(CAST("SliceLocation" AS FLOAT)) AS "SliceInterval"
+            FROM IDC.IDC_V17.DICOM_ALL
+            WHERE "Modality" = 'CT' AND "collection_id" = 'nlst' AND "SliceLocation" IS NOT NULL
+            GROUP BY "PatientID"
+        ) T2
+        ORDER BY "SliceInterval" DESC
+        LIMIT 3
+    )
+    GROUP BY "PatientID"
+    UNION ALL
+    SELECT 
+        'Top 3 by Max Exposure' AS "Group",
+        AVG("AvgSeriesSizeMiB") AS "AverageSeriesSize"
+    FROM (
+        SELECT 
+            "PatientID", 
+            SUM("SeriesSize") / COUNT(DISTINCT "SeriesInstanceUID") AS "AvgSeriesSizeMiB"
+        FROM (
+            SELECT 
+                "PatientID", 
+                "SeriesInstanceUID", 
+                SUM("instance_size") / (1024*1024) AS "SeriesSize"
+            FROM IDC.IDC_V17.DICOM_ALL 
+            WHERE "Modality" = 'CT' AND "collection_id" = 'nlst'
+            GROUP BY "PatientID", "SeriesInstanceUID"
+        ) T
+        WHERE "PatientID" IN (
+            SELECT "PatientID" 
+            FROM (
+                SELECT "PatientID", MAX(CAST("Exposure" AS FLOAT)) - MIN(CAST("Exposure" AS FLOAT)) AS "ExposureDifference"
+                FROM IDC.IDC_V17.DICOM_ALL
+                WHERE "Modality" = 'CT' AND "collection_id" = 'nlst' AND "Exposure" IS NOT NULL
+                GROUP BY "PatientID"
+            ) T2
+            ORDER BY "ExposureDifference" DESC
+            LIMIT 3
+        )
+        GROUP BY "PatientID"
+    )
+);
+Results:
+Group,AverageSeriesSize
+Top 3 by Slice Interval,2.032494036539
+
+[Successfully executed]
+2025-07-01 04:41:35 - Thread-478 (execute) - INFO - itercount: 0
+2025-07-01 04:41:35 - Thread-478 (execute) - INFO - [Self-refine]
+Table full name: IDC.IDC_V17.DICOM_METADATA
+Column name: SliceLocation Type: TEXT
+Column name: SeriesInstanceUID Type: TEXT
+Column name: SeriesDescription Type: TEXT
+Column name: SpacingBetweenSlices Type: TEXT
+Column name: Location Type: TEXT
+Column name: InstanceNumber Type: TEXT
+Column name: XRayTubeCurrentInmA Type: FLOAT
+Column name: SliceThickness Type: TEXT
+Column name: Exposure Type: TEXT
+Column name: SeriesDate Type: DATE
+Column name: SOPInstanceUID Type: TEXT
+Column name: ImagePositionPatient Type: VARIANT
+Column name: XRayTubeCurrent Type: TEXT
+Column name: Modality Type: TEXT
+Column name: ExposureInmAs Type: FLOAT
+Column name: PixelSpacing Type: VARIANT
+Column name: ExposureTimeInuS Type: TEXT
+Column name: BodyPartExamined Type: TEXT
+Column name: ExposureInuAs Type: TEXT
+Column name: StudyInstanceUID Type: TEXT
+Column name: PatientID Type: TEXT
+Column name: ImagePosition Type: VARIANT
+Column name: ExposureTime Type: TEXT
+Column name: UID Type: TEXT
+Column name: ExposureTimeInms Type: FLOAT
+Sample rows:
+[{'SOPInstanceUID': '1.3.6.1.4.1.5962.99.1.154767222.292368839.1640832307062.7.0', 'SeriesDate': '2018-04-27', 'Modality': 'SM', 'SeriesDescription': 'HE tumor', 'PatientID': 'C3N-01088', 'BodyPartExamined': None, 'SliceThickness': None, 'SpacingBetweenSlices': None, 'ExposureTime': None, 'XRayTubeCurrent': None, 'Exposure': None, 'ExposureInuAs': None, 'ExposureTimeInuS': None, 'ExposureTimeInms': None, 'XRayTubeCurrentInmA': None, 'ExposureInmAs': None, 'StudyInstanceUID': '2.25.58706717250894429958007117275973416179', 'SeriesInstanceUID': '1.3.6.1.4.1.5962.99.1.154767222.292368839.1640832307062.2.0', 'InstanceNumber': '1', 'ImagePositionPatient': '[]', 'SliceLocation': None, 'PixelSpacing': '[]'}, {'SOPInstanceUID': '1.3.6.1.4.1.5962.99.1.154767222.292368839.1640832307062.35.0', 'SeriesDate': '2018-04-27', 'Modality': 'SM', 'SeriesDescription': 'HE tumor', 'PatientID': 'C3N-01088', 'BodyPartExamined': None, 'SliceThickness': None, 'SpacingBetweenSlices': None, 'ExposureTime': None, 'XRayTubeCurrent': None, 'Exposure': None, 'ExposureInuAs': None, 'ExposureTimeInuS': None, 'ExposureTimeInms': None, 'XRayTubeCurrentInmA': None, 'ExposureInmAs': None, 'StudyInstanceUID': '2.25.58706717250894429958007117275973416179', 'SeriesInstanceUID': '1.3.6.1.4.1.5962.99.1.154767222.292368839.1640832307062.2.0', 'InstanceNumber': '6', 'ImagePositionPatient': '[]', 'SliceLocation': None, 'PixelSpacing': '[]'}, {'SOPInstanceUID': '1.3.6.1.4.1.5962.99.1.2133926228.1619968177.1655696367956.37.0', 'SeriesDate': '2018-04-27', 'Modality': 'SM', 'SeriesDescription': 'HE tumor', 'PatientID': 'C3N-01088', 'BodyPartExamined': None, 'SliceThickness': None, 'SpacingBetweenSlices': None, 'ExposureTime': None, 'XRayTubeCurrent': None, 'Exposure': None, 'ExposureInuAs': None, 'ExposureTimeInuS': None, 'ExposureTimeInms': None, 'XRayTubeCurrentInmA': None, 'ExposureInmAs': None, 'StudyInstanceUID': '2.25.58706717250894429958007117275973416179', 'SeriesInstanceUID': '1.3.6.1.4.1.5962.99.1.154767222.292368839.1640832307062.2.0', 'InstanceNumber': '5', 'ImagePositionPatient': '[]', 'SliceLocation': None, 'PixelSpacing': '[]'}, {'SOPInstanceUID': '1.3.6.1.4.1.5962.99.1.157627571.692579403.1640835167411.42.0', 'SeriesDate': '2018-04-27', 'Modality': 'SM', 'SeriesDescription': 'HE tumor', 'PatientID': 'C3N-01088', 'BodyPartExamined': None, 'SliceThickness': None, 'SpacingBetweenSlices': None, 'ExposureTime': None, 'XRayTubeCurrent': None, 'Exposure': None, 'ExposureInuAs': None, 'ExposureTimeInuS': None, 'ExposureTimeInms': None, 'XRayTubeCurrentInmA': None, 'ExposureInmAs': None, 'StudyInstanceUID': '2.25.58706717250894429958007117275973416179', 'SeriesInstanceUID': '1.3.6.1.4.1.5962.99.1.157627571.692579403.1640835167411.2.0', 'InstanceNumber': '7', 'ImagePositionPatient': '[]', 'SliceLocation': None, 'PixelSpacing': '[]'}, {'SOPInstanceUID': '1.3.6.1.4.1.5962.99.1.157627571.692579403.1640835167411.7.0', 'SeriesDate': '2018-04-27', 'Modality': 'SM', 'SeriesDescription': 'HE tumor', 'PatientID': 'C3N-01088', 'BodyPartExamined': None, 'SliceThickness': None, 'SpacingBetweenSlices': None, 'ExposureTime': None, 'XRayTubeCurrent': None, 'Exposure': None, 'ExposureInuAs': None, 'ExposureTimeInuS': None, 'ExposureTimeInms': None, 'XRayTubeCurrentInmA': None, 'ExposureInmAs': None, 'StudyInstanceUID': '2.25.58706717250894429958007117275973416179', 'SeriesInstanceUID': '1.3.6.1.4.1.5962.99.1.157627571.692579403.1640835167411.2.0', 'InstanceNumber': '1', 'ImagePositionPatient': '[]', 'SliceLocation': None, 'PixelSpacing': '[]'}]
+--------------------------------------------------
+Table full name: IDC.IDC_V17.DICOM_METADATA_CURATED
+Column name: BodyPartExamined Type: TEXT Description: Curated value of BodyPartExamined following the manually created mapping. For the mapping details, please refer to the query referenced in the series description.
+Column name: SOPInstanceUID Type: TEXT Description: DICOM SOPInstanceUID
+Column name: SliceThickness Type: FLOAT Description: Cast of Slice_Thickness to FLOAT64
+Sample rows:
+[{'SOPInstanceUID': '1.3.6.1.4.1.14519.5.2.1.1620.1225.337801122878670074294531806897', 'SliceThickness': None, 'BodyPartExamined': None}, {'SOPInstanceUID': '1.3.6.1.4.1.5962.99.1.2140475088.421872551.1655702916816.37.0', 'SliceThickness': None, 'BodyPartExamined': None}, {'SOPInstanceUID': '1.3.6.1.4.1.5962.99.1.3388672280.250944349.1639771244824.22.0', 'SliceThickness': None, 'BodyPartExamined': None}, {'SOPInstanceUID': '1.3.6.1.4.1.5962.99.1.285798320.1466497774.1640963338160.42.0', 'SliceThickness': None, 'BodyPartExamined': None}, {'SOPInstanceUID': '1.2.276.0.7230010.3.1.4.481037312.39574.1685071533.519153', 'SliceThickness': None, 'BodyPartExamined': None}]
+--------------------------------------------------
+Table full name: IDC.IDC_V17.AUXILIARY_METADATA
+Column name: collection_name Type: TEXT Description: Collection name as used externally by IDC webapp
+Column name: SOPInstanceUID Type: TEXT Description: DICOM instance containing this instance version
+Column name: idc_case_id Type: TEXT Description: IDC assigned UUID4 id of this version of the case/patient containing this instance
+Column name: tcia_api_collection_id Type: TEXT
+Column name: collection_id Type: TEXT Description: Collection ID as used internally by IDC webapp and accepted by the IDC API
+Column name: StudyInstanceUID Type: TEXT Description: DICOM study containing this instance
+Column name: instance_size Type: NUMBER Description: Size in bytes of this version of this instance
+Column name: SeriesInstanceUID Type: TEXT Description: DICOM series containing this instance
+Sample rows:
+[{'collection_name': 'ACRIN-6698', 'collection_id': 'acrin_6698', 'idc_case_id': '597dd9e0-b18f-45ec-8f9f-fde45f927978', 'StudyInstanceUID': '1.3.6.1.4.1.14519.5.2.1.7695.4164.205849350381621543824875482470', 'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.7695.4164.100929779510512848238254512097', 'SOPInstanceUID': '1.3.6.1.4.1.14519.5.2.1.7695.4164.784850890634822414222832957135', 'instance_size': 530510, 'tcia_api_collection_id': 'ACRIN-6698'}, {'collection_name': 'ACRIN-6698', 'collection_id': 'acrin_6698', 'idc_case_id': '597dd9e0-b18f-45ec-8f9f-fde45f927978', 'StudyInstanceUID': '1.3.6.1.4.1.14519.5.2.1.7695.4164.205849350381621543824875482470', 'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.7695.4164.100929779510512848238254512097', 'SOPInstanceUID': '1.3.6.1.4.1.14519.5.2.1.7695.4164.166527479339466134062467856450', 'instance_size': 530512, 'tcia_api_collection_id': 'ACRIN-6698'}, {'collection_name': 'ACRIN-6698', 'collection_id': 'acrin_6698', 'idc_case_id': '597dd9e0-b18f-45ec-8f9f-fde45f927978', 'StudyInstanceUID': '1.3.6.1.4.1.14519.5.2.1.7695.4164.205849350381621543824875482470', 'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.7695.4164.100929779510512848238254512097', 'SOPInstanceUID': '1.3.6.1.4.1.14519.5.2.1.7695.4164.227440160180778953226675332234', 'instance_size': 530512, 'tcia_api_collection_id': 'ACRIN-6698'}, {'collection_name': 'ACRIN-6698', 'collection_id': 'acrin_6698', 'idc_case_id': '597dd9e0-b18f-45ec-8f9f-fde45f927978', 'StudyInstanceUID': '1.3.6.1.4.1.14519.5.2.1.7695.4164.205849350381621543824875482470', 'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.7695.4164.100929779510512848238254512097', 'SOPInstanceUID': '1.3.6.1.4.1.14519.5.2.1.7695.4164.267897853011778859581783671016', 'instance_size': 530512, 'tcia_api_collection_id': 'ACRIN-6698'}, {'collection_name': 'ACRIN-6698', 'collection_id': 'acrin_6698', 'idc_case_id': '597dd9e0-b18f-45ec-8f9f-fde45f927978', 'StudyInstanceUID': '1.3.6.1.4.1.14519.5.2.1.7695.4164.205849350381621543824875482470', 'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.7695.4164.100929779510512848238254512097', 'SOPInstanceUID': '1.3.6.1.4.1.14519.5.2.1.7695.4164.331545318411104179804799741788', 'instance_size': 530512, 'tcia_api_collection_id': 'ACRIN-6698'}]
+--------------------------------------------------
+Table full name: IDC.IDC_V17.DICOM_ALL
+Column name: ExposureTime Type: TEXT
+Column name: ImagePosition Type: VARIANT
+Column name: Location Type: TEXT
+Column name: tcia_api_collection_id Type: TEXT Description: DEPRECATED: Duplicate of collection_name
+Column name: PatientID Type: TEXT Description: Patient ID assigned by submitter of this data
+Column name: SliceThickness Type: TEXT
+Column name: UID Type: TEXT
+Column name: Modality Type: TEXT
+Column name: instance_size Type: NUMBER Description: Size in bytes of this version of this instance
+Column name: SliceLocation Type: TEXT
+Column name: idc_case_id Type: TEXT Description: IDC assigned UUID4 id of this version of the case/patient containing this instance
+Column name: SeriesDescription Type: TEXT
+Column name: ExposureTimeInuS Type: TEXT
+Column name: SOPInstanceUID Type: TEXT
+Column name: collection_id Type: TEXT Description: The ID of the collection containing this instance as expected by the IDC web app and API. Duplicate of the idc_webapp_collection_id column.
+Column name: InstanceNumber Type: TEXT
+Column name: ExposureTimeInms Type: FLOAT
+Column name: PixelSpacing Type: VARIANT
+Column name: SeriesDate Type: DATE
+Column name: ExposureInmAs Type: FLOAT
+Column name: XRayTubeCurrentInmA Type: FLOAT
+Column name: ExposureInuAs Type: TEXT
+Column name: StudyInstanceUID Type: TEXT
+Column name: collection_name Type: TEXT Description: The ID of the collection containing this instance as expected by the TCIA API
+Column name: Exposure Type: TEXT
+Column name: ImagePositionPatient Type: VARIANT
+Column name: XRayTubeCurrent Type: TEXT
+Column name: SeriesInstanceUID Type: TEXT
+Column name: BodyPartExamined Type: TEXT
+Column name: SpacingBetweenSlices Type: TEXT
+Sample rows:
+[{'collection_name': 'NLST', 'collection_id': 'nlst', 'PatientID': '115644', 'idc_case_id': 'f999d808-731d-4c65-b1b1-a462e80c4e0d', 'StudyInstanceUID': '1.2.840.113654.2.55.62621785606309318595425188615995118704', 'SeriesInstanceUID': '1.2.840.113654.2.55.286585074629136673697149467703631406338', 'SOPInstanceUID': '1.2.840.113654.2.55.232251254905686701117181565039442087865', 'instance_size': 526602, 'tcia_api_collection_id': 'NLST', 'SeriesDate': None, 'Modality': 'CT', 'SeriesDescription': '1,OPA,GE,HSQX,STANDARD,310,2.5,120,56,0.1,1.5', 'BodyPartExamined': 'CHEST', 'SliceThickness': '2.500000', 'SpacingBetweenSlices': None, 'ExposureTime': '798', 'XRayTubeCurrent': '80', 'Exposure': '1166', 'ExposureInuAs': None, 'ExposureTimeInuS': None, 'ExposureTimeInms': None, 'XRayTubeCurrentInmA': None, 'ExposureInmAs': None, 'InstanceNumber': '21', 'ImagePositionPatient': '[\n  "-165.399994",\n  "-155.000000",\n  "-66.144997"\n]', 'SliceLocation': '-66.144997', 'PixelSpacing': '[\n  "0.605469",\n  "0.605469"\n]'}, {'collection_name': 'NLST', 'collection_id': 'nlst', 'PatientID': '125284', 'idc_case_id': '8ee64c7b-aa5a-419e-9dc2-bd9766aaeaae', 'StudyInstanceUID': '1.2.840.113654.2.55.252823246291318780125419075611881707753', 'SeriesInstanceUID': '1.2.840.113654.2.55.206816254587970136084378013338289118172', 'SOPInstanceUID': '1.2.840.113654.2.55.281149784892428811639464384293629235745', 'instance_size': 526608, 'tcia_api_collection_id': 'NLST', 'SeriesDate': None, 'Modality': 'CT', 'SeriesDescription': '1,OPA,GE,HSQX,STANDARD,310,2.5,120,56,0.1,1.5', 'BodyPartExamined': 'CHEST', 'SliceThickness': '2.500000', 'SpacingBetweenSlices': None, 'ExposureTime': '798', 'XRayTubeCurrent': '80', 'Exposure': '1110', 'ExposureInuAs': None, 'ExposureTimeInuS': None, 'ExposureTimeInms': None, 'XRayTubeCurrentInmA': None, 'ExposureInmAs': None, 'InstanceNumber': '50', 'ImagePositionPatient': '[\n  "-149.300003",\n  "-153.399994",\n  "-129.880005"\n]', 'SliceLocation': '-129.880005', 'PixelSpacing': '[\n  "0.605469",\n  "0.605469"\n]'}, {'collection_name': 'NLST', 'collection_id': 'nlst', 'PatientID': '111916', 'idc_case_id': '0c48f973-a8bb-493f-8479-34dd31d0df0a', 'StudyInstanceUID': '1.2.840.113654.2.55.321739936466302978441987047842606358921', 'SeriesInstanceUID': '1.2.840.113654.2.55.177630169322150231721484650076633097612', 'SOPInstanceUID': '1.2.840.113654.2.55.169820662853239776981123072671212105735', 'instance_size': 526610, 'tcia_api_collection_id': 'NLST', 'SeriesDate': None, 'Modality': 'CT', 'SeriesDescription': '1,OPA,GE,HSQX,STANDARD,350,2.5,120,56,0.1,1.5', 'BodyPartExamined': 'CHEST', 'SliceThickness': '2.500000', 'SpacingBetweenSlices': None, 'ExposureTime': '798', 'XRayTubeCurrent': '80', 'Exposure': '1380', 'ExposureInuAs': None, 'ExposureTimeInuS': None, 'ExposureTimeInms': None, 'XRayTubeCurrentInmA': None, 'ExposureInmAs': None, 'InstanceNumber': '114', 'ImagePositionPatient': '[\n  "-178.600006",\n  "-175.000000",\n  "-271.994995"\n]', 'SliceLocation': '-271.994995', 'PixelSpacing': '[\n  "0.683594",\n  "0.683594"\n]'}, {'collection_name': 'NLST', 'collection_id': 'nlst', 'PatientID': '105094', 'idc_case_id': '9e94ea23-01e5-4447-a72c-cb204537f440', 'StudyInstanceUID': '1.2.840.113654.2.55.238810784403423496900404050276632823832', 'SeriesInstanceUID': '1.2.840.113654.2.55.241127592238091291973528290810645287066', 'SOPInstanceUID': '1.2.840.113654.2.55.195670402165839899895759391289032265317', 'instance_size': 526608, 'tcia_api_collection_id': 'NLST', 'SeriesDate': None, 'Modality': 'CT', 'SeriesDescription': '1,OPA,GE,HSQX,STANDARD,350,2.5,120,56,0.1,1.5', 'BodyPartExamined': 'CHEST', 'SliceThickness': '2.500000', 'SpacingBetweenSlices': None, 'ExposureTime': '798', 'XRayTubeCurrent': '80', 'Exposure': '1222', 'ExposureInuAs': None, 'ExposureTimeInuS': None, 'ExposureTimeInms': None, 'XRayTubeCurrentInmA': None, 'ExposureInmAs': None, 'InstanceNumber': '72', 'ImagePositionPatient': '[\n  "-179.699997",\n  "-141.699997",\n  "-272.170013"\n]', 'SliceLocation': '-272.170013', 'PixelSpacing': '[\n  "0.683594",\n  "0.683594"\n]'}, {'collection_name': 'NLST', 'collection_id': 'nlst', 'PatientID': '131538', 'idc_case_id': '9f139ffd-7773-44fd-aa12-899d2c7f4975', 'StudyInstanceUID': '1.2.840.113654.2.55.65506226137788125731294707744660637427', 'SeriesInstanceUID': '1.2.840.113654.2.55.256299343016283789104389095516984631610', 'SOPInstanceUID': '1.2.840.113654.2.55.85167056264528248627639073741729153183', 'instance_size': 526602, 'tcia_api_collection_id': 'NLST', 'SeriesDate': None, 'Modality': 'CT', 'SeriesDescription': '1,OPA,GE,HSQX,STANDARD,350,2.5,120,56,0.1,1.5', 'BodyPartExamined': 'CHEST', 'SliceThickness': '2.500000', 'SpacingBetweenSlices': None, 'ExposureTime': '798', 'XRayTubeCurrent': '80', 'Exposure': '1203', 'ExposureInuAs': None, 'ExposureTimeInuS': None, 'ExposureTimeInms': None, 'XRayTubeCurrentInmA': None, 'ExposureInmAs': None, 'InstanceNumber': '69', 'ImagePositionPatient': '[\n  "-182.800003",\n  "-146.899994",\n  "-272.154999"\n]', 'SliceLocation': '-272.154999', 'PixelSpacing': '[\n  "0.683594",\n  "0.683594"\n]'}]
+--------------------------------------------------
+Table full name: IDC.IDC_V17.DICOM_METADATA_CURATED_SERIES_LEVEL
+Column name: SeriesInstanceUID Type: TEXT Description: DICOM SeriesInstanceUID
+Column name: Modality Type: TEXT Description: DICOM Modality
+Sample rows:
+[{'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.2103.7010.269874.1.2', 'Modality': 'KO'}, {'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.2103.7010.269874.1.1', 'Modality': 'KO'}, {'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.2103.7010.237254.1.2', 'Modality': 'KO'}, {'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.2103.7010.263376.2.1', 'Modality': 'KO'}, {'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.2103.7010.135953.2.2', 'Modality': 'KO'}]
+--------------------------------------------------
+Table full name: IDC.IDC_V17.DICOM_PIVOT
+Column name: BodyPartExamined Type: TEXT
+Column name: Modality Type: TEXT
+Column name: instance_size Type: NUMBER
+Column name: SeriesDescription Type: TEXT
+Column name: SOPInstanceUID Type: TEXT
+Column name: collection_id Type: TEXT
+Column name: SliceThickness Type: FLOAT
+Column name: SeriesInstanceUID Type: TEXT
+Column name: SeriesDate Type: DATE
+Column name: StudyInstanceUID Type: TEXT
+Column name: PatientID Type: TEXT
+Sample rows:
+[{'PatientID': 'UPENN-GBM-00513', 'BodyPartExamined': 'HEADNECK', 'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.185195136958159502142654387221547856729', 'SliceThickness': 5.0, 'SeriesDescription': 'ep2d_perf BOLUS_TERA', 'StudyInstanceUID': '1.3.6.1.4.1.14519.5.2.1.92084504364921012205012538829705733768', 'SOPInstanceUID': '1.3.6.1.4.1.14519.5.2.1.201644798538859159720916103279874451632', 'Modality': 'MR', 'collection_id': 'upenn_gbm', 'instance_size': 36948, 'SeriesDate': '2011-09-03'}, {'PatientID': 'UPENN-GBM-00519', 'BodyPartExamined': 'HEADNECK', 'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.285201929497843344185967283825964169195', 'SliceThickness': 4.0, 'SeriesDescription': 'ep2d_perf BOLUS_TERA', 'StudyInstanceUID': '1.3.6.1.4.1.14519.5.2.1.285969882316463253344322862464631605069', 'SOPInstanceUID': '1.3.6.1.4.1.14519.5.2.1.284648789561114483507224549503882513471', 'Modality': 'MR', 'collection_id': 'upenn_gbm', 'instance_size': 36970, 'SeriesDate': '2012-01-03'}, {'PatientID': 'UPENN-GBM-00416', 'BodyPartExamined': 'HEADNECK', 'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.75622442647298518363100372261560810525', 'SliceThickness': 4.0, 'SeriesDescription': 'ep2d_perf BOLUS_TERA', 'StudyInstanceUID': '1.3.6.1.4.1.14519.5.2.1.16570277643982576751137554563747012374', 'SOPInstanceUID': '1.3.6.1.4.1.14519.5.2.1.64715764737679289365432093996341540549', 'Modality': 'MR', 'collection_id': 'upenn_gbm', 'instance_size': 36916, 'SeriesDate': '2011-08-01'}, {'PatientID': 'UPENN-GBM-00473', 'BodyPartExamined': 'HEADNECK', 'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.135489908748676184571973467902447917371', 'SliceThickness': 3.5, 'SeriesDescription': 'ep2d_perf BOLUS_TERA', 'StudyInstanceUID': '1.3.6.1.4.1.14519.5.2.1.152520037553718269187855913202992933964', 'SOPInstanceUID': '1.3.6.1.4.1.14519.5.2.1.114859382544420303794672772499243450451', 'Modality': 'MR', 'collection_id': 'upenn_gbm', 'instance_size': 37022, 'SeriesDate': '2011-10-21'}, {'PatientID': 'UPENN-GBM-00459', 'BodyPartExamined': 'HEADNECK', 'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.152910459779232363967902946401636166563', 'SliceThickness': 3.0, 'SeriesDescription': 'ep2d_perf BOLUS_TERA', 'StudyInstanceUID': '1.3.6.1.4.1.14519.5.2.1.304279265306776379494650249168307485581', 'SOPInstanceUID': '1.3.6.1.4.1.14519.5.2.1.308657597317534610205545200298236188919', 'Modality': 'MR', 'collection_id': 'upenn_gbm', 'instance_size': 36962, 'SeriesDate': '2011-11-26'}]
+--------------------------------------------------
+External knowledge that might be helpful: 
+None
+The table structure information is ({database name: {schema name: [table name]}}): 
+{'IDC': {'IDC_V17': ['DICOM_METADATA', 'DICOM_METADATA_CURATED', 'AUXILIARY_METADATA', 'DICOM_ALL', 'DICOM_METADATA_CURATED_SERIES_LEVEL', 'DICOM_PIVOT']}}
+
+Some few-shot examples after column exploration may be helpful:
+Query:
+-- Description:
+-- Identify CT images in the `nlst` collection and their slice intervals (calculated as the difference between adjacent unique `SliceLocation` values)
+-- Filtered only for `Modality = CT` and `collection_id = 'nlst'`
+SELECT 
+    "PatientID", 
+    "SeriesInstanceUID", 
+    "SliceLocation" 
+FROM IDC.IDC_V17.DICOM_ALL 
+WHERE "Modality" = 'CT' AND "collection_id" = 'nlst'
+ORDER BY "PatientID", "SeriesInstanceUID", "SliceLocation" ASC
+LIMIT 20;
+Answer:
+PatientID,SeriesInstanceUID,SliceLocation
+100002,1.2.840.113654.2.55.122344168497038128022524906545138736420,-119.724998
+100002,1.2.840.113654.2.55.122344168497038128022524906545138736420,-129.725006
+100002,1.2.840.113654.2.55.122344168497038128022524906545138736420,-197.225006
+100002,1.2.840.113654.2.55.122344168497038128022524906545138736420,-272.225006
+100002,1.2.840.113654.2.55.122344168497038128022524906545138736420,-297.225006
+100002,1.2.840.113654.2.55.122344168497038128022524906545
+Query:
+-- Description:
+-- Find unique exposure values for CT images in the `nlst` collection. This step will help calculate exposure difference.
+-- Filtered only for `Modality = CT` and `collection_id = 'nlst'`
+SELECT 
+    "PatientID", 
+    "SeriesInstanceUID", 
+    "Exposure" 
+FROM IDC.IDC_V17.DICOM_ALL 
+WHERE "Modality" = 'CT' AND "collection_id" = 'nlst' AND "Exposure" IS NOT NULL
+GROUP BY "PatientID", "SeriesInstanceUID", "Exposure"
+ORDER BY "PatientID", "SeriesInstanceUID" ASC
+LIMIT 20;
+Answer:
+PatientID,SeriesInstanceUID,Exposure
+100002,1.2.840.113654.2.55.122344168497038128022524906545138736420,1799
+100002,1.2.840.113654.2.55.21461438679308812574178613217680405233,1852
+100002,1.2.840.113654.2.55.229650531101716203536241646069123704792,1759
+100002,1.2.840.113654.2.55.257926562693607663865369179341285235858,1759
+100002,1.2.840.113654.2.55.283399418711252976131557177419186072875,1852
+100002,1.2.840.113654.2.55.97114726565566537928831413367474015470,1799
+100004,1.2.840.113654.2.55
+Query:
+-- Description:
+-- Retrieve the instance sizes for all images in each series in the `nlst` collection to calculate the series size.
+-- This step is specific to determining sizes of series grouped by `SeriesInstanceUID`.
+SELECT 
+    "PatientID", 
+    "SeriesInstanceUID", 
+    SUM("instance_size") AS "SeriesSize"
+FROM IDC.IDC_V17.DICOM_ALL 
+WHERE "Modality" = 'CT' AND "collection_id" = 'nlst'
+GROUP BY "PatientID", "SeriesInstanceUID"
+ORDER BY "PatientID", "SeriesInstanceUID" ASC
+LIMIT 20;
+Answer:
+PatientID,SeriesInstanceUID,SeriesSize
+100002,1.2.840.113654.2.55.122344168497038128022524906545138736420,3159536
+100002,1.2.840.113654.2.55.21461438679308812574178613217680405233,1579810
+100002,1.2.840.113654.2.55.229650531101716203536241646069123704792,2633014
+100002,1.2.840.113654.2.55.257926562693607663865369179341285235858,526612
+100002,1.2.840.113654.2.55.283399418711252976131557177419186072875,2633066
+100002,1.2.840.113654.2.55.97114726565566537928831413367474015470,3686138
+100004,
+Query:
+-- Description:
+-- Extract unique `SliceLocation` values for patients and calculate the maximum and minimum slice locations in each series.
+-- This query retrieves a patient’s full slice location range across series.
+SELECT 
+    "PatientID", 
+    "SeriesInstanceUID", 
+    MAX(CAST("SliceLocation" AS FLOAT)) - MIN(CAST("SliceLocation" AS FLOAT)) AS "SliceInterval"
+FROM IDC.IDC_V17.DICOM_ALL
+WHERE "Modality" = 'CT' AND "collection_id" = 'nlst' AND "SliceLocation" IS NOT NULL
+GROUP BY "PatientID", "SeriesInstanceUID"
+ORDER BY "SliceInterval" DESC
+LIMIT 20;
+Answer:
+PatientID,SeriesInstanceUID,SliceInterval
+123669,1.2.840.113654.2.55.284380789748132792705066612318681327222,437.5
+212726,1.3.6.1.4.1.14519.5.2.1.7009.9004.315874160108103417232782408880,420.000001
+217640,1.3.6.1.4.1.14519.5.2.1.7009.9004.127853643169107304776004096381,415.5
+216085,1.3.6.1.4.1.14519.5.2.1.7009.9004.294450177857068329661177887575,406.5
+102826,1.2.840.113654.2.55.4877033276043245709268459440032122297,404.0
+215448,1.3.6.1.4.1.14519.5.2.1.7009.9004.2366320308930112633319898763
+Query:
+-- Description:
+-- Calculate the difference between maximum and minimum unique exposure values for patients across their series.
+-- This query retrieves a patient’s full exposure range across series.
+SELECT 
+    "PatientID", 
+    MAX(CAST("Exposure" AS FLOAT)) - MIN(CAST("Exposure" AS FLOAT)) AS "ExposureDifference"
+FROM IDC.IDC_V17.DICOM_ALL
+WHERE "Modality" = 'CT' AND "collection_id" = 'nlst' AND "Exposure" IS NOT NULL
+GROUP BY "PatientID"
+ORDER BY "ExposureDifference" DESC
+LIMIT 20;
+Answer:
+PatientID,ExposureDifference
+212691,7740.0
+109153,7170.0
+109939,7120.0
+130623,6806.0
+116786,6203.0
+121597,6081.0
+204900,5946.0
+217306,5359.0
+217604,5196.0
+104457,4961.0
+215936,4713.0
+120794,4480.0
+210706,4442.0
+205938,4333.0
+105362,4240.0
+213994,4220.0
+216538,4208.0
+208108,4208.0
+210200,4191.0
+205293,4187.0
+Query:
+-- Description:
+-- List the top 3 patients with the highest slice interval differences. 
+-- This query serves as a starting point to calculate these patients’ average series sizes.
+SELECT 
+    "PatientID", 
+    SUM("SeriesSize") / COUNT(DISTINCT "SeriesInstanceUID") AS "AvgSeriesSizeMiB"
+FROM (
+    SELECT 
+        "PatientID", 
+        "SeriesInstanceUID", 
+        SUM("instance_size") / (1024*1024) AS "SeriesSize"
+    FROM IDC.IDC_V17.DICOM_ALL 
+    WHERE "Modality" = 'CT' AND "collection_id" = 'nlst'
+    GROUP BY "PatientID", "SeriesInstanceUID"
+) T
+WHERE "PatientID" IN (
+    SELECT "PatientID" 
+    FROM (
+        SELECT "PatientID", MAX(CAST("SliceLocation" AS FLOAT)) - MIN(CAST("SliceLocation" AS FLOAT)) AS "SliceInterval"
+        FROM IDC.IDC_V17.DICOM_ALL
+        WHERE "Modality" = 'CT' AND "collection_id" = 'nlst' AND "SliceLocation" IS NOT NULL
+        GROUP BY "PatientID"
+    ) T2
+    ORDER BY "SliceInterval" DESC
+    LIMIT 3
+)
+GROUP BY "PatientID"
+ORDER BY "AvgSeriesSizeMiB" DESC
+LIMIT 20;
+Answer:
+PatientID,AvgSeriesSizeMiB
+111871,2.549048538462
+104196,1.969705076923
+112516,1.815230230769
+Query:
+-- Description:
+-- List the top 3 patients with the highest exposure differences.
+-- This query serves as a starting point to calculate these patients’ average series sizes.
+SELECT 
+    "PatientID", 
+    SUM("SeriesSize") / COUNT(DISTINCT "SeriesInstanceUID") AS "AvgSeriesSizeMiB"
+FROM (
+    SELECT 
+        "PatientID", 
+        "SeriesInstanceUID", 
+        SUM("instance_size") / (1024*1024) AS "SeriesSize"
+    FROM IDC.IDC_V17.DICOM_ALL 
+    WHERE "Modality" = 'CT' AND "collection_id" = 'nlst'
+    GROUP BY "PatientID", "SeriesInstanceUID"
+) T
+WHERE "PatientID" IN (
+    SELECT "PatientID" 
+    FROM (
+        SELECT "PatientID", MAX(CAST("Exposure" AS FLOAT)) - MIN(CAST("Exposure" AS FLOAT)) AS "ExposureDifference"
+        FROM IDC.IDC_V17.DICOM_ALL
+        WHERE "Modality" = 'CT' AND "collection_id" = 'nlst' AND "Exposure" IS NOT NULL
+        GROUP BY "PatientID"
+    ) T2
+    ORDER BY "ExposureDifference" DESC
+    LIMIT 3
+)
+GROUP BY "PatientID"
+ORDER BY "AvgSeriesSizeMiB" DESC
+LIMIT 20;
+Answer:
+PatientID,AvgSeriesSizeMiB
+109939,2.510589400000
+212691,1.633676000000
+109153,1.243711500000
+Query:
+-- Description:
+-- Final summary of the output for both metrics: 1) Top 3 by `SliceInterval` and 2) Top 3 by `ExposureDifference`.
+-- This query combines results to present in two labeled groups.
+SELECT
+  'Top 3 by Slice Interval' AS "Group",
+  AVG("AvgSeriesSizeMiB") AS "AverageSeriesSize"
+FROM (
+    SELECT 
+        "PatientID", 
+        SUM("SeriesSize") / COUNT(DISTINCT "SeriesInstanceUID") AS "AvgSeriesSizeMiB"
+    FROM (
+        SELECT 
+            "PatientID", 
+            "SeriesInstanceUID", 
+            SUM("instance_size") / (1024*1024) AS "SeriesSize"
+        FROM IDC.IDC_V17.DICOM_ALL 
+        WHERE "Modality" = 'CT' AND "collection_id" = 'nlst'
+        GROUP BY "PatientID", "SeriesInstanceUID"
+    ) T
+    WHERE "PatientID" IN (
+        SELECT "PatientID" 
+        FROM (
+            SELECT "PatientID", MAX(CAST("SliceLocation" AS FLOAT)) - MIN(CAST("SliceLocation" AS FLOAT)) AS "SliceInterval"
+            FROM IDC.IDC_V17.DICOM_ALL
+            WHERE "Modality" = 'CT' AND "collection_id" = 'nlst' AND "SliceLocation" IS NOT NULL
+            GROUP BY "PatientID"
+        ) T2
+        ORDER BY "SliceInterval" DESC
+        LIMIT 3
+    )
+    GROUP BY "PatientID"
+    UNION ALL
+    SELECT 
+        'Top 3 by Max Exposure' AS "Group",
+        AVG("AvgSeriesSizeMiB") AS "AverageSeriesSize"
+    FROM (
+        SELECT 
+            "PatientID", 
+            SUM("SeriesSize") / COUNT(DISTINCT "SeriesInstanceUID") AS "AvgSeriesSizeMiB"
+        FROM (
+            SELECT 
+                "PatientID", 
+                "SeriesInstanceUID", 
+                SUM("instance_size") / (1024*1024) AS "SeriesSize"
+            FROM IDC.IDC_V17.DICOM_ALL 
+            WHERE "Modality" = 'CT' AND "collection_id" = 'nlst'
+            GROUP BY "PatientID", "SeriesInstanceUID"
+        ) T
+        WHERE "PatientID" IN (
+            SELECT "PatientID" 
+            FROM (
+                SELECT "PatientID", MAX(CAST("Exposure" AS FLOAT)) - MIN(CAST("Exposure" AS FLOAT)) AS "ExposureDifference"
+                FROM IDC.IDC_V17.DICOM_ALL
+                WHERE "Modality" = 'CT' AND "collection_id" = 'nlst' AND "Exposure" IS NOT NULL
+                GROUP BY "PatientID"
+            ) T2
+            ORDER BY "ExposureDifference" DESC
+            LIMIT 3
+        )
+        GROUP BY "PatientID"
+    )
+);
+Answer:
+Group,AverageSeriesSize
+Top 3 by Slice Interval,2.032494036539
+Task: Using the 'nlst' collection's CT images, calculate and compare two separate metrics: 1) The average series size in MiB for the top 3 patients with the highest slice interval difference tolerance (defined as the difference between the maximum and minimum unique slice intervals across all their series), and 2) The average series size in MiB for the top 3 patients with the highest exposure difference (defined as the difference between the maximum and minimum unique exposure values across all their series). For each patient, calculate the series size by summing the instance sizes of all images in that series and converting to MiB. Return the results as two separate groups labeled "Top 3 by Slice Interval" and "Top 3 by Max Exposure" with their respective average series sizes.
+Another way to say it: What are the average series sizes in MiB for the top 3 patients with the highest slice interval difference tolerance and the top 3 patients with the highest maximum exposure difference, considering only CT images from the 'nlst' collection?
+
+Please think step by step and answer only one complete SQL in snowflake dialect in ```sql``` format.
+SQL usage example: ```sql
+SELECT "COLUMN_NAME" FROM DATABASE.SCHEMA.TABLE WHERE ... ``` (Adjust "DATABASE", "SCHEMA", and "TABLE" to match actual names, ensure all column names are enclosed in double quotations)
+Here are some useful tips for answering:
+When performing a UNION operation on many tables, ensure that all table names are explicitly listed. Union first and then add condition and selection. e.g. SELECT "col1", "col2" FROM (TABLE1 UNION ALL TABLE2) WHERE ...; Don't write sqls as (SELECT col1, col2 FROM TABLE1 WHERE ...) UNION ALL (SELECT col1, col2 FROM TABLE2 WHERE ...); Don't use ['-- Include all', '-- Omit', '-- Continue', '-- Union all', '-- ...', '-- List all', '-- Replace this', '-- Each table', '-- Add other'] to omit any table. Table names here: The table structure information is ({database name: {schema name: [table name]}}): 
+{'IDC': {'IDC_V17': ['DICOM_METADATA', 'DICOM_METADATA_CURATED', 'AUXILIARY_METADATA', 'DICOM_ALL', 'DICOM_METADATA_CURATED_SERIES_LEVEL', 'DICOM_PIVOT']}}
+
+When using ORDER BY xxx DESC, add NULLS LAST to exclude null records: ORDER BY xxx DESC NULLS LAST.
+When asked something without stating name or id, return both of them. e.g. Which products ...? The answer should include product_name and product_id.
+When asked percentage decrease, you should return a positive value. e.g. How many percentage points in 2021 decrease compared to ...? The answer should be a positive value indicating the decresed number. Try to use ABS().
+If asked two tables, you should reply with the last one instead of combining two tables. e.g. Identifying the top five states ... examine the state that ranks fourth overall and identify its top five counties. You should only answer top five counties.
+Use ST_DISTANCE to calculate distance between two geographic points for more accurate answer.
+If the task description does not specify the number of decimal places, retain all decimals to four places.
+
+[Self-refine]
+2025-07-01 04:41:50 - Thread-478 (execute) - INFO - [Try to run SQL in self-refine]
+```sql
+WITH SliceIntervalTop3 AS (
+    SELECT 
+        "PatientID", 
+        MAX(CAST("SliceLocation" AS FLOAT)) - MIN(CAST("SliceLocation" AS FLOAT)) AS "SliceInterval"
+    FROM IDC.IDC_V17.DICOM_ALL
+    WHERE "Modality" = 'CT' AND "collection_id" = 'nlst' AND "SliceLocation" IS NOT NULL
+    GROUP BY "PatientID"
+    ORDER BY "SliceInterval" DESC NULLS LAST
+    LIMIT 3
+),
+ExposureDifferenceTop3 AS (
+    SELECT 
+        "PatientID", 
+        MAX(CAST("Exposure" AS FLOAT)) - MIN(CAST("Exposure" AS FLOAT)) AS "ExposureDifference"
+    FROM IDC.IDC_V17.DICOM_ALL
+    WHERE "Modality" = 'CT' AND "collection_id" = 'nlst' AND "Exposure" IS NOT NULL
+    GROUP BY "PatientID"
+    ORDER BY "ExposureDifference" DESC NULLS LAST
+    LIMIT 3
+),
+SeriesSizes AS (
+    SELECT 
+        "PatientID", 
+        "SeriesInstanceUID", 
+        SUM("instance_size") / (1024 * 1024) AS "SeriesSizeMiB"
+    FROM IDC.IDC_V17.DICOM_ALL
+    WHERE "Modality" = 'CT' AND "collection_id" = 'nlst'
+    GROUP BY "PatientID", "SeriesInstanceUID"
+),
+SliceIntervalAvgSeriesSize AS (
+    SELECT 
+        'Top 3 by Slice Interval' AS "Group",
+        AVG("SeriesSizeMiB") AS "AverageSeriesSize"
+    FROM SeriesSizes
+    WHERE "PatientID" IN (SELECT "PatientID" FROM SliceIntervalTop3)
+),
+ExposureDifferenceAvgSeriesSize AS (
+    SELECT 
+        'Top 3 by Max Exposure' AS "Group",
+        AVG("SeriesSizeMiB") AS "AverageSeriesSize"
+    FROM SeriesSizes
+    WHERE "PatientID" IN (SELECT "PatientID" FROM ExposureDifferenceTop3)
+)
+SELECT * 
+FROM SliceIntervalAvgSeriesSize
+UNION ALL
+SELECT * 
+FROM ExposureDifferenceAvgSeriesSize;
+```
+[Try to run SQL in self-refine]
+2025-07-01 04:41:52 - Thread-478 (execute) - INFO - Total iteration counts: 0

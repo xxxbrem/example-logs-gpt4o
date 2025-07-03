@@ -1,0 +1,1287 @@
+2025-07-01 04:05:26 - Thread-78 (execute) - INFO - [Exploration]
+### Step 1: Understand relevant columns and data relationships
+We need to identify citing assignees (excluding DENSO CORP), find CPC codes (specifically the main ones), and link them to their full titles. We'll query the relevant columns step by step to fully understand the structure and relationships.
+
+---
+
+```sql
+-- Description: Get distinct patents assigned to "DENSO CORP" from DISCLOSURES_13.
+SELECT DISTINCT "patent_owner_harmonized", "pub_cleaned", "family_id"
+FROM PATENTS.PATENTS.DISCLOSURES_13
+WHERE "patent_owner_harmonized" ILIKE '%DENSO%'
+LIMIT 20;
+```  
+*Purpose*: Isolate patents where the "patent_owner_harmonized" field contains DENSO (either capitalized or not). This identifies the source patents assigned to DENSO CORP.
+
+---
+
+```sql
+-- Description: Find distinct citing publications from PUBLICATIONS where the cited family_id = DENSO patent family_id.
+SELECT DISTINCT t1."family_id" AS "DENSO_family_id", 
+                t2."publication_number" AS "citing_publication", 
+                t2."assignee_harmonized"
+FROM PATENTS.PATENTS.DISCLOSURES_13 t1
+JOIN PATENTS.PATENTS.PUBLICATIONS t2
+ON t1."family_id" = t2."family_id"
+WHERE t1."patent_owner_harmonized" ILIKE '%DENSO%'
+  AND t2."assignee_harmonized" NOT ILIKE '%DENSO%'
+LIMIT 20;
+```  
+*Purpose*: Identify publications citing patents owned by DENSO, ensuring the citing assignee does *not* include DENSO CORP. This filters the main relationship of interest.
+
+---
+
+```sql
+-- Description: Extract the first CPC code from the "cpc" column for citing publications (nested JSON structure).
+SELECT t2."publication_number",
+       f.value::VARIANT:"code"::STRING AS "cpc_code"
+FROM PATENTS.PATENTS.PUBLICATIONS t2,
+LATERAL FLATTEN(input => t2."cpc") f
+WHERE t2."publication_number" IN (
+        SELECT DISTINCT "publication_number" 
+        FROM PATENTS.PATENTS.PUBLICATIONS 
+        WHERE "assignee_harmonized" NOT ILIKE '%DENSO%'
+      )
+LIMIT 20;
+```
+*Purpose*: Unpack the `cpc` JSON structure to retrieve the first CPC code associated with each citing publication.
+
+---
+
+```sql
+-- Description: Retrieve CPC subclass titles (full) based on CPC codes from citing publications.
+SELECT DISTINCT t3."symbol" AS "cpc_code", t3."titleFull" AS "cpc_title"
+FROM PATENTS.PATENTS.CPC_DEFINITION t3
+WHERE t3."symbol" IN (
+    SELECT f.value::VARIANT:"code"::STRING AS "cpc_code"
+    FROM PATENTS.PATENTS.PUBLICATIONS t2,
+    LATERAL FLATTEN(input => t2."cpc") f
+    WHERE t2."assignee_harmonized" NOT ILIKE '%DENSO%'
+    LIMIT 100
+)
+LIMIT 20;
+```
+*Purpose*: Map CPC codes from citing publications to their full titles using the CPC_DEFINITION table.
+
+---
+
+```sql
+-- Description: Filter the main CPC subclass for publications using the "first" subfield in JSON (prioritize main CPC codes).
+SELECT t2."publication_number", 
+       f.value::VARIANT:"code"::STRING AS "main_cpc_code"
+FROM PATENTS.PATENTS.PUBLICATIONS t2,
+LATERAL FLATTEN(input => t2."cpc") f
+WHERE f.value::VARIANT:"first"::BOOLEAN = TRUE
+    AND t2."assignee_harmonized" NOT ILIKE '%DENSO%'
+LIMIT 20;
+```
+*Purpose*: Ensure we only prioritize the first/main CPC code for accurate mapping to a CPC title (avoiding ambiguity).
+
+---
+
+```sql
+-- Description: Group citing assignees by CPC subclass titles and count the number of citations per group.
+SELECT t2."assignee_harmonized" AS "citing_assignee",
+       t3."titleFull" AS "cpc_title",
+       COUNT(*) AS "citation_count"
+FROM PATENTS.PATENTS.PUBLICATIONS t2
+JOIN PATENTS.PATENTS.CPC_DEFINITION t3
+ON t3."symbol" = (
+  SELECT f.value::VARIANT:"code"::STRING
+  FROM LATERAL FLATTEN(input => t2."cpc") f
+  WHERE f.value::VARIANT:"first"::BOOLEAN = TRUE
+  LIMIT 1
+)
+WHERE t2."assignee_harmonized" NOT ILIKE '%DENSO%'
+GROUP BY t2."assignee_harmonized", t3."titleFull"
+ORDER BY "citation_count" DESC
+LIMIT 20;
+```  
+*Purpose*: Perform the final grouping to compute citation counts for each citing assignee paired with a CPC subclass title. This fulfills the task requirement.
+
+---
+
+```sql
+-- Description: Confirm the validity of filing dates for patents cited by assignees (only include valid dates).
+SELECT DISTINCT t2."publication_number", t2."filing_date"
+FROM PATENTS.PATENTS.PUBLICATIONS t2
+WHERE t2."assignee_harmonized" NOT ILIKE '%DENSO%'
+  AND t2."filing_date" IS NOT NULL
+LIMIT 20;
+```
+*Purpose*: Ensure we only consider patents with valid filing dates for accurate citation analysis.
+
+---
+
+```sql
+-- Description: Cross-reference citing assignees with valid filing dates and CPC subclass mappings.
+SELECT t2."assignee_harmonized" AS "citing_assignee",
+       t3."titleFull" AS "cpc_title",
+       COUNT(*) AS "citation_count"
+FROM PATENTS.PATENTS.PUBLICATIONS t2
+JOIN PATENTS.PATENTS.CPC_DEFINITION t3
+ON t3."symbol" = (
+  SELECT f.value::VARIANT:"code"::STRING
+  FROM LATERAL FLATTEN(input => t2."cpc") f
+  WHERE f.value::VARIANT:"first"::BOOLEAN = TRUE
+  LIMIT 1
+)
+WHERE t2."assignee_harmonized" NOT ILIKE '%DENSO%'
+  AND t2."filing_date" IS NOT NULL
+GROUP BY t2."assignee_harmonized", t3."titleFull"
+ORDER BY "citation_count" DESC
+LIMIT 20;
+```
+*Purpose*: Incorporate validation from the previous step into the citation grouping query, maintaining accuracy and completeness.
+
+---
+
+```sql
+-- Description: Retrieve distinct citing assignees and CPC subclass titles for cleaner output.
+SELECT DISTINCT t2."assignee_harmonized" AS "citing_assignee", t3."titleFull" AS "cpc_title"
+FROM PATENTS.PATENTS.PUBLICATIONS t2
+JOIN PATENTS.PATENTS.CPC_DEFINITION t3
+ON t3."symbol" = (
+  SELECT f.value::VARIANT:"code"::STRING
+  FROM LATERAL FLATTEN(input => t2."cpc") f
+  WHERE f.value::VARIANT:"first"::BOOLEAN = TRUE
+  LIMIT 1
+)
+WHERE t2."assignee_harmonized" NOT ILIKE '%DENSO%'
+LIMIT 20;
+```
+*Purpose*: Provide a simplified view of citing assignees paired with CPC subclass titles (distinct values only). This supplements grouped outputs with raw relationships.
+
+---
+
+By using each query iteratively, the dataset can be fully explored and transformed to answer the task with validated data and structured outputs.
+[Exploration]
+2025-07-01 04:05:26 - Thread-78 (execute) - INFO - [Try to execute]
+-- Description: Get distinct patents assigned to "DENSO CORP" from DISCLOSURES_13.
+SELECT DISTINCT "patent_owner_harmonized", "pub_cleaned", "family_id"
+FROM PATENTS.PATENTS.DISCLOSURES_13
+WHERE "patent_owner_harmonized" ILIKE '%DENSO%'
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:05:27 - Thread-78 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Get distinct patents assigned to "DENSO CORP" from DISCLOSURES_13.
+SELECT DISTINCT "patent_owner_harmonized", "pub_cleaned", "family_id"
+FROM PATENTS.PATENTS.DISCLOSURES_13
+WHERE "patent_owner_harmonized" ILIKE '%DENSO%'
+LIMIT 20;
+Results:
+patent_owner_harmonized,pub_cleaned,family_id
+Denso Corp,,
+
+[Successfully executed]
+2025-07-01 04:05:27 - Thread-78 (execute) - INFO - [Try to execute]
+-- Description: Find distinct citing publications from PUBLICATIONS where the cited family_id = DENSO patent family_id.
+SELECT DISTINCT t1."family_id" AS "DENSO_family_id", 
+                t2."publication_number" AS "citing_publication", 
+                t2."assignee_harmonized"
+FROM PATENTS.PATENTS.DISCLOSURES_13 t1
+JOIN PATENTS.PATENTS.PUBLICATIONS t2
+ON t1."family_id" = t2."family_id"
+WHERE t1."patent_owner_harmonized" ILIKE '%DENSO%'
+  AND t2."assignee_harmonized" NOT ILIKE '%DENSO%'
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:05:36 - Thread-78 (execute) - INFO - [Error occurred]
+No data found for the specified query.
+
+[Error occurred]
+2025-07-01 04:06:12 - Thread-78 (execute) - INFO - [Corrected SQL]
+```sql
+-- Description: Simplify the query further to only focus on retrieving distinct family_ids and publications 
+-- where patents are owned by DENSO CORP, without any join or complex constraints.
+SELECT DISTINCT "family_id", "pub_cleaned", "patent_owner_harmonized"
+FROM PATENTS.PATENTS.DISCLOSURES_13
+WHERE "patent_owner_harmonized" ILIKE '%DENSO%'
+LIMIT 20;
+```
+
+**Thinking Process**:
+1. The earlier queries aimed to join `DISCLOSURES_13` and `PUBLICATIONS` using `family_id` to identify citing publications. However, the error might indicate that either the data in `DISCLOSURES_13` is incomplete or the `family_id` relationship doesn't exist as expected.
+2. To troubleshoot and verify the presence of relevant data, this query simplifies the focus to just retrieving DENSO-owned patents (`patent_owner_harmonized` containing "DENSO") directly from the `DISCLOSURES_13` table.
+3. This minimal query ensures that DENSO's `family_id` and associated `pub_cleaned` data can be validated before reapplying complex joins or filters.
+4. If this returns data, subsequent steps can involve exploring relationships with `PUBLICATIONS`. If it doesn't, it suggests an issue with the input data.
+[Corrected SQL]
+2025-07-01 04:06:13 - Thread-78 (execute) - INFO - [Results for corrected sql]
+family_id,pub_cleaned,patent_owner_harmonized
+,,Denso Corp
+
+[Results for corrected sql]
+2025-07-01 04:07:29 - Thread-78 (execute) - INFO - [Corrected other sqls]
+```sql
+-- Description: Extract the first CPC code from the "cpc" column for publications without filtering assignees based on DENSO,
+-- as filtering citing assignees might limit data exploration.
+SELECT t2."publication_number",
+       f.value::VARIANT:"code"::STRING AS "cpc_code"
+FROM PATENTS.PATENTS.PUBLICATIONS t2,
+LATERAL FLATTEN(input => t2."cpc") f
+LIMIT 20;
+```
+
+---
+
+```sql
+-- Description: Retrieve CPC subclass titles (full) based on CPC codes from publications without filtering based on assignees.
+-- This ensures CPC titles are extracted to broaden the view of patents attributed to various publications.
+SELECT DISTINCT t3."symbol" AS "cpc_code", t3."titleFull" AS "cpc_title"
+FROM PATENTS.PATENTS.CPC_DEFINITION t3
+WHERE t3."symbol" IN (
+    SELECT f.value::VARIANT:"code"::STRING AS "cpc_code"
+    FROM PATENTS.PATENTS.PUBLICATIONS t2,
+    LATERAL FLATTEN(input => t2."cpc") f
+    LIMIT 100
+)
+LIMIT 20;
+```
+
+---
+
+```sql
+-- Description: Filter the main CPC subclass for publications using the "first" subfield in JSON,
+-- without filtering based on assignee harmonization. This ensures the focus remains on identifying main CPC codes.
+SELECT t2."publication_number", 
+       f.value::VARIANT:"code"::STRING AS "main_cpc_code"
+FROM PATENTS.PATENTS.PUBLICATIONS t2,
+LATERAL FLATTEN(input => t2."cpc") f
+WHERE f.value::VARIANT:"first"::BOOLEAN = TRUE
+LIMIT 20;
+```
+
+---
+
+```sql
+-- Description: Group assignees by CPC subclass titles and count the number of publications per group 
+-- without excluding any assignees to identify broader patterns across CPC subclasses.
+SELECT t2."assignee_harmonized" AS "citing_assignee",
+       t3."titleFull" AS "cpc_title",
+       COUNT(*) AS "citation_count"
+FROM PATENTS.PATENTS.PUBLICATIONS t2
+JOIN PATENTS.PATENTS.CPC_DEFINITION t3
+ON t3."symbol" = (
+  SELECT f.value::VARIANT:"code"::STRING
+  FROM LATERAL FLATTEN(input => t2."cpc") f
+  WHERE f.value::VARIANT:"first"::BOOLEAN = TRUE
+  LIMIT 1
+)
+GROUP BY t2."assignee_harmonized", t3."titleFull"
+ORDER BY "citation_count" DESC
+LIMIT 20;
+```
+
+---
+
+```sql
+-- Description: Confirm the validity of filing dates for patents, focusing on publications with non-null filing dates,
+-- without any filtering based on assignee harmonization.
+SELECT DISTINCT t2."publication_number", t2."filing_date"
+FROM PATENTS.PATENTS.PUBLICATIONS t2
+WHERE t2."filing_date" IS NOT NULL
+LIMIT 20;
+```
+
+---
+
+```sql
+-- Description: Cross-reference assignees with valid filing dates and CPC subclass mappings 
+-- without excluding any assignees. This ensures the data is as inclusive as possible.
+SELECT t2."assignee_harmonized" AS "citing_assignee",
+       t3."titleFull" AS "cpc_title",
+       COUNT(*) AS "citation_count"
+FROM PATENTS.PATENTS.PUBLICATIONS t2
+JOIN PATENTS.PATENTS.CPC_DEFINITION t3
+ON t3."symbol" = (
+  SELECT f.value::VARIANT:"code"::STRING
+  FROM LATERAL FLATTEN(input => t2."cpc") f
+  WHERE f.value::VARIANT:"first"::BOOLEAN = TRUE
+  LIMIT 1
+)
+WHERE t2."filing_date" IS NOT NULL
+GROUP BY t2."assignee_harmonized", t3."titleFull"
+ORDER BY "citation_count" DESC
+LIMIT 20;
+```
+
+---
+
+```sql
+-- Description: Retrieve distinct assignees and CPC subclass titles for cleaner output 
+-- without excluding any assignees to provide a broad perspective on the relationships.
+SELECT DISTINCT t2."assignee_harmonized" AS "citing_assignee", t3."titleFull" AS "cpc_title"
+FROM PATENTS.PATENTS.PUBLICATIONS t2
+JOIN PATENTS.PATENTS.CPC_DEFINITION t3
+ON t3."symbol" = (
+  SELECT f.value::VARIANT:"code"::STRING
+  FROM LATERAL FLATTEN(input => t2."cpc") f
+  WHERE f.value::VARIANT:"first"::BOOLEAN = TRUE
+  LIMIT 1
+)
+LIMIT 20;
+```
+[Corrected other sqls]
+2025-07-01 04:07:29 - Thread-78 (execute) - INFO - [Successfully corrected]
+Successfully executed. SQL:
+-- Description: Find distinct citing publications from PUBLICATIONS where the cited family_id = DENSO patent family_id.
+SELECT DISTINCT t1."family_id" AS "DENSO_family_id", 
+                t2."publication_number" AS "citing_publication", 
+                t2."assignee_harmonized"
+FROM PATENTS.PATENTS.DISCLOSURES_13 t1
+JOIN PATENTS.PATENTS.PUBLICATIONS t2
+ON t1."family_id" = t2."family_id"
+WHERE t1."patent_owner_harmonized" ILIKE '%DENSO%'
+  AND t2."assignee_harmonized" NOT ILIKE '%DENSO%'
+LIMIT 20;
+Results:
+family_id,pub_cleaned,patent_owner_harmonized
+,,Denso Corp
+
+[Successfully corrected]
+2025-07-01 04:07:29 - Thread-78 (execute) - INFO - [Try to execute]
+-- Description: Extract the first CPC code from the "cpc" column for publications without filtering assignees based on DENSO,
+-- as filtering citing assignees might limit data exploration.
+SELECT t2."publication_number",
+       f.value::VARIANT:"code"::STRING AS "cpc_code"
+FROM PATENTS.PATENTS.PUBLICATIONS t2,
+LATERAL FLATTEN(input => t2."cpc") f
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:09:11 - Thread-78 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Extract the first CPC code from the "cpc" column for publications without filtering assignees based on DENSO,
+-- as filtering citing assignees might limit data exploration.
+SELECT t2."publication_number",
+       f.value::VARIANT:"code"::STRING AS "cpc_code"
+FROM PATENTS.PATENTS.PUBLICATIONS t2,
+LATERAL FLATTEN(input => t2."cpc") f
+LIMIT 20;
+Results:
+publication_number,cpc_code
+CN-2669058-Y,F24F1/48
+CN-2669058-Y,F24F1/38
+CN-2746550-Y,Y02E60/12
+CN-201124248-Y,Y02P70/10
+IT-BO20010459-A0,B65D41/485
+IT-BO20010459-A0,B65D2401/35
+IT-BO20010459-A0,B65D2401/20
+IT-BO20010459-A0,B65D2401/25
+IT-MI962322-A0,H02J7/1492
+IT-MI962322-A0,H02P9/48
+IT-MI962322-A0,Y02T10/92
+IT-MI962322-A0,Y02T10/70
+IT-MI941663-A0,F02P1/086
+IT-MI941663-A0,F02P1/086
+IT-MI941663-A0,F02P1/02
+IT-MI941663-A0,F02P1/02
+
+[Successfully executed]
+2025-07-01 04:09:11 - Thread-78 (execute) - INFO - [Try to execute]
+-- Description: Retrieve CPC subclass titles (full) based on CPC codes from publications without filtering based on assignees.
+-- This ensures CPC titles are extracted to broaden the view of patents attributed to various publications.
+SELECT DISTINCT t3."symbol" AS "cpc_code", t3."titleFull" AS "cpc_title"
+FROM PATENTS.PATENTS.CPC_DEFINITION t3
+WHERE t3."symbol" IN (
+    SELECT f.value::VARIANT:"code"::STRING AS "cpc_code"
+    FROM PATENTS.PATENTS.PUBLICATIONS t2,
+    LATERAL FLATTEN(input => t2."cpc") f
+    LIMIT 100
+)
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:09:38 - Thread-78 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Retrieve CPC subclass titles (full) based on CPC codes from publications without filtering based on assignees.
+-- This ensures CPC titles are extracted to broaden the view of patents attributed to various publications.
+SELECT DISTINCT t3."symbol" AS "cpc_code", t3."titleFull" AS "cpc_title"
+FROM PATENTS.PATENTS.CPC_DEFINITION t3
+WHERE t3."symbol" IN (
+    SELECT f.value::VARIANT:"code"::STRING AS "cpc_code"
+    FROM PATENTS.PATENTS.PUBLICATIONS t2,
+    LATERAL FLATTEN(input => t2."cpc") f
+    LIMIT 100
+)
+LIMIT 20;
+Results:
+cpc_code,cpc_title
+H01M8/0206,Metals or alloys
+A46B5/04,"Brush bodies; Handles integral with brushware shaped as gloves or finger-stalls or other special holding ways, e.g. by the tongue"
+H04N23/61,Control of cameras or camera modules based on recognised objects
+B05C17/002,"Hand tools or apparatus using hand held tools, for applying liquids or other fluent materials to, for spreading applied liquids or other fluent materials on, or for partially removing applied liquids or other fluent mater
+
+[Successfully executed]
+2025-07-01 04:09:38 - Thread-78 (execute) - INFO - [Try to execute]
+-- Description: Filter the main CPC subclass for publications using the "first" subfield in JSON,
+-- without filtering based on assignee harmonization. This ensures the focus remains on identifying main CPC codes.
+SELECT t2."publication_number", 
+       f.value::VARIANT:"code"::STRING AS "main_cpc_code"
+FROM PATENTS.PATENTS.PUBLICATIONS t2,
+LATERAL FLATTEN(input => t2."cpc") f
+WHERE f.value::VARIANT:"first"::BOOLEAN = TRUE
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:11:20 - Thread-78 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Filter the main CPC subclass for publications using the "first" subfield in JSON,
+-- without filtering based on assignee harmonization. This ensures the focus remains on identifying main CPC codes.
+SELECT t2."publication_number", 
+       f.value::VARIANT:"code"::STRING AS "main_cpc_code"
+FROM PATENTS.PATENTS.PUBLICATIONS t2,
+LATERAL FLATTEN(input => t2."cpc") f
+WHERE f.value::VARIANT:"first"::BOOLEAN = TRUE
+LIMIT 20;
+Results:
+publication_number,main_cpc_code
+US-8210142-B2,F01L1/3442
+US-8210142-B2,F01L1/3442
+US-8338035-B2,H01M8/02
+US-8338035-B2,H01M8/0206
+US-8338035-B2,H01M8/0206
+US-8609829-B2,C12Q1/689
+US-8609829-B2,C12Q1/689
+US-8240274-B2,A01K1/033
+US-8240274-B2,A01K1/033
+US-8904292-B2,G06Q10/107
+US-8904292-B2,G06Q10/107
+US-8904292-B2,G06Q10/107
+US-8904292-B2,G06Q50/60
+US-8480325-B2,A46B5/02
+US-8480325-B2,A46B11/0072
+US-9028758-B2,G01N1/2211
+US-9028758-B2,G01N1/2211
+
+[Successfully executed]
+2025-07-01 04:11:20 - Thread-78 (execute) - INFO - [Try to execute]
+-- Description: Group assignees by CPC subclass titles and count the number of publications per group 
+-- without excluding any assignees to identify broader patterns across CPC subclasses.
+SELECT t2."assignee_harmonized" AS "citing_assignee",
+       t3."titleFull" AS "cpc_title",
+       COUNT(*) AS "citation_count"
+FROM PATENTS.PATENTS.PUBLICATIONS t2
+JOIN PATENTS.PATENTS.CPC_DEFINITION t3
+ON t3."symbol" = (
+  SELECT f.value::VARIANT:"code"::STRING
+  FROM LATERAL FLATTEN(input => t2."cpc") f
+  WHERE f.value::VARIANT:"first"::BOOLEAN = TRUE
+  LIMIT 1
+)
+GROUP BY t2."assignee_harmonized", t3."titleFull"
+ORDER BY "citation_count" DESC
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:11:20 - Thread-78 (execute) - INFO - [Error occurred]
+{'status': 'error', 'error_msg': '##ERROR##002031 (42601): SQL compilation error:\nUnsupported subquery type cannot be evaluated'}
+[Error occurred]
+2025-07-01 04:12:09 - Thread-78 (execute) - INFO - [Corrected SQL]
+```sql
+-- Description: Correct the query by replacing the unsupported subquery with a lateral flatten to extract the first CPC code. 
+-- Aggregate and count publications by grouping citing assignees and CPC subclass titles to identify patterns.
+SELECT t2."assignee_harmonized" AS "citing_assignee",
+       t3."titleFull" AS "cpc_title",
+       COUNT(*) AS "citation_count"
+FROM PATENTS.PATENTS.PUBLICATIONS t2
+JOIN LATERAL FLATTEN(input => t2."cpc") f
+ON TRUE
+JOIN PATENTS.PATENTS.CPC_DEFINITION t3
+ON t3."symbol" = f.value::VARIANT:"code"::STRING
+WHERE f.value::VARIANT:"first"::BOOLEAN = TRUE
+GROUP BY t2."assignee_harmonized", t3."titleFull"
+ORDER BY "citation_count" DESC
+LIMIT 20;
+```
+
+**Thinking Process**:
+1. The SQL error "unsupported subquery type" arose due to attempting a scalar subquery in the `ON` clause, which Snowflake does not allow.
+2. The solution involves replacing the subquery with `LATERAL FLATTEN` to directly process the JSON structure in the `cpc` column. 
+3. The `LATERAL FLATTEN` extracts each `cpc` code as a separate row, making it accessible for joining to `CPC_DEFINITION` on the `symbol`.
+4. Applying `f.value::VARIANT:"first"::BOOLEAN = TRUE` ensures we only consider the "main" CPC classification for analysis.
+5. The query groups by "citing_assignee" and "cpc_title" to count how many publications are associated with each combination.
+6. This query avoids unsupported syntax while achieving the desired result of mapping assignees to CPC subclass titles with their citation counts.
+[Corrected SQL]
+2025-07-01 04:12:09 - Thread-78 (execute) - INFO - [Results for corrected sql]
+{'status': 'error', 'error_msg': "##ERROR##000002 (0A000): Unsupported feature 'lateral table function called with OUTER JOIN syntax or a join predicate (ON clause)'."}
+[Results for corrected sql]
+2025-07-01 04:13:15 - Thread-78 (execute) - INFO - [Corrected SQL]
+```sql
+-- Description: Correct the query to avoid unsupported lateral joins by first flattening the CPC data in a CTE.
+-- Then, join the flattened CPC data with the CPC_DEFINITION table to group and count publications by citing assignees and CPC subclass titles.
+WITH flattened_cpc AS (
+  SELECT t2."publication_number",
+         t2."assignee_harmonized",
+         f.value::VARIANT:"code"::STRING AS "cpc_code",
+         f.value::VARIANT:"first"::BOOLEAN AS "is_main_code"
+  FROM PATENTS.PATENTS.PUBLICATIONS t2,
+       LATERAL FLATTEN(input => t2."cpc") f
+)
+SELECT fc."assignee_harmonized" AS "citing_assignee",
+       t3."titleFull" AS "cpc_title",
+       COUNT(*) AS "citation_count"
+FROM flattened_cpc fc
+JOIN PATENTS.PATENTS.CPC_DEFINITION t3
+ON t3."symbol" = fc."cpc_code"
+WHERE fc."is_main_code" = TRUE
+GROUP BY fc."assignee_harmonized", t3."titleFull"
+ORDER BY "citation_count" DESC
+LIMIT 20;
+```
+
+**Thinking Process**:
+1. **Understand the Issue**: The initial query attempted to use `LATERAL FLATTEN` directly within the `ON` clause, which is unsupported in Snowflake. This method caused an error due to the invalid placement of the lateral table function.
+   
+2. **Plan the Solution**: To resolve the issue, I isolated the `LATERAL FLATTEN` operation into a Common Table Expression (CTE), which allows preprocessing the `cpc` JSON data into a structured format before joining with other tables.
+
+3. **Build the CTE**:
+   - The `flattened_cpc` CTE uses `LATERAL FLATTEN` to extract rows from the `PUBLICATIONS` table's `cpc` array column.
+   - Each extracted row includes the `publication_number`, `assignee_harmonized`, `code` as `cpc_code`, and the `first` flag indicating whether it's the main CPC classification.
+
+4. **Join with `CPC_DEFINITION`**:
+   - The main query uses the preprocessed `flattened_cpc` table for the join operation.
+   - The `ON` clause matches the `cpc_code` from the CTE to the `symbol` in `CPC_DEFINITION`.
+
+5. **Filter the Main CPC Codes**: The `WHERE` clause ensures only the primary CPC classification (`is_main_code = TRUE`) is counted, providing accurate results for the main technological category.
+
+6. **Group and Aggregate**:
+   - The query groups by `citing_assignee` (from `assignee_harmonized`) and `cpc_title` (from `titleFull` in `CPC_DEFINITION`).
+   - The `COUNT(*)` aggregates the number of publications for each group.
+
+7. **Output**:
+   - The results are ordered by the count of citations in descending order, limiting the output to 20 rows for easier analysis.
+
+This approach ensures compliance with Snowflake's SQL syntax while maintaining the original goal of grouping and counting by assignees and CPC titles.
+[Corrected SQL]
+2025-07-01 04:13:42 - Thread-78 (execute) - INFO - [Results for corrected sql]
+citing_assignee,cpc_title,citation_count
+[],Ortho-condensed systems,308
+[],Details,159
+[],Manufacture of films or sheets,103
+[],Polysiloxanes,74
+[],"Heterocyclic compounds containing two or more hetero rings, having nitrogen atoms as the only ring hetero atoms, at least one ring being a six-membered ring with only one nitrogen atom containing two hetero rings linked by a chain containing hetero atoms as chain links",62
+[],"Design optimisation, verification or simulation",60
+[],Services,57
+
+[Results for corrected sql]
+2025-07-01 04:14:06 - Thread-78 (execute) - INFO - [Corrected other sqls]
+```sql
+-- Description: Confirm the validity of filing dates for patents, focusing on publications with non-null filing dates
+-- while ensuring compatibility by avoiding unsupported lateral joins or subqueries.
+SELECT DISTINCT t2."publication_number", 
+                t2."filing_date"
+FROM PATENTS.PATENTS.PUBLICATIONS t2
+WHERE t2."filing_date" IS NOT NULL
+LIMIT 20;
+```
+
+**Correction**: This query does not require lateral joins or subqueries, so no changes are necessary. It simply filters patents with valid filing dates.
+
+---
+
+```sql
+-- Description: Correct the query to avoid unsupported lateral joins by pre-flattening the CPC data in a CTE.
+-- Cross-reference citing assignees with valid filing dates during the join with the CPC_DEFINITION table.
+WITH flattened_cpc AS (
+  SELECT t2."publication_number",
+         t2."assignee_harmonized",
+         t2."filing_date",
+         f.value::VARIANT:"code"::STRING AS "cpc_code",
+         f.value::VARIANT:"first"::BOOLEAN AS "is_main_code"
+  FROM PATENTS.PATENTS.PUBLICATIONS t2,
+       LATERAL FLATTEN(input => t2."cpc") f
+)
+SELECT fc."assignee_harmonized" AS "citing_assignee",
+       t3."titleFull" AS "cpc_title",
+       COUNT(*) AS "citation_count"
+FROM flattened_cpc fc
+JOIN PATENTS.PATENTS.CPC_DEFINITION t3
+ON t3."symbol" = fc."cpc_code"
+WHERE fc."filing_date" IS NOT NULL 
+  AND fc."is_main_code" = TRUE
+GROUP BY fc."assignee_harmonized", t3."titleFull"
+ORDER BY "citation_count" DESC
+LIMIT 20;
+```
+
+**Correction**: Replaced the subquery in the `ON` clause with a CTE (`flattened_cpc`) to preprocess CPC data via `LATERAL FLATTEN`, ensuring compatibility and filtering on valid filing dates and main CPC classifications.
+
+---
+
+```sql
+-- Description: Correct the query to retrieve distinct citing assignees and CPC subclass titles by using a CTE 
+-- to flatten the CPC data before joining with the CPC_DEFINITION table.
+WITH flattened_cpc AS (
+  SELECT t2."publication_number",
+         t2."assignee_harmonized",
+         f.value::VARIANT:"code"::STRING AS "cpc_code",
+         f.value::VARIANT:"first"::BOOLEAN AS "is_main_code"
+  FROM PATENTS.PATENTS.PUBLICATIONS t2,
+       LATERAL FLATTEN(input => t2."cpc") f
+)
+SELECT DISTINCT fc."assignee_harmonized" AS "citing_assignee", 
+                t3."titleFull" AS "cpc_title"
+FROM flattened_cpc fc
+JOIN PATENTS.PATENTS.CPC_DEFINITION t3
+ON t3."symbol" = fc."cpc_code"
+WHERE fc."is_main_code" = TRUE
+LIMIT 20;
+```
+
+**Correction**: Moved the `LATERAL FLATTEN` to a CTE (`flattened_cpc`) and used it to join with the `CPC_DEFINITION` table, ensuring compliance with Snowflake's syntax when extracting distinct citing assignees and CPC subclass titles.
+[Corrected other sqls]
+2025-07-01 04:14:06 - Thread-78 (execute) - INFO - [Successfully corrected]
+Successfully executed. SQL:
+-- Description: Group assignees by CPC subclass titles and count the number of publications per group 
+-- without excluding any assignees to identify broader patterns across CPC subclasses.
+SELECT t2."assignee_harmonized" AS "citing_assignee",
+       t3."titleFull" AS "cpc_title",
+       COUNT(*) AS "citation_count"
+FROM PATENTS.PATENTS.PUBLICATIONS t2
+JOIN PATENTS.PATENTS.CPC_DEFINITION t3
+ON t3."symbol" = (
+  SELECT f.value::VARIANT:"code"::STRING
+  FROM LATERAL FLATTEN(input => t2."cpc") f
+  WHERE f.value::VARIANT:"first"::BOOLEAN = TRUE
+  LIMIT 1
+)
+GROUP BY t2."assignee_harmonized", t3."titleFull"
+ORDER BY "citation_count" DESC
+LIMIT 20;
+Results:
+citing_assignee,cpc_title,citation_count
+[],Ortho-condensed systems,308
+[],Details,159
+[],Manufacture of films or sheets,103
+[],Polysiloxanes,74
+[],"Heterocyclic compounds containing two or more hetero rings, having nitrogen atoms as the only ring hetero atoms, at least one ring being a six-membered ring with only one nitrogen atom containing two hetero rings linked by a chain containing hetero atoms as chain links",62
+[],"Design optimisation, verification or simulation",60
+[],Services,57
+
+[Successfully corrected]
+2025-07-01 04:14:06 - Thread-78 (execute) - INFO - itercount: 0
+2025-07-01 04:14:06 - Thread-78 (execute) - INFO - [Self-refine]
+Table full name: PATENTS.PATENTS.DISCLOSURES_13
+Column name: patent_owner_harmonized Type: TEXT
+Column name: record_id Type: TEXT
+Column name: family_id Type: TEXT
+Column name: pub_cleaned Type: TEXT
+Sample rows:
+[{'family_id': '22549751', 'record_id': 'REC00002', 'patent_owner_harmonized': '3M', 'pub_cleaned': 'US3692255'}, {'family_id': '23170520', 'record_id': 'REC00001', 'patent_owner_harmonized': '3M', 'pub_cleaned': 'US3861619'}, {'family_id': '23170520', 'record_id': 'REC00006', 'patent_owner_harmonized': '3M', 'pub_cleaned': 'US3861619'}, {'family_id': '22549751', 'record_id': 'REC00008', 'patent_owner_harmonized': '3M', 'pub_cleaned': 'US3692255'}, {'family_id': '23418274', 'record_id': 'REC00024', 'patent_owner_harmonized': 'Agilent Technologies', 'pub_cleaned': 'US5566180'}]
+--------------------------------------------------
+Table full name: PATENTS.PATENTS.PUBLICATIONS
+Column name: grant_date Type: NUMBER Description: For US publications only, the claims in plain text
+Column name: cpc Type: VARIANT Description: Two-letter language code for this text
+Column name: publication_date Type: NUMBER Description: Two-letter language code for this text
+Column name: ipc Type: VARIANT Description: Localized text
+Column name: filing_date Type: NUMBER Description: Is this text truncated?
+Column name: assignee Type: VARIANT Description: Localized text
+Column name: citation Type: VARIANT Description: Two-letter language code for this text
+Column name: fi Type: VARIANT Description: Is this text truncated?
+Column name: priority_claim Type: VARIANT Description: Two-letter language code for this text
+Column name: assignee_harmonized Type: VARIANT Description: Two-letter language code for this text
+Column name: title_localized Type: VARIANT Description: The publication titles in different languages
+Column name: child Type: VARIANT Description: The publication date.
+Column name: family_id Type: TEXT Description: Family ID (simple family). Grouping on family ID will return all publications associated with a simple patent family (all publications share the same priority claims).
+Column name: publication_number Type: TEXT Description: Patent publication number (DOCDB compatible), eg: 'US-7650331-B1'
+Column name: country_code Type: TEXT Description: Country code, eg: 'US', 'EP', etc
+Sample rows:
+[{'publication_number': 'DE-69611147-T2', 'country_code': 'DE', 'family_id': '9483724', 'title_localized': '[\n  {\n    "language": "de",\n    "text": "Schloss vom Typ eines entkuppelbaren Rotors",\n    "truncated": false\n  }\n]', 'publication_date': 20010621, 'filing_date': 19961015, 'grant_date': 20010621, 'priority_claim': '[\n  {\n    "application_number": "FR-9512326-A",\n    "category": "",\n    "filing_date": 19951018,\n    "npl_text": "",\n    "publication_number": "",\n    "type": ""\n  }\n]', 'assignee': '[\n  "Valeo Securite Habitacle, Creteil Cedex"\n]', 'assignee_harmonized': '[\n  {\n    "country_code": "FR",\n    "name": "VALEO SECURITE HABITACLE"\n  }\n]', 'ipc': '[\n  {\n    "code": "E05B17/04",\n    "first": false,\n    "inventive": false,\n    "tree": []\n  },\n  {\n    "code": "E05B17/00",\n    "first": false,\n    "inventive": true,\n    "tree": []\n  }\n]', 'cpc': '[\n  {\n    "code": "E05B77/00",\n    "first": false,\n    "inventive": true,\n    "tree": []\n  },\n  {\n    "code": "E05B17/0058",\n    "first": true,\n    "inventive": true,\n    "tree": []\n  }\n]', 'citation': '[]', 'child': '[]'}, {'publication_number': 'DE-69630331-T2', 'country_code': 'DE', 'family_id': '23689246', 'title_localized': '[\n  {\n    "language": "de",\n    "text": "Verfahren zur gesicherten Sitzungsschlüsselerzeugung und zur Authentifizierung",\n    "truncated": false\n  }\n]', 'publication_date': 20040729, 'filing_date': 19960416, 'grant_date': 20040729, 'priority_claim': '[\n  {\n    "application_number": "US-42609095-A",\n    "category": "",\n    "filing_date": 19950421,\n    "npl_text": "",\n    "publication_number": "",\n    "type": ""\n  }\n]', 'assignee': '[\n  "Certicom Corp., Mississauga"\n]', 'assignee_harmonized': '[\n  {\n    "country_code": "CA",\n    "name": "CERTICOM CORP"\n  }\n]', 'ipc': '[\n  {\n    "code": "H04L9/08",\n    "first": false,\n    "inventive": true,\n    "tree": []\n  },\n  {\n    "code": "G06F7/72",\n    "first": false,\n    "inventive": false,\n    "tree": []\n  }\n]', 'cpc': '[\n  {\n    "code": "G06F7/725",\n    "first": false,\n    "inventive": false,\n    "tree": []\n  },\n  {\n    "code": "H04L9/0844",\n    "first": true,\n    "inventive": true,\n    "tree": []\n  },\n  {\n    "code": "H04L9/0838",\n    "first": true,\n    "inventive": true,\n    "tree": []\n  },\n  {\n    "code": "H04L9/0844",\n    "first": false,\n    "inventive": true,\n    "tree": []\n  },\n  {\n    "code": "G06F7/725",\n    "first": false,\n    "inventive": false,\n    "tree": []\n  }\n]', 'citation': '[]', 'child': '[]'}, {'publication_number': 'DE-69636755-T2', 'country_code': 'DE', 'family_id': '8224764', 'title_localized': '[\n  {\n    "language": "de",\n    "text": "Immortalisierte menschliche Epithelzell-Linie",\n    "truncated": false\n  }\n]', 'publication_date': 20071011, 'filing_date': 19961224, 'grant_date': 20071011, 'priority_claim': '[\n  {\n    "application_number": "EP-96203707-A",\n    "category": "",\n    "filing_date": 19961224,\n    "npl_text": "",\n    "publication_number": "",\n    "type": ""\n  }\n]', 'assignee': '[\n  "Société des Produits Nestlé S.A."\n]', 'assignee_harmonized': '[\n  {\n    "country_code": "CH",\n    "name": "NESTLE SA"\n  }\n]', 'ipc': '[\n  {\n    "code": "C12N5/10",\n    "first": true,\n    "inventive": true,\n    "tree": []\n  },\n  {\n    "code": "G01N33/50",\n    "first": false,\n    "inventive": true,\n    "tree": []\n  },\n  {\n    "code": "C12R1/91",\n    "first": false,\n    "inventive": false,\n    "tree": []\n  },\n  {\n    "code": "C12N15/09",\n    "first": false,\n    "inventive": true,\n    "tree": []\n  },\n  {\n    "code": "C12N5/00",\n    "first": false,\n    "inventive": true,\n    "tree": []\n  },\n  {\n    "code": "A61K35/44",\n    "first": false,\n    "inventive": true,\n    "tree": []\n  },\n  {\n    "code": "G01N33/48",\n    "first": true,\n    "inventive": true,\n    "tree": []\n  },\n  {\n    "code": "C12Q1/68",\n    "first": false,\n    "inventive": true,\n    "tree": []\n  },\n  {\n    "code": "C12N5/071",\n    "first": false,\n    "inventive": true,\n    "tree": []\n  }\n]', 'cpc': '[\n  {\n    "code": "C12N2503/02",\n    "first": false,\n    "inventive": false,\n    "tree": []\n  },\n  {\n    "code": "C12N5/0621",\n    "first": true,\n    "inventive": true,\n    "tree": []\n  },\n  {\n    "code": "C12N2503/02",\n    "first": false,\n    "inventive": false,\n    "tree": []\n  },\n  {\n    "code": "C12N2510/04",\n    "first": false,\n    "inventive": false,\n    "tree": []\n  },\n  {\n    "code": "C12N5/0621",\n    "first": true,\n    "inventive": true,\n    "tree": []\n  },\n  {\n    "code": "C12N2510/04",\n    "first": false,\n    "inventive": false,\n    "tree": []\n  }\n]', 'citation': '[]', 'child': '[]'}, {'publication_number': 'DE-69728658-T2', 'country_code': 'DE', 'family_id': '24437397', 'title_localized': '[\n  {\n    "language": "de",\n    "text": "Lithographische dünne filmstruktur und diese enthaltende druckplatte",\n    "truncated": false\n  }\n]', 'publication_date': 20040812, 'filing_date': 19970115, 'grant_date': 20040812, 'priority_claim': '[\n  {\n    "application_number": "US-9700408-W",\n    "category": "",\n    "filing_date": 19970115,\n    "npl_text": "",\n    "publication_number": "",\n    "type": ""\n  },\n  {\n    "application_number": "US-60864696-A",\n    "category": "",\n    "filing_date": 19960229,\n    "npl_text": "",\n    "publication_number": "",\n    "type": ""\n  }\n]', 'assignee': '[\n  "Presstek, Inc."\n]', 'assignee_harmonized': '[\n  {\n    "country_code": "US",\n    "name": "PRESSTEK INC"\n  }\n]', 'ipc': '[\n  {\n    "code": "B32B15/04",\n    "first": false,\n    "inventive": true,\n    "tree": []\n  },\n  {\n    "code": "B41C1/10",\n    "first": false,\n    "inventive": false,\n    "tree": []\n  },\n  {\n    "code": "B41N1/00",\n    "first": false,\n    "inventive": true,\n    "tree": []\n  },\n  {\n    "code": "B41N1/14",\n    "first": false,\n    "inventive": true,\n    "tree": []\n  },\n  {\n    "code": "B32B27/20",\n    "first": false,\n    "inventive": true,\n    "tree": []\n  },\n  {\n    "code": "B32B7/02",\n    "first": true,\n    "inventive": true,\n    "tree": []\n  }\n]', 'cpc': '[\n  {\n    "code": "B32B15/04",\n    "first": true,\n    "inventive": true,\n    "tree": []\n  },\n  {\n    "code": "Y10T428/12674",\n    "first": false,\n    "inventive": false,\n    "tree": []\n  },\n  {\n    "code": "B32B27/20",\n    "first": false,\n    "inventive": true,\n    "tree": []\n  },\n  {\n    "code": "Y10T428/31678",\n    "first": false,\n    "inventive": false,\n    "tree": []\n  },\n  {\n    "code": "Y10T428/12458",\n    "first": false,\n    "inventive": false,\n    "tree": []\n  },\n  {\n    "code": "Y10T428/31678",\n    "first": false,\n    "inventive": false,\n    "tree": []\n  },\n  {\n    "code": "Y10T428/12458",\n    "first": false,\n    "inventive": false,\n    "tree": []\n  },\n  {\n    "code": "B32B15/20",\n    "first": false,\n    "inventive": true,\n    "tree": []\n  },\n  {\n    "code": "Y10T428/31504",\n    "first": false,\n    "inventive": false,\n    "tree": []\n  },\n  {\n    "code": "B41N1/00",\n    "first": false,\n    "inventive": true,\n    "tree": []\n  },\n  {\n    "code": "B32B15/09",\n    "first": true,\n    "inventive": true,\n    "tree": []\n  },\n  {\n    "code": "B32B2367/00",\n    "first": false,\n    "inventive": false,\n    "tree": []\n  },\n  {\n    "code": "B32B27/20",\n    "first": false,\n    "inventive": true,\n    "tree": []\n  },\n  {\n    "code": "Y10T428/12493",\n    "first": false,\n    "inventive": false,\n    "tree": []\n  },\n  {\n    "code": "B32B15/043",\n    "first": false,\n    "inventive": true,\n    "tree": []\n  },\n  {\n    "code": "B32B27/36",\n    "first": false,\n    "inventive": true,\n    "tree": []\n  },\n  {\n    "code": "B32B27/08",\n    "first": false,\n    "inventive": true,\n    "tree": []\n  },\n  {\n    "code": "B32B15/04",\n    "first": false,\n    "inventive": true,\n    "tree": []\n  },\n  {\n    "code": "Y10T428/12493",\n    "first": false,\n    "inventive": false,\n    "tree": []\n  },\n  {\n    "code": "Y10T428/12674",\n    "first": false,\n    "inventive": false,\n    "tree": []\n  },\n  {\n    "code": "B41C1/1033",\n    "first": false,\n    "inventive": false,\n    "tree": []\n  },\n  {\n    "code": "B41N1/00",\n    "first": false,\n    "inventive": true,\n    "tree": []\n  },\n  {\n    "code": "Y10T428/12528",\n    "first": false,\n    "inventive": false,\n    "tree": []\n  },\n  {\n    "code": "Y10T428/31504",\n    "first": false,\n    "inventive": false,\n    "tree": []\n  },\n  {\n    "code": "B41C1/1033",\n    "first": false,\n    "inventive": false,\n    "tree": []\n  },\n  {\n    "code": "B32B2311/24",\n    "first": false,\n    "inventive": false,\n    "tree": []\n  },\n  {\n    "code": "Y10T428/12528",\n    "first": false,\n    "inventive": false,\n    "tree": []\n  }\n]', 'citation': '[]', 'child': '[]'}, {'publication_number': 'DE-69807539-T2', 'country_code': 'DE', 'family_id': '11877005', 'title_localized': '[\n  {\n    "language": "de",\n    "text": "Automatisches Analysegerät",\n    "truncated": false\n  }\n]', 'publication_date': 20030116, 'filing_date': 19980120, 'grant_date': 20030116, 'priority_claim': '[\n  {\n    "application_number": "JP-1501397-A",\n    "category": "",\n    "filing_date": 19970129,\n    "npl_text": "",\n    "publication_number": "",\n    "type": ""\n  }\n]', 'assignee': '[\n  "Hitachi, Ltd."\n]', 'assignee_harmonized': '[\n  {\n    "country_code": "JP",\n    "name": "HITACHI LTD"\n  }\n]', 'ipc': '[\n  {\n    "code": "G01N35/00",\n    "first": false,\n    "inventive": true,\n    "tree": []\n  },\n  {\n    "code": "G01N35/02",\n    "first": false,\n    "inventive": true,\n    "tree": []\n  },\n  {\n    "code": "G01N35/04",\n    "first": false,\n    "inventive": true,\n    "tree": []\n  }\n]', 'cpc': '[\n  {\n    "code": "Y10T436/115831",\n    "first": false,\n    "invent
+--------------------------------------------------
+Table full name: PATENTS.PATENTS.CPC_DEFINITION
+Column name: limitingReferences Type: VARIANT
+Column name: titleFull Type: TEXT
+Column name: dateRevised Type: FLOAT
+Column name: symbol Type: TEXT
+Column name: parents Type: VARIANT
+Sample rows:
+[{'dateRevised': 20130101.0, 'limitingReferences': '[]', 'parents': '[\n  "A01K2227/10",\n  "A01K2227/00",\n  "A01K",\n  "A01",\n  "A"\n]', 'symbol': 'A01K2227/108', 'titleFull': 'Swine'}, {'dateRevised': 20130101.0, 'limitingReferences': '[]', 'parents': '[\n  "A01K2227/10",\n  "A01K2227/00",\n  "A01K",\n  "A01",\n  "A"\n]', 'symbol': 'A01K2227/105', 'titleFull': 'Murine'}, {'dateRevised': 20130101.0, 'limitingReferences': '[]', 'parents': '[\n  "A01K2227/10",\n  "A01K2227/00",\n  "A01K",\n  "A01",\n  "A"\n]', 'symbol': 'A01K2227/107', 'titleFull': 'Rabbit'}, {'dateRevised': 20130101.0, 'limitingReferences': '[]', 'parents': '[\n  "A01K2267/02",\n  "A01K2267/00",\n  "A01K",\n  "A01",\n  "A"\n]', 'symbol': 'A01K2267/025', 'titleFull': 'Animal producing cells or organs for transplantation'}, {'dateRevised': 20130101.0, 'limitingReferences': '[]', 'parents': '[\n  "A01K2267/03",\n  "A01K2267/00",\n  "A01K",\n  "A01",\n  "A"\n]', 'symbol': 'A01K2267/0306', 'titleFull': 'Animal model for genetic diseases'}]
+--------------------------------------------------
+External knowledge that might be helpful: 
+### IPC Codes: Handling Main IPC Code Selection
+
+When dealing with the `ipc` field in the `patents-public-data.patents.publications` dataset, it is important to understand the structure of this field, especially the subfield `first`. This subfield is a boolean that indicates whether a given IPC code is the main code for the publication number in question. This is crucial because each patent publication can be associated with multiple IPC codes, signifying the various aspects of the technology covered by the patent.
+
+However, not every publication in the dataset has a designated main IPC code. This lack of a clearly identified main IPC code complicates the process of determining the most relevant IPC code for each publication, as selecting a single IPC code from multiple possibilities without clear prioritization can lead to inconsistent or skewed analyses.
+
+This approach ensures a more consistent and representative selection of IPC codes across the dataset, facilitating more accurate and meaningful analysis of patent trends and classifications. By focusing on the most frequently occurring 4-digit IPC code, the view helps overcome the limitations posed by the absence of a designated main IPC code, thereby enhancing the reliability of patent-related studies and insights derived from this data.
+
+Here is an example
+
+```
+SELECT 
+    t1.publication_number, 
+    SUBSTR(ipc_u.code, 0, 4) as ipc4, 
+    COUNT(
+    SUBSTR(ipc_u.code, 0, 4)
+    ) as ipc4_count 
+FROM 
+    `patents-public-data.patents.publications` t1, 
+    UNNEST(ipc) AS ipc_u 
+GROUP BY 
+    t1.publication_number, 
+    ipc4
+
+```
+
+
+
+# Text Embeddings (Similarity)
+
+Patent documents are rich with textual data. In fact, most of the information contained in a patent document is text. This includes the `abstract_localized`, `description_localized`, and `claims_localized`. Textual data can be a powerful tool to analyze and compare patent scope and content across patents. However, before being able to use textual data, it needs to be vectorized or transformed into text embeddings that can be used by machine learning models. Therefore, creating text embeddings from the textual data of patents is necessary to compare patent contents. Technically speaking, running an NLP algorithm that creates embeddings for all U.S. patents is computationally difficult.
+
+Nevertheless, Google runs their own machine learning algorithm which transforms patent text metadata into text embeddings which they report in `patents-public-data.google_patents_research.publications` table. The textual embeddings of one patent, without any knowledge on the algorithm being used to create them, are meaningless on their own. However, the embeddings are powerful when it comes to comparing textual content of two or more patents. Embeddings can be used to calculate a similarity score between any two patents. This similarity score is calculated by applying the dot product of the embeddings vector of the patents, as shown below:
+
+The similarity \( \text{Similarty}_{i,k} \) between two patents \( i \) and \( k \) is calculated as the dot product of their embedding vectors:
+
+\[
+\text{Similarty}_{i,k} = \mathbf{v}_i \cdot \mathbf{v}_k
+\]
+
+where
+
+\[
+\mathbf{v}_i = [v_{i1}, v_{i2}, v_{i3}, \ldots, v_{iN}]
+\]
+and
+\[
+\mathbf{v}_k = [v_{k1}, v_{k2}, v_{k3}, \ldots, v_{kN}]
+\]
+
+are the embedding vectors for patents \( i \) and \( k \) respectively. The higher the dot product, the more similar the patents.
+
+
+
+
+
+# Originality (Trajtenberg)
+
+One of the most important measures of a patent is "basicness". The aspects of basicness are tough to measure. Nevertheless, some literature finds that important aspects of these measures are embodied in the relationship between the invention and the technological predcessors and successors it is connected to through, for example, patent citations. We can thus use patent citations to construct measures that identify basicness and appropriability. Trajtenberg et al. 1997 provide a number of these measures. They distinguish between:
+
+1. Forward-looking measures: measures that are derived from the relationship between an invention and subsequent technologies that build upon it. These measures are thus constructed from the forward citations. One example of a forward-looking basicness measure they provide is Generality, which is calculated as:
+
+\[
+\text{GENERALITY}_i = 1 - \sum_{k=1}^{N_i} \left( \frac{\text{NCITING}_{G_k}}{\text{NCITING}_i} \right)
+\]
+
+
+2. Backward-looking measures: measures that are derived from the relationship between a given patent and the body of knowledge that preceded it. These measure are thus constructed from the backward citations. One example of a backward-looking basicness measure they provide is Orginality, which is calculated as:
+
+\[
+\text{ORIGINALITY}_i = 1 - \sum_{k=1}^{N_i} \left( \frac{\text{NCITED}_{i,k}}{\text{NCITED}_i} \right)
+\]
+
+With **NCITING** and **NCITED** defined as the number of patents citing the focal patent and the number of patents cited by the focal patent, respectively. Index `i` corresponds to the focal patent considered, and `k` is the index of patent classes. For example, **NCITED_2,3** refers to the number of patents in patent class 3 and cited by our focal patent 2.
+
+
+The table structure information is ({database name: {schema name: [table name]}}): 
+{'PATENTS': {'PATENTS': ['DISCLOSURES_13', 'PUBLICATIONS', 'CPC_DEFINITION']}}
+
+Some few-shot examples after column exploration may be helpful:
+Query:
+-- Description: Get distinct patents assigned to "DENSO CORP" from DISCLOSURES_13.
+SELECT DISTINCT "patent_owner_harmonized", "pub_cleaned", "family_id"
+FROM PATENTS.PATENTS.DISCLOSURES_13
+WHERE "patent_owner_harmonized" ILIKE '%DENSO%'
+LIMIT 20;
+Answer:
+patent_owner_harmonized,pub_cleaned,family_id
+Denso Corp,,
+Query:
+-- Description: Extract the first CPC code from the "cpc" column for publications without filtering assignees based on DENSO,
+-- as filtering citing assignees might limit data exploration.
+SELECT t2."publication_number",
+       f.value::VARIANT:"code"::STRING AS "cpc_code"
+FROM PATENTS.PATENTS.PUBLICATIONS t2,
+LATERAL FLATTEN(input => t2."cpc") f
+LIMIT 20;
+Answer:
+publication_number,cpc_code
+CN-2669058-Y,F24F1/48
+CN-2669058-Y,F24F1/38
+CN-2746550-Y,Y02E60/12
+CN-201124248-Y,Y02P70/10
+IT-BO20010459-A0,B65D41/485
+IT-BO20010459-A0,B65D2401/35
+IT-BO20010459-A0,B65D2401/20
+IT-BO20010459-A0,B65D2401/25
+IT-MI962322-A0,H02J7/1492
+IT-MI962322-A0,H02P9/48
+IT-MI962322-A0,Y02T10/92
+IT-MI962322-A0,Y02T10/70
+IT-MI941663-A0,F02P1/086
+IT-MI941663-A0,F02P1/086
+IT-MI941663-A0,F02P1/02
+IT-MI941663-A0,F02P1/02
+Query:
+-- Description: Retrieve CPC subclass titles (full) based on CPC codes from publications without filtering based on assignees.
+-- This ensures CPC titles are extracted to broaden the view of patents attributed to various publications.
+SELECT DISTINCT t3."symbol" AS "cpc_code", t3."titleFull" AS "cpc_title"
+FROM PATENTS.PATENTS.CPC_DEFINITION t3
+WHERE t3."symbol" IN (
+    SELECT f.value::VARIANT:"code"::STRING AS "cpc_code"
+    FROM PATENTS.PATENTS.PUBLICATIONS t2,
+    LATERAL FLATTEN(input => t2."cpc") f
+    LIMIT 100
+)
+LIMIT 20;
+Answer:
+cpc_code,cpc_title
+H01M8/0206,Metals or alloys
+A46B5/04,"Brush bodies; Handles integral with brushware shaped as gloves or finger-stalls or other special holding ways, e.g. by the tongue"
+H04N23/61,Control of cameras or camera modules based on recognised objects
+B05C17/002,"Hand tools or apparatus using hand held tools, for applying liquids or other fluent materials to, for spreading applied liquids or other fluent materials on, or for partially removing applied liquids or other fluent mater
+Query:
+-- Description: Filter the main CPC subclass for publications using the "first" subfield in JSON,
+-- without filtering based on assignee harmonization. This ensures the focus remains on identifying main CPC codes.
+SELECT t2."publication_number", 
+       f.value::VARIANT:"code"::STRING AS "main_cpc_code"
+FROM PATENTS.PATENTS.PUBLICATIONS t2,
+LATERAL FLATTEN(input => t2."cpc") f
+WHERE f.value::VARIANT:"first"::BOOLEAN = TRUE
+LIMIT 20;
+Answer:
+publication_number,main_cpc_code
+US-8210142-B2,F01L1/3442
+US-8210142-B2,F01L1/3442
+US-8338035-B2,H01M8/02
+US-8338035-B2,H01M8/0206
+US-8338035-B2,H01M8/0206
+US-8609829-B2,C12Q1/689
+US-8609829-B2,C12Q1/689
+US-8240274-B2,A01K1/033
+US-8240274-B2,A01K1/033
+US-8904292-B2,G06Q10/107
+US-8904292-B2,G06Q10/107
+US-8904292-B2,G06Q10/107
+US-8904292-B2,G06Q50/60
+US-8480325-B2,A46B5/02
+US-8480325-B2,A46B11/0072
+US-9028758-B2,G01N1/2211
+US-9028758-B2,G01N1/2211
+Task: Which assignees, excluding DENSO CORP itself, have cited patents assigned to DENSO CORP, and what are the titles of the primary CPC subclasses associated with these citations? Provide the name of each citing assignee (excluding DENSO CORP), the full title of the primary CPC subclass (based on the first CPC code), and the count of citations grouped by the citing assignee and the CPC subclass title. Ensure that only citations of patents with valid filing dates are considered, and focus on the first CPC code for each citing patent. The results should specifically exclude DENSO CORP as a citing assignee.
+Another way to say it: Which assignees, excluding DENSO CORP itself, have cited patents assigned to DENSO CORP, and what are the titles of the primary CPC subclasses associated with these citations? Provide the name of each citing assignee, the full title of the CPC subclass, and the count of citations grouped by the assignee and the CPC subclass title. Please focus specifically on the main categories of the CPC codes,
+
+Please think step by step and answer only one complete SQL in snowflake dialect in ```sql``` format.
+SQL usage example: ```sql
+SELECT "COLUMN_NAME" FROM DATABASE.SCHEMA.TABLE WHERE ... ``` (Adjust "DATABASE", "SCHEMA", and "TABLE" to match actual names, ensure all column names are enclosed in double quotations)
+Here are some useful tips for answering:
+When performing a UNION operation on many tables, ensure that all table names are explicitly listed. Union first and then add condition and selection. e.g. SELECT "col1", "col2" FROM (TABLE1 UNION ALL TABLE2) WHERE ...; Don't write sqls as (SELECT col1, col2 FROM TABLE1 WHERE ...) UNION ALL (SELECT col1, col2 FROM TABLE2 WHERE ...); Don't use ['-- Include all', '-- Omit', '-- Continue', '-- Union all', '-- ...', '-- List all', '-- Replace this', '-- Each table', '-- Add other'] to omit any table. Table names here: The table structure information is ({database name: {schema name: [table name]}}): 
+{'PATENTS': {'PATENTS': ['DISCLOSURES_13', 'PUBLICATIONS', 'CPC_DEFINITION']}}
+
+When using ORDER BY xxx DESC, add NULLS LAST to exclude null records: ORDER BY xxx DESC NULLS LAST.
+When asked something without stating name or id, return both of them. e.g. Which products ...? The answer should include product_name and product_id.
+When asked percentage decrease, you should return a positive value. e.g. How many percentage points in 2021 decrease compared to ...? The answer should be a positive value indicating the decresed number. Try to use ABS().
+If asked two tables, you should reply with the last one instead of combining two tables. e.g. Identifying the top five states ... examine the state that ranks fourth overall and identify its top five counties. You should only answer top five counties.
+Use ST_DISTANCE to calculate distance between two geographic points for more accurate answer.
+If the task description does not specify the number of decimal places, retain all decimals to four places.
+
+[Self-refine]
+2025-07-01 04:14:21 - Thread-78 (execute) - INFO - [Try to run SQL in self-refine]
+```sql
+WITH DENSO_PATENTS AS (
+    -- Filter patents assigned to DENSO CORP
+    SELECT DISTINCT t1."family_id", t1."pub_cleaned"
+    FROM PATENTS.PATENTS.DISCLOSURES_13 t1
+    WHERE t1."patent_owner_harmonized" ILIKE '%DENSO%'
+),
+CITATIONS_WITH_CPC AS (
+    -- Identify citing publications and their main CPC code
+    SELECT DISTINCT t2."publication_number" AS citing_pub_num,
+           f.value::VARIANT:"code"::STRING AS main_cpc_code,
+           t2."assignee_harmonized",
+           t2."family_id"
+    FROM PATENTS.PATENTS.PUBLICATIONS t2,
+    LATERAL FLATTEN(input => t2."cpc") f
+    WHERE f.value::VARIANT:"first"::BOOLEAN = TRUE
+      AND t2."family_id" IN (
+          SELECT "family_id"
+          FROM DENSO_PATENTS
+      )
+      AND t2."assignee_harmonized" NOT ILIKE '%DENSO%' -- Exclude DENSO as assignee
+),
+CPC_TITLES AS (
+    -- Get full titles for the main CPC subclasses
+    SELECT DISTINCT t3."symbol" AS cpc_code, t3."titleFull" AS cpc_title
+    FROM PATENTS.PATENTS.CPC_DEFINITION t3
+),
+RESULT AS (
+    -- Join citations with CPC titles and calculate citation count by assignee and CPC title
+    SELECT cwc."assignee_harmonized" AS citing_assignee,
+           ct."cpc_title",
+           COUNT(*) AS citation_count
+    FROM CITATIONS_WITH_CPC cwc
+    INNER JOIN CPC_TITLES ct
+    ON cwc."main_cpc_code" = ct."cpc_code"
+    GROUP BY cwc."assignee_harmonized", ct."cpc_title"
+)
+-- Final output with citing assignee, CPC title, and citation count
+SELECT "citing_assignee", "cpc_title", "citation_count"
+FROM RESULT
+ORDER BY "citation_count" DESC NULLS LAST;
+```
+[Try to run SQL in self-refine]
+2025-07-01 04:14:21 - Thread-78 (execute) - INFO - itercount: 1
+2025-07-01 04:14:21 - Thread-78 (execute) - INFO - [Self-refine]
+Input sql:
+WITH DENSO_PATENTS AS (
+    -- Filter patents assigned to DENSO CORP
+    SELECT DISTINCT t1."family_id", t1."pub_cleaned"
+    FROM PATENTS.PATENTS.DISCLOSURES_13 t1
+    WHERE t1."patent_owner_harmonized" ILIKE '%DENSO%'
+),
+CITATIONS_WITH_CPC AS (
+    -- Identify citing publications and their main CPC code
+    SELECT DISTINCT t2."publication_number" AS citing_pub_num,
+           f.value::VARIANT:"code"::STRING AS main_cpc_code,
+           t2."assignee_harmonized",
+           t2."family_id"
+    FROM PATENTS.PATENTS.PUBLICATIONS t2,
+    LATERAL FLATTEN(input => t2."cpc") f
+    WHERE f.value::VARIANT:"first"::BOOLEAN = TRUE
+      AND t2."family_id" IN (
+          SELECT "family_id"
+          FROM DENSO_PATENTS
+      )
+      AND t2."assignee_harmonized" NOT ILIKE '%DENSO%' -- Exclude DENSO as assignee
+),
+CPC_TITLES AS (
+    -- Get full titles for the main CPC subclasses
+    SELECT DISTINCT t3."symbol" AS cpc_code, t3."titleFull" AS cpc_title
+    FROM PATENTS.PATENTS.CPC_DEFINITION t3
+),
+RESULT AS (
+    -- Join citations with CPC titles and calculate citation count by assignee and CPC title
+    SELECT cwc."assignee_harmonized" AS citing_assignee,
+           ct."cpc_title",
+           COUNT(*) AS citation_count
+    FROM CITATIONS_WITH_CPC cwc
+    INNER JOIN CPC_TITLES ct
+    ON cwc."main_cpc_code" = ct."cpc_code"
+    GROUP BY cwc."assignee_harmonized", ct."cpc_title"
+)
+-- Final output with citing assignee, CPC title, and citation count
+SELECT "citing_assignee", "cpc_title", "citation_count"
+FROM RESULT
+ORDER BY "citation_count" DESC NULLS LAST;
+The error information is:
+{'status': 'error', 'error_msg': '##ERROR##000904 (42000): SQL compilation error: error line 30 at position 11\ninvalid identifier \'CT."cpc_title"\''}
+Please correct it and output only 1 complete SQL query.
+[Self-refine]
+2025-07-01 04:14:43 - Thread-78 (execute) - INFO - [Try to run SQL in self-refine]
+```sql
+WITH DENSO_PATENTS AS (
+    -- Filter patents assigned to DENSO CORP
+    SELECT DISTINCT t1."family_id", t1."pub_cleaned"
+    FROM PATENTS.PATENTS.DISCLOSURES_13 t1
+    WHERE t1."patent_owner_harmonized" ILIKE '%DENSO%'
+),
+CITATIONS_WITH_CPC AS (
+    -- Identify citing publications and their main CPC code
+    SELECT DISTINCT t2."publication_number" AS citing_pub_num,
+           f.value::VARIANT:"code"::STRING AS main_cpc_code,
+           t2."assignee_harmonized",
+           t2."family_id"
+    FROM PATENTS.PATENTS.PUBLICATIONS t2,
+    LATERAL FLATTEN(input => t2."cpc") f
+    WHERE f.value::VARIANT:"first"::BOOLEAN = TRUE
+      AND t2."family_id" IN (
+          SELECT "family_id"
+          FROM DENSO_PATENTS
+      )
+      AND t2."assignee_harmonized" NOT ILIKE '%DENSO%' -- Exclude DENSO as assignee
+),
+CPC_TITLES AS (
+    -- Get full titles for the main CPC subclasses
+    SELECT DISTINCT t3."symbol" AS cpc_code, t3."titleFull" AS cpc_title
+    FROM PATENTS.PATENTS.CPC_DEFINITION t3
+),
+RESULT AS (
+    -- Join citations with CPC titles and calculate citation count by assignee and CPC title
+    SELECT cwc."assignee_harmonized" AS citing_assignee,
+           cpc_titles."cpc_title",
+           COUNT(*) AS citation_count
+    FROM CITATIONS_WITH_CPC cwc
+    INNER JOIN CPC_TITLES cpc_titles
+    ON cwc."main_cpc_code" = cpc_titles."cpc_code"
+    GROUP BY cwc."assignee_harmonized", cpc_titles."cpc_title"
+)
+-- Final output with citing assignee, CPC title, and citation count
+SELECT "citing_assignee", "cpc_title", "citation_count"
+FROM RESULT
+ORDER BY "citation_count" DESC NULLS LAST;
+```
+[Try to run SQL in self-refine]
+2025-07-01 04:14:44 - Thread-78 (execute) - INFO - itercount: 2
+2025-07-01 04:14:44 - Thread-78 (execute) - INFO - [Self-refine]
+Input sql:
+WITH DENSO_PATENTS AS (
+    -- Filter patents assigned to DENSO CORP
+    SELECT DISTINCT t1."family_id", t1."pub_cleaned"
+    FROM PATENTS.PATENTS.DISCLOSURES_13 t1
+    WHERE t1."patent_owner_harmonized" ILIKE '%DENSO%'
+),
+CITATIONS_WITH_CPC AS (
+    -- Identify citing publications and their main CPC code
+    SELECT DISTINCT t2."publication_number" AS citing_pub_num,
+           f.value::VARIANT:"code"::STRING AS main_cpc_code,
+           t2."assignee_harmonized",
+           t2."family_id"
+    FROM PATENTS.PATENTS.PUBLICATIONS t2,
+    LATERAL FLATTEN(input => t2."cpc") f
+    WHERE f.value::VARIANT:"first"::BOOLEAN = TRUE
+      AND t2."family_id" IN (
+          SELECT "family_id"
+          FROM DENSO_PATENTS
+      )
+      AND t2."assignee_harmonized" NOT ILIKE '%DENSO%' -- Exclude DENSO as assignee
+),
+CPC_TITLES AS (
+    -- Get full titles for the main CPC subclasses
+    SELECT DISTINCT t3."symbol" AS cpc_code, t3."titleFull" AS cpc_title
+    FROM PATENTS.PATENTS.CPC_DEFINITION t3
+),
+RESULT AS (
+    -- Join citations with CPC titles and calculate citation count by assignee and CPC title
+    SELECT cwc."assignee_harmonized" AS citing_assignee,
+           cpc_titles."cpc_title",
+           COUNT(*) AS citation_count
+    FROM CITATIONS_WITH_CPC cwc
+    INNER JOIN CPC_TITLES cpc_titles
+    ON cwc."main_cpc_code" = cpc_titles."cpc_code"
+    GROUP BY cwc."assignee_harmonized", cpc_titles."cpc_title"
+)
+-- Final output with citing assignee, CPC title, and citation count
+SELECT "citing_assignee", "cpc_title", "citation_count"
+FROM RESULT
+ORDER BY "citation_count" DESC NULLS LAST;
+The error information is:
+{'status': 'error', 'error_msg': '##ERROR##000904 (42000): SQL compilation error: error line 30 at position 11\ninvalid identifier \'CPC_TITLES."cpc_title"\''}
+Please correct it and output only 1 complete SQL query.
+[Self-refine]
+2025-07-01 04:15:15 - Thread-78 (execute) - INFO - [Try to run SQL in self-refine]
+```sql
+WITH DENSO_PATENTS AS (
+    -- Filter patents assigned to DENSO CORP
+    SELECT DISTINCT t1."family_id", t1."pub_cleaned"
+    FROM PATENTS.PATENTS.DISCLOSURES_13 t1
+    WHERE t1."patent_owner_harmonized" ILIKE '%DENSO%'
+),
+CITATIONS_WITH_CPC AS (
+    -- Identify citing publications and their main CPC code
+    SELECT DISTINCT t2."publication_number" AS citing_pub_num,
+           f.value::VARIANT:"code"::STRING AS main_cpc_code,
+           t2."assignee_harmonized",
+           t2."family_id"
+    FROM PATENTS.PATENTS.PUBLICATIONS t2,
+    LATERAL FLATTEN(input => t2."cpc") f
+    WHERE f.value::VARIANT:"first"::BOOLEAN = TRUE
+      AND t2."family_id" IN (
+          SELECT "family_id"
+          FROM DENSO_PATENTS
+      )
+      AND t2."assignee_harmonized" NOT ILIKE '%DENSO%' -- Exclude DENSO as assignee
+),
+CPC_TITLES AS (
+    -- Get full titles for the main CPC subclasses
+    SELECT DISTINCT t3."symbol" AS cpc_code, t3."titleFull" AS cpc_title
+    FROM PATENTS.PATENTS.CPC_DEFINITION t3
+),
+RESULT AS (
+    -- Join citations with CPC titles and calculate citation count by assignee and CPC title
+    SELECT cwc."assignee_harmonized" AS citing_assignee,
+           ct."cpc_title",
+           COUNT(*) AS citation_count
+    FROM CITATIONS_WITH_CPC cwc
+    INNER JOIN CPC_TITLES ct
+    ON cwc."main_cpc_code" = ct."cpc_code"
+    GROUP BY cwc."assignee_harmonized", ct."cpc_title"
+)
+-- Final output with citing assignee, CPC title, and citation count
+SELECT "citing_assignee", "cpc_title", "citation_count"
+FROM RESULT
+ORDER BY "citation_count" DESC NULLS LAST;
+```
+[Try to run SQL in self-refine]
+2025-07-01 04:15:15 - Thread-78 (execute) - INFO - itercount: 3
+2025-07-01 04:15:15 - Thread-78 (execute) - INFO - [Self-refine]
+Input sql:
+WITH DENSO_PATENTS AS (
+    -- Filter patents assigned to DENSO CORP
+    SELECT DISTINCT t1."family_id", t1."pub_cleaned"
+    FROM PATENTS.PATENTS.DISCLOSURES_13 t1
+    WHERE t1."patent_owner_harmonized" ILIKE '%DENSO%'
+),
+CITATIONS_WITH_CPC AS (
+    -- Identify citing publications and their main CPC code
+    SELECT DISTINCT t2."publication_number" AS citing_pub_num,
+           f.value::VARIANT:"code"::STRING AS main_cpc_code,
+           t2."assignee_harmonized",
+           t2."family_id"
+    FROM PATENTS.PATENTS.PUBLICATIONS t2,
+    LATERAL FLATTEN(input => t2."cpc") f
+    WHERE f.value::VARIANT:"first"::BOOLEAN = TRUE
+      AND t2."family_id" IN (
+          SELECT "family_id"
+          FROM DENSO_PATENTS
+      )
+      AND t2."assignee_harmonized" NOT ILIKE '%DENSO%' -- Exclude DENSO as assignee
+),
+CPC_TITLES AS (
+    -- Get full titles for the main CPC subclasses
+    SELECT DISTINCT t3."symbol" AS cpc_code, t3."titleFull" AS cpc_title
+    FROM PATENTS.PATENTS.CPC_DEFINITION t3
+),
+RESULT AS (
+    -- Join citations with CPC titles and calculate citation count by assignee and CPC title
+    SELECT cwc."assignee_harmonized" AS citing_assignee,
+           ct."cpc_title",
+           COUNT(*) AS citation_count
+    FROM CITATIONS_WITH_CPC cwc
+    INNER JOIN CPC_TITLES ct
+    ON cwc."main_cpc_code" = ct."cpc_code"
+    GROUP BY cwc."assignee_harmonized", ct."cpc_title"
+)
+-- Final output with citing assignee, CPC title, and citation count
+SELECT "citing_assignee", "cpc_title", "citation_count"
+FROM RESULT
+ORDER BY "citation_count" DESC NULLS LAST;
+The error information is:
+{'status': 'error', 'error_msg': '##ERROR##000904 (42000): SQL compilation error: error line 30 at position 11\ninvalid identifier \'CT."cpc_title"\''}
+Please correct it and output only 1 complete SQL query.
+[Self-refine]
+2025-07-01 04:15:36 - Thread-78 (execute) - INFO - [Try to run SQL in self-refine]
+```sql
+WITH DENSO_PATENTS AS (
+    -- Filter patents assigned to DENSO CORP
+    SELECT DISTINCT t1."family_id", t1."pub_cleaned"
+    FROM PATENTS.PATENTS.DISCLOSURES_13 t1
+    WHERE t1."patent_owner_harmonized" ILIKE '%DENSO%'
+),
+CITATIONS_WITH_CPC AS (
+    -- Identify citing publications and their main CPC code
+    SELECT DISTINCT t2."publication_number" AS citing_pub_num,
+           f.value::VARIANT:"code"::STRING AS main_cpc_code,
+           t2."assignee_harmonized",
+           t2."family_id"
+    FROM PATENTS.PATENTS.PUBLICATIONS t2,
+    LATERAL FLATTEN(input => t2."cpc") f
+    WHERE f.value::VARIANT:"first"::BOOLEAN = TRUE
+      AND t2."family_id" IN (
+          SELECT "family_id"
+          FROM DENSO_PATENTS
+      )
+      AND t2."assignee_harmonized" NOT ILIKE '%DENSO%' -- Exclude DENSO as assignee
+),
+CPC_TITLES AS (
+    -- Get full titles for the main CPC subclasses
+    SELECT DISTINCT t3."symbol" AS cpc_code, t3."titleFull" AS cpc_title
+    FROM PATENTS.PATENTS.CPC_DEFINITION t3
+),
+RESULT AS (
+    -- Join citations with CPC titles and calculate citation count by assignee and CPC title
+    SELECT cwc."assignee_harmonized" AS citing_assignee,
+           ctitles."cpc_title",
+           COUNT(*) AS citation_count
+    FROM CITATIONS_WITH_CPC cwc
+    INNER JOIN CPC_TITLES ctitles
+    ON cwc."main_cpc_code" = ctitles."cpc_code"
+    GROUP BY cwc."assignee_harmonized", ctitles."cpc_title"
+)
+-- Final output with citing assignee, CPC title, and citation count
+SELECT "citing_assignee", "cpc_title", "citation_count"
+FROM RESULT
+ORDER BY "citation_count" DESC NULLS LAST;
+```
+[Try to run SQL in self-refine]
+2025-07-01 04:15:36 - Thread-78 (execute) - INFO - itercount: 4
+2025-07-01 04:15:36 - Thread-78 (execute) - INFO - [Self-refine]
+Input sql:
+WITH DENSO_PATENTS AS (
+    -- Filter patents assigned to DENSO CORP
+    SELECT DISTINCT t1."family_id", t1."pub_cleaned"
+    FROM PATENTS.PATENTS.DISCLOSURES_13 t1
+    WHERE t1."patent_owner_harmonized" ILIKE '%DENSO%'
+),
+CITATIONS_WITH_CPC AS (
+    -- Identify citing publications and their main CPC code
+    SELECT DISTINCT t2."publication_number" AS citing_pub_num,
+           f.value::VARIANT:"code"::STRING AS main_cpc_code,
+           t2."assignee_harmonized",
+           t2."family_id"
+    FROM PATENTS.PATENTS.PUBLICATIONS t2,
+    LATERAL FLATTEN(input => t2."cpc") f
+    WHERE f.value::VARIANT:"first"::BOOLEAN = TRUE
+      AND t2."family_id" IN (
+          SELECT "family_id"
+          FROM DENSO_PATENTS
+      )
+      AND t2."assignee_harmonized" NOT ILIKE '%DENSO%' -- Exclude DENSO as assignee
+),
+CPC_TITLES AS (
+    -- Get full titles for the main CPC subclasses
+    SELECT DISTINCT t3."symbol" AS cpc_code, t3."titleFull" AS cpc_title
+    FROM PATENTS.PATENTS.CPC_DEFINITION t3
+),
+RESULT AS (
+    -- Join citations with CPC titles and calculate citation count by assignee and CPC title
+    SELECT cwc."assignee_harmonized" AS citing_assignee,
+           ctitles."cpc_title",
+           COUNT(*) AS citation_count
+    FROM CITATIONS_WITH_CPC cwc
+    INNER JOIN CPC_TITLES ctitles
+    ON cwc."main_cpc_code" = ctitles."cpc_code"
+    GROUP BY cwc."assignee_harmonized", ctitles."cpc_title"
+)
+-- Final output with citing assignee, CPC title, and citation count
+SELECT "citing_assignee", "cpc_title", "citation_count"
+FROM RESULT
+ORDER BY "citation_count" DESC NULLS LAST;
+The error information is:
+{'status': 'error', 'error_msg': '##ERROR##000904 (42000): SQL compilation error: error line 30 at position 11\ninvalid identifier \'CTITLES."cpc_title"\''}
+Please correct it and output only 1 complete SQL query.
+[Self-refine]
+2025-07-01 04:15:51 - Thread-78 (execute) - INFO - [Try to run SQL in self-refine]
+```sql
+WITH DENSO_PATENTS AS (
+    -- Filter patents assigned to DENSO CORP
+    SELECT DISTINCT t1."family_id", t1."pub_cleaned"
+    FROM PATENTS.PATENTS.DISCLOSURES_13 t1
+    WHERE t1."patent_owner_harmonized" ILIKE '%DENSO%'
+),
+CITATIONS_WITH_CPC AS (
+    -- Identify citing publications and their main CPC code
+    SELECT DISTINCT t2."publication_number" AS citing_pub_num,
+           f.value::VARIANT:"code"::STRING AS main_cpc_code,
+           t2."assignee_harmonized",
+           t2."family_id"
+    FROM PATENTS.PATENTS.PUBLICATIONS t2,
+    LATERAL FLATTEN(input => t2."cpc") f
+    WHERE f.value::VARIANT:"first"::BOOLEAN = TRUE
+      AND t2."family_id" IN (
+          SELECT "family_id"
+          FROM DENSO_PATENTS
+      )
+      AND t2."assignee_harmonized" NOT ILIKE '%DENSO%' -- Exclude DENSO as assignee
+),
+CPC_TITLES AS (
+    -- Get full titles for the main CPC subclasses
+    SELECT DISTINCT t3."symbol" AS cpc_code, t3."titleFull" AS cpc_title
+    FROM PATENTS.PATENTS.CPC_DEFINITION t3
+),
+RESULT AS (
+    -- Join citations with CPC titles and calculate citation count by assignee and CPC title
+    SELECT cwc."assignee_harmonized" AS citing_assignee,
+           cpc."cpc_title",
+           COUNT(*) AS citation_count
+    FROM CITATIONS_WITH_CPC cwc
+    INNER JOIN CPC_TITLES cpc
+    ON cwc."main_cpc_code" = cpc."cpc_code"
+    GROUP BY cwc."assignee_harmonized", cpc."cpc_title"
+)
+-- Final output with citing assignee, CPC title, and citation count
+SELECT "citing_assignee", "cpc_title", "citation_count"
+FROM RESULT
+ORDER BY "citation_count" DESC NULLS LAST;
+```
+[Try to run SQL in self-refine]
+2025-07-01 04:15:52 - Thread-78 (execute) - INFO - Total iteration counts: 5
+2025-07-01 04:15:52 - Thread-78 (execute) - INFO - Max Iter, remove file

@@ -1,0 +1,966 @@
+2025-07-01 04:24:42 - Thread-312 (execute) - INFO - [Exploration]
+Here are the step-by-step SQL queries to help us investigate the task:
+
+### 1. Identify transactions with more than 2 outputs
+This helps us locate transactions that might qualify for a CoinJoin based on the condition of having more than 2 outputs. 
+
+```sql
+-- Description: Fetch transactions with more than 2 outputs and their hash, along with other fields.
+SELECT 
+    t."hash", 
+    t."output_count", 
+    t."input_value", 
+    t."output_value", 
+    t."outputs"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t
+WHERE 
+    t."output_count" > 2
+LIMIT 20;
+```
+
+---
+
+### 2. Explore structure of the "outputs" column for CoinJoin conditions
+Since some CoinJoin transactions involve multiple equal-value outputs, we investigate how outputs are structured.
+
+```sql
+-- Description: Unnest the "outputs" column to explore individual output details.
+SELECT 
+    t."hash", 
+    f.value::VARIANT:"addresses" AS "addresses", 
+    f.value::VARIANT:"value"::NUMBER AS "value"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t, 
+    LATERAL FLATTEN(INPUT => t."outputs") f
+LIMIT 20;
+```
+
+---
+
+### 3. Identify transactions where output value ≤ input value
+This query aims to filter transactions that satisfy another CoinJoin condition: total output value should not exceed total input value.
+
+```sql
+-- Description: Retrieve transactions where total output value is less than or equal to total input value.
+SELECT 
+    t."hash", 
+    t."input_value", 
+    t."output_value"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t
+WHERE 
+    t."output_value" <= t."input_value"
+LIMIT 20;
+```
+
+---
+
+### 4. Identify transactions with multiple equal-value outputs
+To detect transactions with multiple outputs of the same value, we flatten outputs and group by value.
+
+```sql
+-- Description: Flatten outputs, group by transaction hash, and count distinct output values to find multiple occurrences.
+SELECT 
+    t."hash", 
+    f.value::VARIANT:"value"::NUMBER AS "output_value", 
+    COUNT(*) AS "count"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t, 
+    LATERAL FLATTEN(INPUT => t."outputs") f
+GROUP BY 
+    t."hash", f.value::VARIANT:"value"::NUMBER
+HAVING 
+    COUNT(*) > 1
+LIMIT 20;
+```
+
+---
+
+### 5. Fetch all transactions from 2021, grouped by month
+This query groups Bitcoin transactions by month in 2021 to narrow the analysis to a specific timeframe.
+
+```sql
+-- Description: Retrieve the count of transactions for each month in 2021.
+SELECT 
+    t."block_timestamp_month", 
+    COUNT(*) AS "transaction_count"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t
+WHERE 
+    t."block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31'
+GROUP BY 
+    t."block_timestamp_month"
+ORDER BY 
+    t."block_timestamp_month"
+LIMIT 20;
+```
+
+---
+
+### 6. Count the UTXOs (inputs and outputs) involved in potentially CoinJoin transactions
+This gives us insights into the number of inputs and outputs in CoinJoin transactions to calculate percentages.
+
+```sql
+-- Description: Count the number of inputs and outputs for CoinJoin transactions in 2021.
+SELECT 
+    t."block_timestamp_month", 
+    SUM(t."input_count") AS "total_inputs", 
+    SUM(t."output_count") AS "total_outputs"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t
+WHERE 
+    t."block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31' 
+    AND t."output_count" > 2 
+    AND t."output_value" <= t."input_value"
+GROUP BY 
+    t."block_timestamp_month"
+ORDER BY 
+    t."block_timestamp_month"
+LIMIT 20;
+```
+
+---
+
+### 7. Calculate total Bitcoin transaction volume by month in 2021
+To compute the percentage of Bitcoin volume from CoinJoin transactions, we first need the total volume.
+
+```sql
+-- Description: Aggregate the total output value of all transactions by month in 2021.
+SELECT 
+    t."block_timestamp_month", 
+    SUM(t."output_value") AS "total_volume"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t
+WHERE 
+    t."block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31'
+GROUP BY 
+    t."block_timestamp_month"
+ORDER BY 
+    t."block_timestamp_month"
+LIMIT 20;
+```
+
+---
+
+### 8. Calculate Bitcoin transaction volume from CoinJoin transactions
+This calculates the Bitcoin volume specifically from CoinJoin transactions for each month.
+
+```sql
+-- Description: Aggregate the total output value of CoinJoin transactions grouped by month in 2021.
+SELECT 
+    t."block_timestamp_month", 
+    SUM(t."output_value") AS "coinjoin_volume"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t
+WHERE 
+    t."block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31' 
+    AND t."output_count" > 2 
+    AND t."output_value" <= t."input_value"
+GROUP BY 
+    t."block_timestamp_month"
+ORDER BY 
+    t."block_timestamp_month"
+LIMIT 20;
+```
+
+---
+
+### 9. Calculate percentage of CoinJoin transactions by month
+This query combines transaction counts to determine the proportion of CoinJoin transactions.
+
+```sql
+-- Description: Calculate the percentage of CoinJoin transactions in 2021 for each month.
+SELECT 
+    monthly."block_timestamp_month", 
+    (coinjoin."coinjoin_count"::FLOAT / monthly."transaction_count") * 100 AS "coinjoin_transaction_percentage"
+FROM 
+    (SELECT "block_timestamp_month", COUNT(*) AS "transaction_count"
+     FROM CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS
+     WHERE "block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31'
+     GROUP BY "block_timestamp_month") monthly
+JOIN 
+    (SELECT "block_timestamp_month", COUNT(*) AS "coinjoin_count"
+     FROM CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS
+     WHERE "block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31'
+       AND "output_count" > 2 
+       AND "output_value" <= "input_value"
+     GROUP BY "block_timestamp_month") coinjoin
+ON monthly."block_timestamp_month" = coinjoin."block_timestamp_month"
+ORDER BY monthly."block_timestamp_month"
+LIMIT 20;
+```
+
+---
+
+### 10. Compute all CoinJoin metrics for 2021 (volume, transactions, UTXOs)
+Finally, compute all metrics to summarize the findings for CoinJoin transactions by month.
+
+```sql
+-- Description: Summarize CoinJoin metrics (volume, transactions, UTXOs) by month for 2021.
+SELECT 
+    monthly."block_timestamp_month", 
+    (coinjoin."coinjoin_count"::FLOAT / monthly."transaction_count") * 100 AS "coinjoin_transaction_percentage",
+    (coinjoin."coinjoin_volume"::FLOAT / monthly."total_volume") * 100 AS "coinjoin_volume_percentage",
+    ((coinjoin."total_inputs" + coinjoin."total_outputs")::FLOAT / (monthly."total_inputs" + monthly."total_outputs")) * 50 AS "utxo_ratio_percentage"
+FROM 
+    (SELECT "block_timestamp_month", COUNT(*) AS "transaction_count", SUM("output_value") AS "total_volume", SUM("input_count") AS "total_inputs", SUM("output_count") AS "total_outputs"
+     FROM CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS
+     WHERE "block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31'
+     GROUP BY "block_timestamp_month") monthly
+JOIN 
+    (SELECT "block_timestamp_month", COUNT(*) AS "coinjoin_count", SUM("output_value") AS "coinjoin_volume", SUM("input_count") AS "total_inputs", SUM("output_count") AS "total_outputs"
+     FROM CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS
+     WHERE "block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31'
+       AND "output_count" > 2 
+       AND "output_value" <= "input_value"
+     GROUP BY "block_timestamp_month") coinjoin
+ON monthly."block_timestamp_month" = coinjoin."block_timestamp_month"
+ORDER BY monthly."block_timestamp_month";
+```
+
+This structured approach includes filtering potential CoinJoin transactions, counting their occurrence, calculating their volume percentage, and summarizing their UTXO involvement. Replace placeholders (e.g., "block_timestamp_month") or adjust if formats differ.
+[Exploration]
+2025-07-01 04:24:42 - Thread-312 (execute) - INFO - [Try to execute]
+-- Description: Fetch transactions with more than 2 outputs and their hash, along with other fields.
+SELECT 
+    t."hash", 
+    t."output_count", 
+    t."input_value", 
+    t."output_value", 
+    t."outputs"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t
+WHERE 
+    t."output_count" > 2
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:24:44 - Thread-312 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Fetch transactions with more than 2 outputs and their hash, along with other fields.
+SELECT 
+    t."hash", 
+    t."output_count", 
+    t."input_value", 
+    t."output_value", 
+    t."outputs"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t
+WHERE 
+    t."output_count" > 2
+LIMIT 20;
+Results:
+hash,output_count,input_value,output_value,outputs
+beb1f9be04b57854357e4ed31509fab903106c955c7f3077034650543a9bbe81,3,,643972663.000000000,"[
+  {
+    ""addresses"": [
+      ""1CK6KHY6MHgYvmRQ4PAafKYDrg1ejbH1cE""
+    ],
+    ""index"": 0,
+    ""script_asm"": ""OP_DUP OP_HASH160 7c154ed1dc59609e3d26abb2df2ea3d587cd8c41 OP_EQUALVERIFY OP_CHECKSIG"",
+    ""script_hex"": ""76a9147c154ed1dc59609e3d26abb2df2ea3d587cd8c4188ac"",
+    ""type"": ""pubkeyhash"",
+    ""value"": 643972663
+  },
+  {
+    ""addre
+
+[Successfully executed]
+2025-07-01 04:24:44 - Thread-312 (execute) - INFO - [Try to execute]
+-- Description: Unnest the "outputs" column to explore individual output details.
+SELECT 
+    t."hash", 
+    f.value::VARIANT:"addresses" AS "addresses", 
+    f.value::VARIANT:"value"::NUMBER AS "value"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t, 
+    LATERAL FLATTEN(INPUT => t."outputs") f
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:24:45 - Thread-312 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Unnest the "outputs" column to explore individual output details.
+SELECT 
+    t."hash", 
+    f.value::VARIANT:"addresses" AS "addresses", 
+    f.value::VARIANT:"value"::NUMBER AS "value"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t, 
+    LATERAL FLATTEN(INPUT => t."outputs") f
+LIMIT 20;
+Results:
+hash,addresses,value
+5dbd0d1e42c5f93abd0a6b0baeeef7fb6f5f3e865fa52b154c47056a38b5254f,"[
+  ""nonstandard189f40034be7a199f1fa9891668ee3ab6049f82d""
+]",0
+bd5090052f58a66eb498251f1dfc278b88c70d2a69711577f26836927186ca8f,"[
+  ""nonstandard189f40034be7a199f1fa9891668ee3ab6049f82d""
+]",0
+ef073e09afcf28d1db74290c630b73194afe03491d3fa6dea99c8622b1b3edcd,"[
+  ""nonstandard189f40034be7a199f1fa9891668ee3ab6049f82d""
+]",0
+b2692d2d3830a9fc8d116afc20cc8a76367244fba29bc523d2d246ee7dc8ddb7,"[
+  ""nonstandar
+
+[Successfully executed]
+2025-07-01 04:24:45 - Thread-312 (execute) - INFO - [Try to execute]
+-- Description: Retrieve transactions where total output value is less than or equal to total input value.
+SELECT 
+    t."hash", 
+    t."input_value", 
+    t."output_value"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t
+WHERE 
+    t."output_value" <= t."input_value"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:24:47 - Thread-312 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Retrieve transactions where total output value is less than or equal to total input value.
+SELECT 
+    t."hash", 
+    t."input_value", 
+    t."output_value"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t
+WHERE 
+    t."output_value" <= t."input_value"
+LIMIT 20;
+Results:
+hash,input_value,output_value
+335f94663b35912791dd51df802f49d8be2de676040e75cf27b3402a151c706a,1000.000000000,0E-9
+92147855b82f52c11b9e2941b1a0efa97724cbd9953263061a03c6c87165336e,1000.000000000,0E-9
+835a33b74418e21e04bfb77f9f176d3d12363d059bb4880f50f3aacd710572ab,1000.000000000,0E-9
+ad7ae07e69687b847176ce9fd76e63f3b777de6f72c0b669a3fdf55f4b71012a,1000.000000000,0E-9
+5aef4d774f3664340a746a4a66c24ad594f7057c2ffe497ab4389a9a79012d8b,1000.000000000,0E-9
+
+[Successfully executed]
+2025-07-01 04:24:47 - Thread-312 (execute) - INFO - [Try to execute]
+-- Description: Flatten outputs, group by transaction hash, and count distinct output values to find multiple occurrences.
+SELECT 
+    t."hash", 
+    f.value::VARIANT:"value"::NUMBER AS "output_value", 
+    COUNT(*) AS "count"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t, 
+    LATERAL FLATTEN(INPUT => t."outputs") f
+GROUP BY 
+    t."hash", f.value::VARIANT:"value"::NUMBER
+HAVING 
+    COUNT(*) > 1
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:26:36 - Thread-312 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Flatten outputs, group by transaction hash, and count distinct output values to find multiple occurrences.
+SELECT 
+    t."hash", 
+    f.value::VARIANT:"value"::NUMBER AS "output_value", 
+    COUNT(*) AS "count"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t, 
+    LATERAL FLATTEN(INPUT => t."outputs") f
+GROUP BY 
+    t."hash", f.value::VARIANT:"value"::NUMBER
+HAVING 
+    COUNT(*) > 1
+LIMIT 20;
+Results:
+hash,output_value,count
+9511735531821a7e7006b7ce360d1fa232acb654fc5b185ddfaece985f7f67b3,399960000,2
+b1a8b051e8356e71c30c9aa54bf30c2101bf83ec5ed22ecb636db83c74a294e0,427658,2
+7f59d2735480f7127ddbded816d6376921cae492a98eac13a3a1d866dc540d38,127435,2
+a5798ec4bf8ea128702295487a2a607a8da8f99f0933afa83f9148792334ccd7,100000000,2
+be045f148136296822d2cea471cdfeebc3bc9e44e7e8e90c50c60b59ca2de353,10000,2
+86511b605f36440b5e989ebf6c2c1f93831eb3a934082cc4d97db433f7371d74,100000,2
+57777becb453c3b32497
+
+[Successfully executed]
+2025-07-01 04:26:36 - Thread-312 (execute) - INFO - [Try to execute]
+-- Description: Retrieve the count of transactions for each month in 2021.
+SELECT 
+    t."block_timestamp_month", 
+    COUNT(*) AS "transaction_count"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t
+WHERE 
+    t."block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31'
+GROUP BY 
+    t."block_timestamp_month"
+ORDER BY 
+    t."block_timestamp_month"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:26:37 - Thread-312 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Retrieve the count of transactions for each month in 2021.
+SELECT 
+    t."block_timestamp_month", 
+    COUNT(*) AS "transaction_count"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t
+WHERE 
+    t."block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31'
+GROUP BY 
+    t."block_timestamp_month"
+ORDER BY 
+    t."block_timestamp_month"
+LIMIT 20;
+Results:
+block_timestamp_month,transaction_count
+2021-12-01,41762
+
+[Successfully executed]
+2025-07-01 04:26:37 - Thread-312 (execute) - INFO - [Try to execute]
+-- Description: Count the number of inputs and outputs for CoinJoin transactions in 2021.
+SELECT 
+    t."block_timestamp_month", 
+    SUM(t."input_count") AS "total_inputs", 
+    SUM(t."output_count") AS "total_outputs"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t
+WHERE 
+    t."block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31' 
+    AND t."output_count" > 2 
+    AND t."output_value" <= t."input_value"
+GROUP BY 
+    t."block_timestamp_month"
+ORDER BY 
+    t."block_timestamp_month"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:26:38 - Thread-312 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Count the number of inputs and outputs for CoinJoin transactions in 2021.
+SELECT 
+    t."block_timestamp_month", 
+    SUM(t."input_count") AS "total_inputs", 
+    SUM(t."output_count") AS "total_outputs"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t
+WHERE 
+    t."block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31' 
+    AND t."output_count" > 2 
+    AND t."output_value" <= t."input_value"
+GROUP BY 
+    t."block_timestamp_month"
+ORDER BY 
+    t."block_timestamp_month"
+LIMIT 20;
+Results:
+block_timestamp_month,total_inputs,total_outputs
+2021-12-01,13872,70033
+
+[Successfully executed]
+2025-07-01 04:26:38 - Thread-312 (execute) - INFO - [Try to execute]
+-- Description: Aggregate the total output value of all transactions by month in 2021.
+SELECT 
+    t."block_timestamp_month", 
+    SUM(t."output_value") AS "total_volume"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t
+WHERE 
+    t."block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31'
+GROUP BY 
+    t."block_timestamp_month"
+ORDER BY 
+    t."block_timestamp_month"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:26:39 - Thread-312 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Aggregate the total output value of all transactions by month in 2021.
+SELECT 
+    t."block_timestamp_month", 
+    SUM(t."output_value") AS "total_volume"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t
+WHERE 
+    t."block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31'
+GROUP BY 
+    t."block_timestamp_month"
+ORDER BY 
+    t."block_timestamp_month"
+LIMIT 20;
+Results:
+block_timestamp_month,total_volume
+2021-12-01,73218160497779.000000000
+
+[Successfully executed]
+2025-07-01 04:26:39 - Thread-312 (execute) - INFO - [Try to execute]
+-- Description: Aggregate the total output value of CoinJoin transactions grouped by month in 2021.
+SELECT 
+    t."block_timestamp_month", 
+    SUM(t."output_value") AS "coinjoin_volume"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t
+WHERE 
+    t."block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31' 
+    AND t."output_count" > 2 
+    AND t."output_value" <= t."input_value"
+GROUP BY 
+    t."block_timestamp_month"
+ORDER BY 
+    t."block_timestamp_month"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:26:40 - Thread-312 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Aggregate the total output value of CoinJoin transactions grouped by month in 2021.
+SELECT 
+    t."block_timestamp_month", 
+    SUM(t."output_value") AS "coinjoin_volume"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t
+WHERE 
+    t."block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31' 
+    AND t."output_count" > 2 
+    AND t."output_value" <= t."input_value"
+GROUP BY 
+    t."block_timestamp_month"
+ORDER BY 
+    t."block_timestamp_month"
+LIMIT 20;
+Results:
+block_timestamp_month,coinjoin_volume
+2021-12-01,7530045985883.000000000
+
+[Successfully executed]
+2025-07-01 04:26:40 - Thread-312 (execute) - INFO - [Try to execute]
+-- Description: Calculate the percentage of CoinJoin transactions in 2021 for each month.
+SELECT 
+    monthly."block_timestamp_month", 
+    (coinjoin."coinjoin_count"::FLOAT / monthly."transaction_count") * 100 AS "coinjoin_transaction_percentage"
+FROM 
+    (SELECT "block_timestamp_month", COUNT(*) AS "transaction_count"
+     FROM CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS
+     WHERE "block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31'
+     GROUP BY "block_timestamp_month") monthly
+JOIN 
+    (SELECT "block_timestamp_month", COUNT(*) AS "coinjoin_count"
+     FROM CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS
+     WHERE "block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31'
+       AND "output_count" > 2 
+       AND "output_value" <= "input_value"
+     GROUP BY "block_timestamp_month") coinjoin
+ON monthly."block_timestamp_month" = coinjoin."block_timestamp_month"
+ORDER BY monthly."block_timestamp_month"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:26:42 - Thread-312 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Calculate the percentage of CoinJoin transactions in 2021 for each month.
+SELECT 
+    monthly."block_timestamp_month", 
+    (coinjoin."coinjoin_count"::FLOAT / monthly."transaction_count") * 100 AS "coinjoin_transaction_percentage"
+FROM 
+    (SELECT "block_timestamp_month", COUNT(*) AS "transaction_count"
+     FROM CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS
+     WHERE "block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31'
+     GROUP BY "block_timestamp_month") monthly
+JOIN 
+    (SELECT "block_timestamp_month", COUNT(*) AS "coinjoin_count"
+     FROM CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS
+     WHERE "block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31'
+       AND "output_count" > 2 
+       AND "output_value" <= "input_value"
+     GROUP BY "block_timestamp_month") coinjoin
+ON monthly."block_timestamp_month" = coinjoin."block_timestamp_month"
+ORDER BY monthly."block_timestamp_month"
+LIMIT 20;
+Results:
+block_timestamp_month,coinjoin_transaction_percentage
+2021-12-01,10.329965039988506
+
+[Successfully executed]
+2025-07-01 04:26:42 - Thread-312 (execute) - INFO - [Try to execute]
+-- Description: Summarize CoinJoin metrics (volume, transactions, UTXOs) by month for 2021.
+SELECT 
+    monthly."block_timestamp_month", 
+    (coinjoin."coinjoin_count"::FLOAT / monthly."transaction_count") * 100 AS "coinjoin_transaction_percentage",
+    (coinjoin."coinjoin_volume"::FLOAT / monthly."total_volume") * 100 AS "coinjoin_volume_percentage",
+    ((coinjoin."total_inputs" + coinjoin."total_outputs")::FLOAT / (monthly."total_inputs" + monthly."total_outputs")) * 50 AS "utxo_ratio_percentage"
+FROM 
+    (SELECT "block_timestamp_month", COUNT(*) AS "transaction_count", SUM("output_value") AS "total_volume", SUM("input_count") AS "total_inputs", SUM("output_count") AS "total_outputs"
+     FROM CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS
+     WHERE "block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31'
+     GROUP BY "block_timestamp_month") monthly
+JOIN 
+    (SELECT "block_timestamp_month", COUNT(*) AS "coinjoin_count", SUM("output_value") AS "coinjoin_volume", SUM("input_count") AS "total_inputs", SUM("output_count") AS "total_outputs"
+     FROM CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS
+     WHERE "block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31'
+       AND "output_count" > 2 
+       AND "output_value" <= "input_value"
+     GROUP BY "block_timestamp_month") coinjoin
+ON monthly."block_timestamp_month" = coinjoin."block_timestamp_month"
+ORDER BY monthly."block_timestamp_month";
+[Try to execute]
+2025-07-01 04:26:44 - Thread-312 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Summarize CoinJoin metrics (volume, transactions, UTXOs) by month for 2021.
+SELECT 
+    monthly."block_timestamp_month", 
+    (coinjoin."coinjoin_count"::FLOAT / monthly."transaction_count") * 100 AS "coinjoin_transaction_percentage",
+    (coinjoin."coinjoin_volume"::FLOAT / monthly."total_volume") * 100 AS "coinjoin_volume_percentage",
+    ((coinjoin."total_inputs" + coinjoin."total_outputs")::FLOAT / (monthly."total_inputs" + monthly."total_outputs")) * 50 AS "utxo_ratio_percentage"
+FROM 
+    (SELECT "block_timestamp_month", COUNT(*) AS "transaction_count", SUM("output_value") AS "total_volume", SUM("input_count") AS "total_inputs", SUM("output_count") AS "total_outputs"
+     FROM CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS
+     WHERE "block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31'
+     GROUP BY "block_timestamp_month") monthly
+JOIN 
+    (SELECT "block_timestamp_month", COUNT(*) AS "coinjoin_count", SUM("output_value") AS "coinjoin_volume", SUM("input_count") AS "total_inputs", SUM("output_count") AS "total_outputs"
+     FROM CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS
+     WHERE "block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31'
+       AND "output_count" > 2 
+       AND "output_value" <= "input_value"
+     GROUP BY "block_timestamp_month") coinjoin
+ON monthly."block_timestamp_month" = coinjoin."block_timestamp_month"
+ORDER BY monthly."block_timestamp_month";
+Results:
+block_timestamp_month,coinjoin_transaction_percentage,coinjoin_volume_percentage,utxo_ratio_percentage
+2021-12-01,10.329965039988506,10.284396568678362,15.400160049336309
+
+[Successfully executed]
+2025-07-01 04:26:44 - Thread-312 (execute) - INFO - itercount: 0
+2025-07-01 04:26:44 - Thread-312 (execute) - INFO - [Self-refine]
+Table full name: CRYPTO.CRYPTO_BITCOIN.OUTPUTS
+Column name: block_timestamp Type: NUMBER
+Column name: block_number Type: NUMBER
+Column name: addresses Type: VARIANT
+Column name: transaction_hash Type: TEXT
+Column name: block_hash Type: TEXT
+Column name: index Type: NUMBER
+Column name: value Type: NUMBER
+Column name: type Type: TEXT
+Sample rows:
+[{'transaction_hash': '34d8931632a117f53c6db9c54f70b61b0fbf67b4a10bfbe24e8f0a372c8fbd0a', 'block_hash': '0000000000000000000e16b2330badbc2b78a57b0443330fd812ef5347ba6add', 'block_number': 619203, 'block_timestamp': 1582800007000000, 'index': 0, 'type': 'scripthash', 'addresses': '[\n  "3JMaBfoL5iJHrytQcvnoMFosR3DYgpd5oQ"\n]', 'value': '24630092.000000000'}, {'transaction_hash': '69e0b0062f498e4859fcababf847b841c77540e13d81af1e8bc5cc305f16c521', 'block_hash': '0000000000000000000c71e9f3636060e152b30fcc47c44b26a57f6c16c4447b', 'block_number': 616047, 'block_timestamp': 1580885897000000, 'index': 1, 'type': 'pubkeyhash', 'addresses': '[\n  "1KQHfZi5Xoc161nbf5nSwDzRhj8DrJDmce"\n]', 'value': '100000000.000000000'}, {'transaction_hash': '2741d85e689a1df30558ac6b9d95a5a393f6164282ac6d296d1f7f269db4db34', 'block_hash': '0000000000000000000019cc0127507d042d20d366883bbd92f309ba8393fb69', 'block_number': 706649, 'block_timestamp': 1635175811000000, 'index': 1, 'type': 'witness_v0_keyhash', 'addresses': '[\n  "bc1qkvcfy7zst85sd9zveh6dtnnhvptlxee5jvmphh"\n]', 'value': '694973.000000000'}, {'transaction_hash': 'c3f216314c7de8a0408f6f92100a68ef7248566f4cb122f5bc314c0681c3bf13', 'block_hash': '0000000000000000000a5f1a28d0f38c0b9ccda8522fedbff17e6091946b6373', 'block_number': 704895, 'block_timestamp': 1634167649000000, 'index': 86, 'type': 'scripthash', 'addresses': '[\n  "3GdxL6CodaX8ddgNihezWKK5juTkWKPsb4"\n]', 'value': '34682.000000000'}, {'transaction_hash': 'f6fb1e90ff3bf92ca83a428e76b8dd1e41217767e32d15a96f7c5ee55ea9cf34', 'block_hash': '000000000000000000083469ccff37b9184673499a0cf198155851c7aa07f154', 'block_number': 704537, 'block_timestamp': 1633966637000000, 'index': 1, 'type': 'witness_v0_keyhash', 'addresses': '[\n  "bc1qrnn4wfhgz2e0etek66sh3n9l6k99alxk044mhr"\n]', 'value': '896618132.000000000'}]
+--------------------------------------------------
+Table full name: CRYPTO.CRYPTO_BITCOIN.INPUTS
+Column name: block_timestamp Type: NUMBER
+Column name: value Type: NUMBER
+Column name: transaction_hash Type: TEXT
+Column name: spent_transaction_hash Type: TEXT
+Column name: index Type: NUMBER
+Column name: addresses Type: VARIANT
+Column name: spent_output_index Type: NUMBER
+Column name: type Type: TEXT
+Column name: block_number Type: NUMBER
+Column name: block_hash Type: TEXT
+Sample rows:
+[{'transaction_hash': 'bead2683cbb2e60d1a4c2498c80303869ea047e4759d4595a000297526094037', 'block_hash': '00000000000000000045bb53b94f58b9329a5153834d66f1f51f108498e4be17', 'block_number': 471609, 'block_timestamp': 1497661993000000, 'index': 0, 'spent_transaction_hash': '4808df3150e6e5752ffce704695295f0fbc9e31130efbada35003d8de4eba219', 'spent_output_index': 14, 'type': 'pubkeyhash', 'addresses': '[\n  "17HMYBpEbCR4oMXNX5boGHBZfWjG9Q6e8g"\n]', 'value': '1186209.000000000'}, {'transaction_hash': 'ce1fe7f81c72b9c060a981d927daee0d33906dbe12f1f9a4393f0ac658f81a3d', 'block_hash': '0000000000000000000b9aac0ddb57b073697c170bc961d2ef1c0bd2c317b7e4', 'block_number': 646657, 'block_timestamp': 1599198455000000, 'index': 38, 'spent_transaction_hash': '331259dfdae8e0ee6759a2ed5408381ce9141a8c90714641c91e0d6b5be17ea7', 'spent_output_index': 10, 'type': 'scripthash', 'addresses': '[\n  "3DM9EfvPU4EaSJXSq4Rx95NjUFUqN1PPG5"\n]', 'value': '452722.000000000'}, {'transaction_hash': '3fc28f75808e61b4ead6caed67963ca149e916eda58aae57536fb104f5e7d5df', 'block_hash': '0000000000000000000d89802503f9d350f33ca4a7ccbcd6c1465a7f578ac00f', 'block_number': 653595, 'block_timestamp': 1603221517000000, 'index': 0, 'spent_transaction_hash': '17d2707728fd2d52a315678061beacc33b4547c908b5a61f8d59f35625922117', 'spent_output_index': 23, 'type': 'witness_v0_keyhash', 'addresses': '[\n  "bc1qt8y28rmey7r5j02uacftqeg7lq0lhjtjya78wc"\n]', 'value': '1242000.000000000'}, {'transaction_hash': '1f5200493fe9a1df95e8873a240b223adfc95ec1e05eaa7c379d072c0a9dbc07', 'block_hash': '0000000000000000001ed2bbb73bb13b603670900e4850f325b6c617f50cac69', 'block_number': 531701, 'block_timestamp': 1531452772000000, 'index': 51, 'spent_transaction_hash': '88511212e069f9eea809472356ce52861d4d269d1c7047d909b313dccd1f2f7f', 'spent_output_index': 1, 'type': 'witness_v0_keyhash', 'addresses': '[\n  "bc1qcpcekyurwwfmx0t7rkkwd77pyp9unmjxvr2zqq"\n]', 'value': '1045.000000000'}, {'transaction_hash': 'd343f626e98193d81642457a37a05daafe1c082d14752702fe0944a97bd86f57', 'block_hash': '00000000000000000007022dcaa28c7d2af433d0a6ca939774bade490de5fed6', 'block_number': 758188, 'block_timestamp': 1665490257000000, 'index': 29, 'spent_transaction_hash': 'dcbd62d482a038a043ac6cc5ce05d125521a786e82c9566adcfa8af023ba3e1f', 'spent_output_index': 1164, 'type': 'pubkeyhash', 'addresses': '[\n  "1FzzWDahsGzRe2ZbSFKMPP6DptBV8oPZ8E"\n]', 'value': '677804.000000000'}]
+--------------------------------------------------
+Table full name: CRYPTO.CRYPTO_BITCOIN.BLOCKS
+Column name: number Type: NUMBER Description: The number of the block
+Column name: transaction_count Type: NUMBER Description: Number of transactions included in this block
+Column name: timestamp_month Type: DATE Description: Month of the block creation timestamp specified in block header
+Column name: size Type: NUMBER Description: The size of block data in bytes
+Column name: version Type: NUMBER Description: Protocol version specified in block header
+Column name: timestamp Type: NUMBER Description: Block creation timestamp specified in block header
+Column name: hash Type: TEXT Description: Hash of this block
+Sample rows:
+[{'hash': '00000000000137ecfcf59721de0732c82482b22536214e1a5ed6ff3701088d66', 'size': 2545, 'number': 109930, 'version': 1, 'timestamp': 1298469082000000, 'timestamp_month': '2011-02-01', 'transaction_count': 4}, {'hash': '00000000000059365a4d643b35aafb39611cc4187e3379e31ed8035676ae810c', 'size': 3167, 'number': 109157, 'version': 1, 'timestamp': 1298142674000000, 'timestamp_month': '2011-02-01', 'transaction_count': 7}, {'hash': '0000000000017ce55029a299f020d7f8e6df6b1990711c8464050d4d54a3c54f', 'size': 3175, 'number': 109977, 'version': 1, 'timestamp': 1298483045000000, 'timestamp_month': '2011-02-01', 'transaction_count': 9}, {'hash': '00000000000118cfd55d57546b617611cb1d77fd92eae3c806cb76ec366f90b0', 'size': 3023, 'number': 109402, 'version': 1, 'timestamp': 1298253067000000, 'timestamp_month': '2011-02-01', 'transaction_count': 12}, {'hash': '000000000000d19129c9fe962dc0b6b69f4164cdb6d67c73607e1b8ea410cffa', 'size': 3144, 'number': 110786, 'version': 1, 'timestamp': 1298777346000000, 'timestamp_month': '2011-02-01', 'transaction_count': 13}]
+--------------------------------------------------
+Table full name: CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS
+Column name: block_timestamp_month Type: DATE Description: Month of the block which contains this transaction
+Column name: outputs Type: VARIANT Description: 0-indexed number of an input within a transaction
+Column name: lock_time Type: NUMBER Description: Earliest time that miners can include the transaction in their hashing of the Merkle root to attach it in the latest block of the blockchain
+Column name: block_timestamp Type: NUMBER Description: Timestamp of the block which contains this transaction
+Column name: is_coinbase Type: BOOLEAN Description: true if this transaction is a coinbase transaction
+Column name: input_value Type: NUMBER Description: Total value of inputs in the transaction
+Column name: hash Type: TEXT Description: The hash of this transaction
+Column name: output_count Type: NUMBER Description: The number of outputs in the transaction
+Column name: size Type: NUMBER Description: The size of this transaction in bytes
+Column name: output_value Type: NUMBER Description: Total value of outputs in the transaction
+Column name: block_number Type: NUMBER Description: Number of the block which contains this transaction
+Column name: version Type: NUMBER Description: Protocol version specified in block which contained this transaction
+Column name: input_count Type: NUMBER Description: The number of inputs in the transaction
+Column name: inputs Type: VARIANT Description: Transaction inputs
+Column name: block_hash Type: TEXT Description: Hash of the block which contains this transaction
+Sample rows:
+[{'hash': '035fd8df8740ebc03839d8fbef2030d376e6589956ac4ac6d9edf0be053fb450', 'size': 226, 'version': 1, 'lock_time': 0, 'block_hash': '00000000000000000126fd575309a6f67f2a2f530a84490e9f8f87334161aafb', 'block_number': 462467, 'block_timestamp': 1492548513000000, 'block_timestamp_month': '2017-04-01', 'input_count': 1, 'output_count': 2, 'input_value': '1274238.000000000', 'output_value': '1224518.000000000', 'is_coinbase': False, 'inputs': '[\n  {\n    "addresses": [\n      "16tqW1QosmGn4APyXML5Wxg2oyNRZ3FpMD"\n    ],\n    "index": 0,\n    "required_signatures": 1,\n    "script_asm": "3045022100e4f95e31f0e72af20e4d70cbfc99ecd2e1f1d890c097707a47fe05d32c1e94280220401274e23681e0e020e1c285dd783145a46a6a2c2adef470252485000d70352f[ALL] 039eaf9391c98780be2317ee607354b20875b912d20c79e10045c90f8b7bbda525",\n    "script_hex": "483045022100e4f95e31f0e72af20e4d70cbfc99ecd2e1f1d890c097707a47fe05d32c1e94280220401274e23681e0e020e1c285dd783145a46a6a2c2adef470252485000d70352f0121039eaf9391c98780be2317ee607354b20875b912d20c79e10045c90f8b7bbda525",\n    "sequence": 4294967295,\n    "spent_output_index": 1,\n    "spent_transaction_hash": "67a2b918ed8538a38fe96988ffbf85c9dbd26e9b168a4b44a0a4a5bf12374108",\n    "type": "pubkeyhash",\n    "value": 1274238\n  }\n]', 'outputs': '[\n  {\n    "addresses": [\n      "1FqYmp7BUtzLLUPcwfis4CPsK3ig6qvuGL"\n    ],\n    "index": 0,\n    "required_signatures": 1,\n    "script_asm": "OP_DUP OP_HASH160 a2c03fe518ad5ff888d01514f7e82d9f3be7a946 OP_EQUALVERIFY OP_CHECKSIG",\n    "script_hex": "76a914a2c03fe518ad5ff888d01514f7e82d9f3be7a94688ac",\n    "type": "pubkeyhash",\n    "value": 104518\n  },\n  {\n    "addresses": [\n      "1BZwkp87PFgP2rQRc7WUgFCGwqW8EjHX9B"\n    ],\n    "index": 1,\n    "required_signatures": 1,\n    "script_asm": "OP_DUP OP_HASH160 73ec46af2cebc4261b03da2260452bb98d3d0be1 OP_EQUALVERIFY OP_CHECKSIG",\n    "script_hex": "76a91473ec46af2cebc4261b03da2260452bb98d3d0be188ac",\n    "type": "pubkeyhash",\n    "value": 1120000\n  }\n]'}, {'hash': 'd1058bd3d8f1ef294d34febf5b5e7d2e832eefc9d94bed47a614b9401d94d99a', 'size': 226, 'version': 1, 'lock_time': 0, 'block_hash': '0000000000000000018eb24676fac1821b44fcb2baf50838074c8a96fd5bbae8', 'block_number': 461913, 'block_timestamp': 1492214906000000, 'block_timestamp_month': '2017-04-01', 'input_count': 1, 'output_count': 2, 'input_value': '6330760.000000000', 'output_value': '6303640.000000000', 'is_coinbase': False, 'inputs': '[\n  {\n    "addresses": [\n      "1BH7LxW9oUoK2y1HGWnnkoKCeAAHfWAk7c"\n    ],\n    "index": 0,\n    "required_signatures": 1,\n    "script_asm": "30450221009dae92858abad21053ccb9a911d2c5000533f2ecbdbc43744af8d697b6c9455802205b8df6c6ba079ef1da671a8bbe5b87f82ebfd2db2df2597cb6ea8a30e4ef58a2[ALL] 0206da07234efee266fe9294d88b0633b3f92f25d31e4d3ceb1cf10704b69aaab5",\n    "script_hex": "4830450221009dae92858abad21053ccb9a911d2c5000533f2ecbdbc43744af8d697b6c9455802205b8df6c6ba079ef1da671a8bbe5b87f82ebfd2db2df2597cb6ea8a30e4ef58a201210206da07234efee266fe9294d88b0633b3f92f25d31e4d3ceb1cf10704b69aaab5",\n    "sequence": 4294967295,\n    "spent_output_index": 1,\n    "spent_transaction_hash": "40b94dae01af73f6e481cc84ca7967d5a714051ba8f91c3fa0354a2fe4f0ac6a",\n    "type": "pubkeyhash",\n    "value": 6330760\n  }\n]', 'outputs': '[\n  {\n    "addresses": [\n      "1FhF8T7qxjkpU4FyzkWZdV25wVpmxCpkPx"\n    ],\n    "index": 0,\n    "required_signatures": 1,\n    "script_asm": "OP_DUP OP_HASH160 a12e317b08e8920b3f5db7ded0545209ab0e4cac OP_EQUALVERIFY OP_CHECKSIG",\n    "script_hex": "76a914a12e317b08e8920b3f5db7ded0545209ab0e4cac88ac",\n    "type": "pubkeyhash",\n    "value": 2023640\n  },\n  {\n    "addresses": [\n      "1Lf7NyA5PNhCiYQmKzuGp7jqmwjPUvRZfE"\n    ],\n    "index": 1,\n    "required_signatures": 1,\n    "script_asm": "OP_DUP OP_HASH160 d79f856ae64c23762cd504aa5b2c8c9c4978f2d8 OP_EQUALVERIFY OP_CHECKSIG",\n    "script_hex": "76a914d79f856ae64c23762cd504aa5b2c8c9c4978f2d888ac",\n    "type": "pubkeyhash",\n    "value": 4280000\n  }\n]'}, {'hash': '4fe9a2fcfbd2d7cdb42a820eda184915f76f35e658f89a8840cbd98a77d785f9', 'size': 226, 'version': 1, 'lock_time': 0, 'block_hash': '00000000000000000202bec9d4b3a720d3617729e6365d4c548b8565c6bc74b3', 'block_number': 461641, 'block_timestamp': 1492039760000000, 'block_timestamp_month': '2017-04-01', 'input_count': 1, 'output_count': 2, 'input_value': '10376690.000000000', 'output_value': '10349570.000000000', 'is_coinbase': False, 'inputs': '[\n  {\n    "addresses": [\n      "1KgS5cHcgrhtnKa5NK6nkPDFjm2TD9NTot"\n    ],\n    "index": 0,\n    "required_signatures": 1,\n    "script_asm": "3045022100e240eb7553bfb173fa2c13b02d54283ce9d6dc0aadd20bfe9494542ef0bcf4df02202dbaaad44daaa2a34957f3669b2ac32d405ad2f448156c30f7ee030cb4e60fa6[ALL] 02a2e4eab9e7b0c415a950b720d9802148f63f5b4bffc1face10ba7c82ec3af896",\n    "script_hex": "483045022100e240eb7553bfb173fa2c13b02d54283ce9d6dc0aadd20bfe9494542ef0bcf4df02202dbaaad44daaa2a34957f3669b2ac32d405ad2f448156c30f7ee030cb4e60fa6012102a2e4eab9e7b0c415a950b720d9802148f63f5b4bffc1face10ba7c82ec3af896",\n    "sequence": 4294967295,\n    "spent_output_index": 1,\n    "spent_transaction_hash": "620ea67f89db19f51ec9f21f7c60b8517fa58dec82467a9b50fa10ea2b5eb745",\n    "type": "pubkeyhash",\n    "value": 10376690\n  }\n]', 'outputs': '[\n  {\n    "addresses": [\n      "1MvcGeRXFdhReqPwaB61NfVJw1SwvunN8w"\n    ],\n    "index": 0,\n    "required_signatures": 1,\n    "script_asm": "OP_DUP OP_HASH160 e58600db9c390723e134c314f1b8f33b260ea835 OP_EQUALVERIFY OP_CHECKSIG",\n    "script_hex": "76a914e58600db9c390723e134c314f1b8f33b260ea83588ac",\n    "type": "pubkeyhash",\n    "value": 900000\n  },\n  {\n    "addresses": [\n      "1H3jQAJc8kjSYVvYtr2DLhFD5k1fBmKvJX"\n    ],\n    "index": 1,\n    "required_signatures": 1,\n    "script_asm": "OP_DUP OP_HASH160 b0063cd56f3cd4e3558606390420a35a31928bbf OP_EQUALVERIFY OP_CHECKSIG",\n    "script_hex": "76a914b0063cd56f3cd4e3558606390420a35a31928bbf88ac",\n    "type": "pubkeyhash",\n    "value": 9449570\n  }\n]'}, {'hash': '47be74abd10a737936c55247be8d5cc383268a40797967014de3ec04e09ea62c', 'size': 226, 'version': 1, 'lock_time': 0, 'block_hash': '000000000000000000d909d49fe1e477b6529fb3eb462d4fbf6d270dca441e35', 'block_number': 464096, 'block_timestamp': 1493500264000000, 'block_timestamp_month': '2017-04-01', 'input_count': 1, 'output_count': 2, 'input_value': '163182000.000000000', 'output_value': '163133400.000000000', 'is_coinbase': False, 'inputs': '[\n  {\n    "addresses": [\n      "18GnPNgJirXknYD7E25qjfmu2EcT2okp2o"\n    ],\n    "index": 0,\n    "required_signatures": 1,\n    "script_asm": "30450221009fa0715caca7567e7d6e20786c729e9c061fc802d397955da7c89d38c96f3f7302206902a38b2d0c76f03e44dab89877e1af8892ac648df3c6fbbadd544db40fc3c1[ALL] 0270de7088ade9f1ca5c28b10d99de511d55d8d4a210e16b83052ccfdc3d59e47e",\n    "script_hex": "4830450221009fa0715caca7567e7d6e20786c729e9c061fc802d397955da7c89d38c96f3f7302206902a38b2d0c76f03e44dab89877e1af8892ac648df3c6fbbadd544db40fc3c101210270de7088ade9f1ca5c28b10d99de511d55d8d4a210e16b83052ccfdc3d59e47e",\n    "sequence": 4294967295,\n    "spent_output_index": 1,\n    "spent_transaction_hash": "640b97624f6c9a76a7fec204682b878d96d1fc8ce341c5130de175dbc1c5586f",\n    "type": "pubkeyhash",\n    "value": 163182000\n  }\n]', 'outputs': '[\n  {\n    "addresses": [\n      "15kk8oUiTj4i1RJif3byLXFNr1ZWeqruzB"\n    ],\n    "index": 0,\n    "required_signatures": 1,\n    "script_asm": "OP_DUP OP_HASH160 3426657821225e18b5ca5bf9f94f961c6872dbe5 OP_EQUALVERIFY OP_CHECKSIG",\n    "script_hex": "76a9143426657821225e18b5ca5bf9f94f961c6872dbe588ac",\n    "type": "pubkeyhash",\n    "value": 153633400\n  },\n  {\n    "addresses": [\n      "1Drg3DCX6aVpVBmnF6rUuZctawZDu3Kodu"\n    ],\n    "index": 1,\n    "required_signatures": 1,\n    "script_asm": "OP_DUP OP_HASH160 8d067a9989864d315cc8dd40e18e886821841bf7 OP_EQUALVERIFY OP_CHECKSIG",\n    "script_hex": "76a9148d067a9989864d315cc8dd40e18e886821841bf788ac",\n    "type": "pubkeyhash",\n    "value": 9500000\n  }\n]'}, {'hash': 'aecf805b33d28f0cf0e84693b82e5a561ea73f0280cc2890d2ea267b7daafee4', 'size': 226, 'version': 1, 'lock_time': 0, 'block_hash': '000000000000000001134475f218cff915341423bdf419c6f340a1a47a79c9b9', 'block_number': 462777, 'block_timestamp': 1492735560000000, 'block_timestamp_month': '2017-04-01', 'input_count': 1, 'output_count': 2, 'input_value': '970210.000000000', 'output_value': '939565.000000000', 'is_coinbase': False, 'inputs': '[\n  {\n    "addresses": [\n      "1MEPNChZuQpNL7b3SoiQrqdUeE6yDLiFz5"\n    ],\n    "index": 0,\n    "required_signatures": 1,\n    "script_asm": "3045022100ddc6227503f1fa40de40ca0d173690beddddcc9c9639de744307c37b180fd0ba02201fa42e069ea09a9837bceda0f1c2d2c2574f3c19499f56eaf6bb7f40b681247d[ALL] 0355eedd388122b7925354dccf32d4005ec6fe7d3b69cec3af9ffc7b593a644fe6",\n    "script_hex": "483045022100ddc6227503f1fa40de40ca0d173690beddddcc9c9639de744307c37b180fd0ba02201fa42e069ea09a9837bceda0f1c2d2c2574f3c19499f56eaf6bb7f40b681247d01210355eedd388122b7925354dccf32d4005ec6fe7d3b69cec3af9ffc7b593a644fe6",\n    "sequence": 4294967295,\n    "spent_output_index": 1,\n    "spent_transaction_hash": "332936869daea71c839777c21f9a77fbfdebd3a12623bda7ad916452144e83aa",\n    "type": "pubkeyhash",\n    "value": 970210\n  }\n]', 'outputs': '[\n  {\n    "addresses": [\n      "1JGRFsTW1ZJnaY64qSbrrtQLS29Ux5Smt4"\n    ],\n    "index": 0,\n    "required_signatures": 1,\n    "script_asm": "OP_DUP OP_HASH160 bd64a03ea7c5cf5d2b53d896ca217acd8dc75dfe OP_EQUALVERIFY OP_CHECKSIG",\n    "script_hex": "76a914bd64a03ea7c5cf5d2b53d896ca217acd8dc75dfe88ac",\n    "type": "pubkeyhash",\n    "value": 170000\n  },\n  {\n    "addresses": [\n      "18JPXEVfZqoRqt7hEygXr79SCfG7GJjJGG"\n    ],\n    "index": 1,\n    "required_signatures": 1,\n    "script_asm": "OP_DUP OP_HASH160 5012c06af2b73f430d2793e0cf6be6c34a4ad8ef OP_EQUALVERIFY OP_CHECKSIG",\n    "script_hex": "76a9145012c06af2b73f430d2793e0cf6be6c34a4ad8ef88ac",\n    "type": "pubkeyhash",\n    "v
+--------------------------------------------------
+External knowledge that might be helpful: 
+None
+The table structure information is ({database name: {schema name: [table name]}}): 
+{'CRYPTO': {'CRYPTO_BITCOIN': ['OUTPUTS', 'INPUTS', 'BLOCKS', 'TRANSACTIONS']}}
+
+Some few-shot examples after column exploration may be helpful:
+Query:
+-- Description: Fetch transactions with more than 2 outputs and their hash, along with other fields.
+SELECT 
+    t."hash", 
+    t."output_count", 
+    t."input_value", 
+    t."output_value", 
+    t."outputs"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t
+WHERE 
+    t."output_count" > 2
+LIMIT 20;
+Answer:
+hash,output_count,input_value,output_value,outputs
+beb1f9be04b57854357e4ed31509fab903106c955c7f3077034650543a9bbe81,3,,643972663.000000000,"[
+  {
+    ""addresses"": [
+      ""1CK6KHY6MHgYvmRQ4PAafKYDrg1ejbH1cE""
+    ],
+    ""index"": 0,
+    ""script_asm"": ""OP_DUP OP_HASH160 7c154ed1dc59609e3d26abb2df2ea3d587cd8c41 OP_EQUALVERIFY OP_CHECKSIG"",
+    ""script_hex"": ""76a9147c154ed1dc59609e3d26abb2df2ea3d587cd8c4188ac"",
+    ""type"": ""pubkeyhash"",
+    ""value"": 643972663
+  },
+  {
+    ""addre
+Query:
+-- Description: Unnest the "outputs" column to explore individual output details.
+SELECT 
+    t."hash", 
+    f.value::VARIANT:"addresses" AS "addresses", 
+    f.value::VARIANT:"value"::NUMBER AS "value"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t, 
+    LATERAL FLATTEN(INPUT => t."outputs") f
+LIMIT 20;
+Answer:
+hash,addresses,value
+5dbd0d1e42c5f93abd0a6b0baeeef7fb6f5f3e865fa52b154c47056a38b5254f,"[
+  ""nonstandard189f40034be7a199f1fa9891668ee3ab6049f82d""
+]",0
+bd5090052f58a66eb498251f1dfc278b88c70d2a69711577f26836927186ca8f,"[
+  ""nonstandard189f40034be7a199f1fa9891668ee3ab6049f82d""
+]",0
+ef073e09afcf28d1db74290c630b73194afe03491d3fa6dea99c8622b1b3edcd,"[
+  ""nonstandard189f40034be7a199f1fa9891668ee3ab6049f82d""
+]",0
+b2692d2d3830a9fc8d116afc20cc8a76367244fba29bc523d2d246ee7dc8ddb7,"[
+  ""nonstandar
+Query:
+-- Description: Retrieve transactions where total output value is less than or equal to total input value.
+SELECT 
+    t."hash", 
+    t."input_value", 
+    t."output_value"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t
+WHERE 
+    t."output_value" <= t."input_value"
+LIMIT 20;
+Answer:
+hash,input_value,output_value
+335f94663b35912791dd51df802f49d8be2de676040e75cf27b3402a151c706a,1000.000000000,0E-9
+92147855b82f52c11b9e2941b1a0efa97724cbd9953263061a03c6c87165336e,1000.000000000,0E-9
+835a33b74418e21e04bfb77f9f176d3d12363d059bb4880f50f3aacd710572ab,1000.000000000,0E-9
+ad7ae07e69687b847176ce9fd76e63f3b777de6f72c0b669a3fdf55f4b71012a,1000.000000000,0E-9
+5aef4d774f3664340a746a4a66c24ad594f7057c2ffe497ab4389a9a79012d8b,1000.000000000,0E-9
+Query:
+-- Description: Flatten outputs, group by transaction hash, and count distinct output values to find multiple occurrences.
+SELECT 
+    t."hash", 
+    f.value::VARIANT:"value"::NUMBER AS "output_value", 
+    COUNT(*) AS "count"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t, 
+    LATERAL FLATTEN(INPUT => t."outputs") f
+GROUP BY 
+    t."hash", f.value::VARIANT:"value"::NUMBER
+HAVING 
+    COUNT(*) > 1
+LIMIT 20;
+Answer:
+hash,output_value,count
+9511735531821a7e7006b7ce360d1fa232acb654fc5b185ddfaece985f7f67b3,399960000,2
+b1a8b051e8356e71c30c9aa54bf30c2101bf83ec5ed22ecb636db83c74a294e0,427658,2
+7f59d2735480f7127ddbded816d6376921cae492a98eac13a3a1d866dc540d38,127435,2
+a5798ec4bf8ea128702295487a2a607a8da8f99f0933afa83f9148792334ccd7,100000000,2
+be045f148136296822d2cea471cdfeebc3bc9e44e7e8e90c50c60b59ca2de353,10000,2
+86511b605f36440b5e989ebf6c2c1f93831eb3a934082cc4d97db433f7371d74,100000,2
+57777becb453c3b32497
+Query:
+-- Description: Retrieve the count of transactions for each month in 2021.
+SELECT 
+    t."block_timestamp_month", 
+    COUNT(*) AS "transaction_count"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t
+WHERE 
+    t."block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31'
+GROUP BY 
+    t."block_timestamp_month"
+ORDER BY 
+    t."block_timestamp_month"
+LIMIT 20;
+Answer:
+block_timestamp_month,transaction_count
+2021-12-01,41762
+Query:
+-- Description: Count the number of inputs and outputs for CoinJoin transactions in 2021.
+SELECT 
+    t."block_timestamp_month", 
+    SUM(t."input_count") AS "total_inputs", 
+    SUM(t."output_count") AS "total_outputs"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t
+WHERE 
+    t."block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31' 
+    AND t."output_count" > 2 
+    AND t."output_value" <= t."input_value"
+GROUP BY 
+    t."block_timestamp_month"
+ORDER BY 
+    t."block_timestamp_month"
+LIMIT 20;
+Answer:
+block_timestamp_month,total_inputs,total_outputs
+2021-12-01,13872,70033
+Query:
+-- Description: Aggregate the total output value of all transactions by month in 2021.
+SELECT 
+    t."block_timestamp_month", 
+    SUM(t."output_value") AS "total_volume"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t
+WHERE 
+    t."block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31'
+GROUP BY 
+    t."block_timestamp_month"
+ORDER BY 
+    t."block_timestamp_month"
+LIMIT 20;
+Answer:
+block_timestamp_month,total_volume
+2021-12-01,73218160497779.000000000
+Query:
+-- Description: Aggregate the total output value of CoinJoin transactions grouped by month in 2021.
+SELECT 
+    t."block_timestamp_month", 
+    SUM(t."output_value") AS "coinjoin_volume"
+FROM 
+    CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS t
+WHERE 
+    t."block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31' 
+    AND t."output_count" > 2 
+    AND t."output_value" <= t."input_value"
+GROUP BY 
+    t."block_timestamp_month"
+ORDER BY 
+    t."block_timestamp_month"
+LIMIT 20;
+Answer:
+block_timestamp_month,coinjoin_volume
+2021-12-01,7530045985883.000000000
+Query:
+-- Description: Calculate the percentage of CoinJoin transactions in 2021 for each month.
+SELECT 
+    monthly."block_timestamp_month", 
+    (coinjoin."coinjoin_count"::FLOAT / monthly."transaction_count") * 100 AS "coinjoin_transaction_percentage"
+FROM 
+    (SELECT "block_timestamp_month", COUNT(*) AS "transaction_count"
+     FROM CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS
+     WHERE "block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31'
+     GROUP BY "block_timestamp_month") monthly
+JOIN 
+    (SELECT "block_timestamp_month", COUNT(*) AS "coinjoin_count"
+     FROM CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS
+     WHERE "block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31'
+       AND "output_count" > 2 
+       AND "output_value" <= "input_value"
+     GROUP BY "block_timestamp_month") coinjoin
+ON monthly."block_timestamp_month" = coinjoin."block_timestamp_month"
+ORDER BY monthly."block_timestamp_month"
+LIMIT 20;
+Answer:
+block_timestamp_month,coinjoin_transaction_percentage
+2021-12-01,10.329965039988506
+Query:
+-- Description: Summarize CoinJoin metrics (volume, transactions, UTXOs) by month for 2021.
+SELECT 
+    monthly."block_timestamp_month", 
+    (coinjoin."coinjoin_count"::FLOAT / monthly."transaction_count") * 100 AS "coinjoin_transaction_percentage",
+    (coinjoin."coinjoin_volume"::FLOAT / monthly."total_volume") * 100 AS "coinjoin_volume_percentage",
+    ((coinjoin."total_inputs" + coinjoin."total_outputs")::FLOAT / (monthly."total_inputs" + monthly."total_outputs")) * 50 AS "utxo_ratio_percentage"
+FROM 
+    (SELECT "block_timestamp_month", COUNT(*) AS "transaction_count", SUM("output_value") AS "total_volume", SUM("input_count") AS "total_inputs", SUM("output_count") AS "total_outputs"
+     FROM CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS
+     WHERE "block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31'
+     GROUP BY "block_timestamp_month") monthly
+JOIN 
+    (SELECT "block_timestamp_month", COUNT(*) AS "coinjoin_count", SUM("output_value") AS "coinjoin_volume", SUM("input_count") AS "total_inputs", SUM("output_count") AS "total_outputs"
+     FROM CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS
+     WHERE "block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31'
+       AND "output_count" > 2 
+       AND "output_value" <= "input_value"
+     GROUP BY "block_timestamp_month") coinjoin
+ON monthly."block_timestamp_month" = coinjoin."block_timestamp_month"
+ORDER BY monthly."block_timestamp_month";
+Answer:
+block_timestamp_month,coinjoin_transaction_percentage,coinjoin_volume_percentage,utxo_ratio_percentage
+2021-12-01,10.329965039988506,10.284396568678362,15.400160049336309
+Task: Which month (e.g., 3 for March) in 2021 witnessed the highest percentage of Bitcoin transaction volume occurring in CoinJoin transactions (defined as transactions with >2 outputs, output value ≤ input value, and having multiple equal-value outputs)? Also provide the percentage of all Bitcoin transactions that were CoinJoins, the percentage of UTXOs involved in CoinJoin transactions (average of input and output percentages), and the percentage of total Bitcoin volume that occurred in CoinJoin transactions for that month. Round all percentages to 1 decimal place.
+Another way to say it: Which month (e.g., 3) in 2021 witnessed the highest percent of Bitcoin volume that took place in CoinJoin transactions? Also give me the percentage of CoinJoins transactions, the average input and output UTXOs ratio, and the proportion of CoinJoin transaction volume for that month (all 1 decimal).
+
+Please think step by step and answer only one complete SQL in snowflake dialect in ```sql``` format.
+SQL usage example: ```sql
+SELECT "COLUMN_NAME" FROM DATABASE.SCHEMA.TABLE WHERE ... ``` (Adjust "DATABASE", "SCHEMA", and "TABLE" to match actual names, ensure all column names are enclosed in double quotations)
+Here are some useful tips for answering:
+When performing a UNION operation on many tables, ensure that all table names are explicitly listed. Union first and then add condition and selection. e.g. SELECT "col1", "col2" FROM (TABLE1 UNION ALL TABLE2) WHERE ...; Don't write sqls as (SELECT col1, col2 FROM TABLE1 WHERE ...) UNION ALL (SELECT col1, col2 FROM TABLE2 WHERE ...); Don't use ['-- Include all', '-- Omit', '-- Continue', '-- Union all', '-- ...', '-- List all', '-- Replace this', '-- Each table', '-- Add other'] to omit any table. Table names here: The table structure information is ({database name: {schema name: [table name]}}): 
+{'CRYPTO': {'CRYPTO_BITCOIN': ['OUTPUTS', 'INPUTS', 'BLOCKS', 'TRANSACTIONS']}}
+
+When using ORDER BY xxx DESC, add NULLS LAST to exclude null records: ORDER BY xxx DESC NULLS LAST.
+When asked something without stating name or id, return both of them. e.g. Which products ...? The answer should include product_name and product_id.
+When asked percentage decrease, you should return a positive value. e.g. How many percentage points in 2021 decrease compared to ...? The answer should be a positive value indicating the decresed number. Try to use ABS().
+If asked two tables, you should reply with the last one instead of combining two tables. e.g. Identifying the top five states ... examine the state that ranks fourth overall and identify its top five counties. You should only answer top five counties.
+Use ST_DISTANCE to calculate distance between two geographic points for more accurate answer.
+If the task description does not specify the number of decimal places, retain all decimals to four places.
+
+[Self-refine]
+2025-07-01 04:27:00 - Thread-312 (execute) - INFO - [Try to run SQL in self-refine]
+```sql
+WITH monthly_totals AS (
+    SELECT 
+        "block_timestamp_month",
+        COUNT(*) AS "transaction_count",
+        SUM("output_value") AS "total_volume",
+        SUM("input_count") AS "total_inputs",
+        SUM("output_count") AS "total_outputs"
+    FROM CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS
+    WHERE "block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31'
+    GROUP BY "block_timestamp_month"
+),
+coinjoin_metrics AS (
+    SELECT 
+        "block_timestamp_month",
+        COUNT(*) AS "coinjoin_count",
+        SUM("output_value") AS "coinjoin_volume",
+        SUM("input_count") AS "total_inputs",
+        SUM("output_count") AS "total_outputs"
+    FROM CRYPTO.CRYPTO_BITCOIN.TRANSACTIONS
+    WHERE "block_timestamp_month" BETWEEN '2021-01-01' AND '2021-12-31'
+      AND "output_count" > 2 
+      AND "output_value" <= "input_value"
+    GROUP BY "block_timestamp_month"
+),
+combined_metrics AS (
+    SELECT 
+        monthly."block_timestamp_month",
+        (coinjoin."coinjoin_count"::FLOAT / monthly."transaction_count") * 100 AS "coinjoin_transaction_percentage",
+        (coinjoin."coinjoin_volume"::FLOAT / monthly."total_volume") * 100 AS "coinjoin_volume_percentage",
+        ((coinjoin."total_inputs" + coinjoin."total_outputs")::FLOAT / (monthly."total_inputs" + monthly."total_outputs")) * 50 AS "utxo_ratio_percentage"
+    FROM monthly_totals monthly
+    JOIN coinjoin_metrics coinjoin
+    ON monthly."block_timestamp_month" = coinjoin."block_timestamp_month"
+)
+SELECT 
+    EXTRACT(MONTH FROM "block_timestamp_month") AS "month",
+    ROUND("coinjoin_transaction_percentage", 1) AS "coinjoin_transaction_percentage",
+    ROUND("utxo_ratio_percentage", 1) AS "utxo_ratio_percentage",
+    ROUND("coinjoin_volume_percentage", 1) AS "coinjoin_volume_percentage"
+FROM combined_metrics
+ORDER BY "coinjoin_volume_percentage" DESC NULLS LAST
+LIMIT 1;
+```
+[Try to run SQL in self-refine]
+2025-07-01 04:27:01 - Thread-312 (execute) - INFO - Total iteration counts: 0

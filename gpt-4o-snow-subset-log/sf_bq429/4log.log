@@ -1,0 +1,1006 @@
+2025-07-01 04:20:48 - Thread-245 (execute) - INFO - [Exploration]
+Here are the required Snowflake SQL queries step-by-step:
+
+### Step 1: Get unique `state_name` and `state_code` from the `ZIP_CODES` table
+```sql
+-- Description: This query retrieves distinct state names and their postal codes to match ZIP codes with their states.
+SELECT DISTINCT "state_name", "state_code"
+FROM CENSUS_BUREAU_ACS_2.GEO_US_BOUNDARIES.ZIP_CODES
+LIMIT 20;
+```
+
+---
+
+### Step 2: Explore `geo_id` and `median_income` in the 2015 table
+```sql
+-- Description: This query retrieves GEO IDs and the corresponding median income values in the 2015 dataset. GEO IDs represent ZIP areas.
+SELECT "geo_id", "median_income"
+FROM CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2015_5YR
+LIMIT 20;
+```
+
+---
+
+### Step 3: Explore `geo_id` and `median_income` in the 2018 table
+```sql
+-- Description: This query retrieves GEO IDs and the corresponding median income values in the 2018 dataset for comparison with the 2015 data.
+SELECT "geo_id", "median_income"
+FROM CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2018_5YR
+LIMIT 20;
+```
+
+---
+
+### Step 4: Join the 2015 and 2018 tables to calculate the difference in median income by ZIP code
+```sql
+-- Description: This query joins the 2015 and 2018 tables on geo_id to calculate the difference in median income per ZIP code.
+SELECT t2015."geo_id", 
+       t2015."median_income" AS "income_2015", 
+       t2018."median_income" AS "income_2018",
+       (t2018."median_income" - t2015."median_income") AS "income_difference"
+FROM CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2015_5YR t2015
+JOIN CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2018_5YR t2018
+ON t2015."geo_id" = t2018."geo_id"
+WHERE t2015."median_income" IS NOT NULL AND t2018."median_income" IS NOT NULL
+LIMIT 20;
+```
+
+---
+
+### Step 5: Map ZIP codes to states using the `ZIP_CODES` table
+```sql
+-- Description: This query maps ZIP codes from geo_id to their corresponding state names and state codes using the ZIP_CODES table.
+SELECT z."state_name", z."state_code", t."geo_id", t."median_income"
+FROM CENSUS_BUREAU_ACS_2.GEO_US_BOUNDARIES.ZIP_CODES z
+JOIN CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2015_5YR t
+ON z."zip_code" = t."geo_id"
+LIMIT 20;
+```
+
+---
+
+### Step 6: Calculate the average median income difference by state
+```sql
+-- Description: This query calculates the average difference in median income from 2015 to 2018 by state.
+SELECT z."state_name", 
+       AVG(t2018."median_income" - t2015."median_income") AS "avg_income_difference"
+FROM CENSUS_BUREAU_ACS_2.GEO_US_BOUNDARIES.ZIP_CODES z
+JOIN CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2015_5YR t2015
+  ON z."zip_code" = t2015."geo_id"
+JOIN CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2018_5YR t2018
+  ON t2015."geo_id" = t2018."geo_id"
+WHERE t2015."median_income" IS NOT NULL AND t2018."median_income" IS NOT NULL
+GROUP BY z."state_name"
+ORDER BY "avg_income_difference" DESC
+LIMIT 20;
+```
+
+---
+
+### Step 7: Explore `geo_id` and employment data in the 2017 table
+```sql
+-- Description: This query retrieves employment data for vulnerability calculations from the 2017 dataset.
+SELECT "geo_id", 
+       "employed_retail_trade", 
+       "employed_wholesale_trade", 
+       "employed_arts_entertainment_recreation_accommodation_food", 
+       "employed_information", 
+       "employed_agriculture_forestry_fishing_hunting_mining", 
+       "employed_construction"
+FROM CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2017_5YR
+LIMIT 20;
+```
+
+---
+
+### Step 8: Calculate the average number of vulnerable employees by ZIP code for five industries in 2017
+```sql
+-- Description: This query calculates the average number of vulnerable employees for five industries in 2017 by GEO ID.
+SELECT "geo_id", 
+       ("employed_wholesale_trade" * 0.38423645320197042 +
+        ("employed_agriculture_forestry_fishing_hunting_mining" + "employed_construction") * 0.48071410777129553 +
+        "employed_arts_entertainment_recreation_accommodation_food" * 0.89455676291236841 +
+        "employed_information" * 0.31315240083507306 +
+        "employed_retail_trade" * 0.51) AS "vulnerable_employees"
+FROM CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2017_5YR
+LIMIT 20;
+```
+
+---
+
+### Step 9: Combine state mapping with vulnerability calculations
+```sql
+-- Description: This query joins state mapping with vulnerability calculations to map each vulnerable count to its corresponding state.
+SELECT z."state_name", 
+       AVG(vul."vulnerable_employees") AS "avg_vulnerable_employees"
+FROM CENSUS_BUREAU_ACS_2.GEO_US_BOUNDARIES.ZIP_CODES z
+JOIN (
+  SELECT "geo_id", 
+         ("employed_wholesale_trade" * 0.38423645320197042 +
+          ("employed_agriculture_forestry_fishing_hunting_mining" + "employed_construction") * 0.48071410777129553 +
+          "employed_arts_entertainment_recreation_accommodation_food" * 0.89455676291236841 +
+          "employed_information" * 0.31315240083507306 +
+          "employed_retail_trade" * 0.51) AS "vulnerable_employees"
+  FROM CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2017_5YR
+) vul
+ON z."zip_code" = vul."geo_id"
+GROUP BY z."state_name"
+LIMIT 20;
+```
+
+---
+
+### Step 10: Combine the top 5 states by income difference with vulnerability calculations
+```sql
+-- Description: This query identifies the top 5 states by average median income difference and calculates the corresponding average number of vulnerable employees for those states.
+WITH IncomeDifference AS (
+  SELECT z."state_name", 
+         AVG(t2018."median_income" - t2015."median_income") AS "avg_income_difference"
+  FROM CENSUS_BUREAU_ACS_2.GEO_US_BOUNDARIES.ZIP_CODES z
+  JOIN CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2015_5YR t2015
+    ON z."zip_code" = t2015."geo_id"
+  JOIN CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2018_5YR t2018
+    ON t2015."geo_id" = t2018."geo_id"
+  WHERE t2015."median_income" IS NOT NULL AND t2018."median_income" IS NOT NULL
+  GROUP BY z."state_name"
+),
+Vulnerability AS (
+  SELECT z."state_name",
+         AVG(
+          ("employed_wholesale_trade" * 0.38423645320197042 +
+           ("employed_agriculture_forestry_fishing_hunting_mining" + "employed_construction") * 0.48071410777129553 +
+           "employed_arts_entertainment_recreation_accommodation_food" * 0.89455676291236841 +
+           "employed_information" * 0.31315240083507306 +
+           "employed_retail_trade" * 0.51)
+         ) AS "avg_vulnerable_employees"
+  FROM CENSUS_BUREAU_ACS_2.GEO_US_BOUNDARIES.ZIP_CODES z
+  JOIN CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2017_5YR t
+    ON z."zip_code" = t."geo_id"
+  GROUP BY z."state_name"
+)
+SELECT id."state_name", id."avg_income_difference", v."avg_vulnerable_employees"
+FROM IncomeDifference id
+JOIN Vulnerability v
+  ON id."state_name" = v."state_name"
+ORDER BY id."avg_income_difference" DESC
+LIMIT 5;
+```
+[Exploration]
+2025-07-01 04:20:48 - Thread-245 (execute) - INFO - [Try to execute]
+-- Description: This query retrieves distinct state names and their postal codes to match ZIP codes with their states.
+SELECT DISTINCT "state_name", "state_code"
+FROM CENSUS_BUREAU_ACS_2.GEO_US_BOUNDARIES.ZIP_CODES
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:20:48 - Thread-245 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: This query retrieves distinct state names and their postal codes to match ZIP codes with their states.
+SELECT DISTINCT "state_name", "state_code"
+FROM CENSUS_BUREAU_ACS_2.GEO_US_BOUNDARIES.ZIP_CODES
+LIMIT 20;
+Results:
+state_name,state_code
+Florida,FL
+Tennessee,TN
+Ohio,OH
+Iowa,IA
+Virginia,VA
+Mississippi,MS
+Georgia (U.S. state),GA
+Louisiana,LA
+South Carolina,SC
+Mississippi,GA
+Pennsylvania,PA
+West Virginia,WV
+Alabama,AL
+New York,NY
+Michigan,MI
+Minnesota,MN
+Illinois,IL
+Kentucky,KY
+Missouri,MO
+North Carolina,NC
+
+[Successfully executed]
+2025-07-01 04:20:48 - Thread-245 (execute) - INFO - [Try to execute]
+-- Description: This query retrieves GEO IDs and the corresponding median income values in the 2015 dataset. GEO IDs represent ZIP areas.
+SELECT "geo_id", "median_income"
+FROM CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2015_5YR
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:20:49 - Thread-245 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: This query retrieves GEO IDs and the corresponding median income values in the 2015 dataset. GEO IDs represent ZIP areas.
+SELECT "geo_id", "median_income"
+FROM CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2015_5YR
+LIMIT 20;
+Results:
+geo_id,median_income
+98304,36746.000000000
+22714,74625.000000000
+69128,56471.000000000
+97908,22321.000000000
+37228,15540.000000000
+97486,62083.000000000
+04491,27500.000000000
+11005,58894.000000000
+04936,40469.000000000
+12195,
+63102,39855.000000000
+06793,81711.000000000
+44669,67981.000000000
+96109,29958.000000000
+15638,51304.000000000
+
+[Successfully executed]
+2025-07-01 04:20:49 - Thread-245 (execute) - INFO - [Try to execute]
+-- Description: This query retrieves GEO IDs and the corresponding median income values in the 2018 dataset for comparison with the 2015 data.
+SELECT "geo_id", "median_income"
+FROM CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2018_5YR
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:20:49 - Thread-245 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: This query retrieves GEO IDs and the corresponding median income values in the 2018 dataset for comparison with the 2015 data.
+SELECT "geo_id", "median_income"
+FROM CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2018_5YR
+LIMIT 20;
+Results:
+geo_id,median_income
+15537,46265.0
+48215,22721.0
+29571,32764.0
+88063,24875.0
+32310,36653.0
+29550,42243.0
+79403,38891.0
+59034,44985.0
+26047,49755.0
+35954,40664.0
+59401,39530.0
+44041,40431.0
+48225,47864.0
+29418,39577.0
+44502,26606.0
+34491,46338.0
+33634,58013.0
+51106,56795.0
+47807,21288.0
+83402,51017.0
+
+[Successfully executed]
+2025-07-01 04:20:49 - Thread-245 (execute) - INFO - [Try to execute]
+-- Description: This query joins the 2015 and 2018 tables on geo_id to calculate the difference in median income per ZIP code.
+SELECT t2015."geo_id", 
+       t2015."median_income" AS "income_2015", 
+       t2018."median_income" AS "income_2018",
+       (t2018."median_income" - t2015."median_income") AS "income_difference"
+FROM CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2015_5YR t2015
+JOIN CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2018_5YR t2018
+ON t2015."geo_id" = t2018."geo_id"
+WHERE t2015."median_income" IS NOT NULL AND t2018."median_income" IS NOT NULL
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:20:51 - Thread-245 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: This query joins the 2015 and 2018 tables on geo_id to calculate the difference in median income per ZIP code.
+SELECT t2015."geo_id", 
+       t2015."median_income" AS "income_2015", 
+       t2018."median_income" AS "income_2018",
+       (t2018."median_income" - t2015."median_income") AS "income_difference"
+FROM CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2015_5YR t2015
+JOIN CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2018_5YR t2018
+ON t2015."geo_id" = t2018."geo_id"
+WHERE t2015."median_income" IS NOT NULL AND t2018."median_income" IS NOT NULL
+LIMIT 20;
+Results:
+geo_id,income_2015,income_2018,income_difference
+98304,36746.000000000,37759.0,1013.0
+22714,74625.000000000,92917.0,18292.0
+69128,56471.000000000,38125.0,-18346.0
+97908,22321.000000000,23750.0,1429.0
+37228,15540.000000000,29119.0,13579.0
+97486,62083.000000000,53393.0,-8690.0
+04491,27500.000000000,37500.0,10000.0
+11005,58894.000000000,62993.0,4099.0
+63102,39855.000000000,55053.0,15198.0
+06793,81711.000000000,99861.0,18150.0
+
+[Successfully executed]
+2025-07-01 04:20:51 - Thread-245 (execute) - INFO - [Try to execute]
+-- Description: This query maps ZIP codes from geo_id to their corresponding state names and state codes using the ZIP_CODES table.
+SELECT z."state_name", z."state_code", t."geo_id", t."median_income"
+FROM CENSUS_BUREAU_ACS_2.GEO_US_BOUNDARIES.ZIP_CODES z
+JOIN CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2015_5YR t
+ON z."zip_code" = t."geo_id"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:20:52 - Thread-245 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: This query maps ZIP codes from geo_id to their corresponding state names and state codes using the ZIP_CODES table.
+SELECT z."state_name", z."state_code", t."geo_id", t."median_income"
+FROM CENSUS_BUREAU_ACS_2.GEO_US_BOUNDARIES.ZIP_CODES z
+JOIN CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2015_5YR t
+ON z."zip_code" = t."geo_id"
+LIMIT 20;
+Results:
+state_name,state_code,geo_id,median_income
+Washington,WA,98304,36746.000000000
+Virginia,VA,22714,74625.000000000
+Nebraska,NE,69128,56471.000000000
+Oregon,OR,97908,22321.000000000
+Tennessee,TN,37228,15540.000000000
+Oregon,OR,97486,62083.000000000
+Maine,ME,04491,27500.000000000
+New York,NY,11005,58894.000000000
+Maine,ME,04936,40469.000000000
+New York,NY,12195,
+
+[Successfully executed]
+2025-07-01 04:20:52 - Thread-245 (execute) - INFO - [Try to execute]
+-- Description: This query calculates the average difference in median income from 2015 to 2018 by state.
+SELECT z."state_name", 
+       AVG(t2018."median_income" - t2015."median_income") AS "avg_income_difference"
+FROM CENSUS_BUREAU_ACS_2.GEO_US_BOUNDARIES.ZIP_CODES z
+JOIN CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2015_5YR t2015
+  ON z."zip_code" = t2015."geo_id"
+JOIN CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2018_5YR t2018
+  ON t2015."geo_id" = t2018."geo_id"
+WHERE t2015."median_income" IS NOT NULL AND t2018."median_income" IS NOT NULL
+GROUP BY z."state_name"
+ORDER BY "avg_income_difference" DESC
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:20:52 - Thread-245 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: This query calculates the average difference in median income from 2015 to 2018 by state.
+SELECT z."state_name", 
+       AVG(t2018."median_income" - t2015."median_income") AS "avg_income_difference"
+FROM CENSUS_BUREAU_ACS_2.GEO_US_BOUNDARIES.ZIP_CODES z
+JOIN CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2015_5YR t2015
+  ON z."zip_code" = t2015."geo_id"
+JOIN CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2018_5YR t2018
+  ON t2015."geo_id" = t2018."geo_id"
+WHERE t2015."median_income" IS NOT NULL AND t2018."median_income" IS NOT NULL
+GROUP BY z."state_name"
+ORDER BY "avg_income_difference" DESC
+LIMIT 20;
+Results:
+state_name,avg_income_difference
+Georgia (U.S. state),16522.466666666667
+District of Columbia,10497.681818181818
+Massachusetts,9121.021442495126
+California,9077.418488444722
+New Jersey,8674.214788732394
+Washington (state),8322.157894736842
+New Hampshire,8321.348547717842
+Hawaii,7776.481481481482
+Washington,7711.263862332696
+Maryland,7313.9740566037735
+Rhode Island,6987.333333333333
+Connecticut,6897.409961685824
+Oregon,6817.928571428572
+North Dakota,6814.220930232558
+Colorado,6617.
+
+[Successfully executed]
+2025-07-01 04:20:52 - Thread-245 (execute) - INFO - [Try to execute]
+-- Description: This query retrieves employment data for vulnerability calculations from the 2017 dataset.
+SELECT "geo_id", 
+       "employed_retail_trade", 
+       "employed_wholesale_trade", 
+       "employed_arts_entertainment_recreation_accommodation_food", 
+       "employed_information", 
+       "employed_agriculture_forestry_fishing_hunting_mining", 
+       "employed_construction"
+FROM CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2017_5YR
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:20:53 - Thread-245 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: This query retrieves employment data for vulnerability calculations from the 2017 dataset.
+SELECT "geo_id", 
+       "employed_retail_trade", 
+       "employed_wholesale_trade", 
+       "employed_arts_entertainment_recreation_accommodation_food", 
+       "employed_information", 
+       "employed_agriculture_forestry_fishing_hunting_mining", 
+       "employed_construction"
+FROM CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2017_5YR
+LIMIT 20;
+Results:
+geo_id,employed_retail_trade,employed_wholesale_trade,employed_arts_entertainment_recreation_accommodation_food,employed_information,employed_agriculture_forestry_fishing_hunting_mining,employed_construction
+14521,114.0,13.0,103.0,14.0,56.0,72.0
+43942,84.0,14.0,38.0,0.0,146.0,66.0
+56097,156.0,43.0,94.0,81.0,202.0,125.0
+14837,242.0,29.0,191.0,28.0,165.0,201.0
+35218,360.0,69.0,170.0,43.0,18.0,103.0
+12721,543.0,175.0,212.0,150.0,9.0,202.0
+80924,259.0,41.0,237.0,112.0,23.0,86.0
+85607,663.0,6
+
+[Successfully executed]
+2025-07-01 04:20:53 - Thread-245 (execute) - INFO - [Try to execute]
+-- Description: This query calculates the average number of vulnerable employees for five industries in 2017 by GEO ID.
+SELECT "geo_id", 
+       ("employed_wholesale_trade" * 0.38423645320197042 +
+        ("employed_agriculture_forestry_fishing_hunting_mining" + "employed_construction") * 0.48071410777129553 +
+        "employed_arts_entertainment_recreation_accommodation_food" * 0.89455676291236841 +
+        "employed_information" * 0.31315240083507306 +
+        "employed_retail_trade" * 0.51) AS "vulnerable_employees"
+FROM CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2017_5YR
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:20:53 - Thread-245 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: This query calculates the average number of vulnerable employees for five industries in 2017 by GEO ID.
+SELECT "geo_id", 
+       ("employed_wholesale_trade" * 0.38423645320197042 +
+        ("employed_agriculture_forestry_fishing_hunting_mining" + "employed_construction") * 0.48071410777129553 +
+        "employed_arts_entertainment_recreation_accommodation_food" * 0.89455676291236841 +
+        "employed_information" * 0.31315240083507306 +
+        "employed_retail_trade" * 0.51) AS "vulnerable_employees"
+FROM CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2017_5YR
+LIMIT 20;
+Results:
+geo_id,vulnerable_employees
+14521,221.1899598780164
+43942,184.12385818301223
+56097,362.7293609103019
+14837,490.1328295267957
+35218,433.8189252422735
+12721,682.2209499127713
+80924,447.32455403211145
+85607,871.6321000842049
+40210,948.9765095456444
+46040,903.1645918765412
+70525,1194.2655859038755
+29582,2293.6865526431734
+32534,1332.2083103244838
+01569,1204.834539120599
+41001,1503.6238685358358
+14217,2133.313247650402
+48040,799.9760055429774
+77836,1145.0925191302672
+
+[Successfully executed]
+2025-07-01 04:20:53 - Thread-245 (execute) - INFO - [Try to execute]
+-- Description: This query joins state mapping with vulnerability calculations to map each vulnerable count to its corresponding state.
+SELECT z."state_name", 
+       AVG(vul."vulnerable_employees") AS "avg_vulnerable_employees"
+FROM CENSUS_BUREAU_ACS_2.GEO_US_BOUNDARIES.ZIP_CODES z
+JOIN (
+  SELECT "geo_id", 
+         ("employed_wholesale_trade" * 0.38423645320197042 +
+          ("employed_agriculture_forestry_fishing_hunting_mining" + "employed_construction") * 0.48071410777129553 +
+          "employed_arts_entertainment_recreation_accommodation_food" * 0.89455676291236841 +
+          "employed_information" * 0.31315240083507306 +
+          "employed_retail_trade" * 0.51) AS "vulnerable_employees"
+  FROM CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2017_5YR
+) vul
+ON z."zip_code" = vul."geo_id"
+GROUP BY z."state_name"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:20:54 - Thread-245 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: This query joins state mapping with vulnerability calculations to map each vulnerable count to its corresponding state.
+SELECT z."state_name", 
+       AVG(vul."vulnerable_employees") AS "avg_vulnerable_employees"
+FROM CENSUS_BUREAU_ACS_2.GEO_US_BOUNDARIES.ZIP_CODES z
+JOIN (
+  SELECT "geo_id", 
+         ("employed_wholesale_trade" * 0.38423645320197042 +
+          ("employed_agriculture_forestry_fishing_hunting_mining" + "employed_construction") * 0.48071410777129553 +
+          "employed_arts_entertainment_recreation_accommodation_food" * 0.89455676291236841 +
+          "employed_information" * 0.31315240083507306 +
+          "employed_retail_trade" * 0.51) AS "vulnerable_employees"
+  FROM CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2017_5YR
+) vul
+ON z."zip_code" = vul."geo_id"
+GROUP BY z."state_name"
+LIMIT 20;
+Results:
+state_name,avg_vulnerable_employees
+Arizona,1580.9704853013955
+Mississippi,573.5645075601863
+West Virginia,223.51456538713245
+Virginia,838.5529902525731
+Wisconsin,715.0426047330368
+Arkansas,434.20044013604314
+Rhode Island,1371.5096253908632
+Vermont,263.445369460616
+Massachusetts,1157.2236465204808
+New Mexico,538.1402213547607
+Washington (state),735.0095962805751
+Iowa,326.7908551411079
+Washington,1189.542522789221
+Puerto Rico,1592.981324669586
+Hawaii,1862.9095817981795
+Idaho,582.3
+
+[Successfully executed]
+2025-07-01 04:20:54 - Thread-245 (execute) - INFO - [Try to execute]
+-- Description: This query identifies the top 5 states by average median income difference and calculates the corresponding average number of vulnerable employees for those states.
+WITH IncomeDifference AS (
+  SELECT z."state_name", 
+         AVG(t2018."median_income" - t2015."median_income") AS "avg_income_difference"
+  FROM CENSUS_BUREAU_ACS_2.GEO_US_BOUNDARIES.ZIP_CODES z
+  JOIN CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2015_5YR t2015
+    ON z."zip_code" = t2015."geo_id"
+  JOIN CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2018_5YR t2018
+    ON t2015."geo_id" = t2018."geo_id"
+  WHERE t2015."median_income" IS NOT NULL AND t2018."median_income" IS NOT NULL
+  GROUP BY z."state_name"
+),
+Vulnerability AS (
+  SELECT z."state_name",
+         AVG(
+          ("employed_wholesale_trade" * 0.38423645320197042 +
+           ("employed_agriculture_forestry_fishing_hunting_mining" + "employed_construction") * 0.48071410777129553 +
+           "employed_arts_entertainment_recreation_accommodation_food" * 0.89455676291236841 +
+           "employed_information" * 0.31315240083507306 +
+           "employed_retail_trade" * 0.51)
+         ) AS "avg_vulnerable_employees"
+  FROM CENSUS_BUREAU_ACS_2.GEO_US_BOUNDARIES.ZIP_CODES z
+  JOIN CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2017_5YR t
+    ON z."zip_code" = t."geo_id"
+  GROUP BY z."state_name"
+)
+SELECT id."state_name", id."avg_income_difference", v."avg_vulnerable_employees"
+FROM IncomeDifference id
+JOIN Vulnerability v
+  ON id."state_name" = v."state_name"
+ORDER BY id."avg_income_difference" DESC
+LIMIT 5;
+[Try to execute]
+2025-07-01 04:20:54 - Thread-245 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: This query identifies the top 5 states by average median income difference and calculates the corresponding average number of vulnerable employees for those states.
+WITH IncomeDifference AS (
+  SELECT z."state_name", 
+         AVG(t2018."median_income" - t2015."median_income") AS "avg_income_difference"
+  FROM CENSUS_BUREAU_ACS_2.GEO_US_BOUNDARIES.ZIP_CODES z
+  JOIN CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2015_5YR t2015
+    ON z."zip_code" = t2015."geo_id"
+  JOIN CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2018_5YR t2018
+    ON t2015."geo_id" = t2018."geo_id"
+  WHERE t2015."median_income" IS NOT NULL AND t2018."median_income" IS NOT NULL
+  GROUP BY z."state_name"
+),
+Vulnerability AS (
+  SELECT z."state_name",
+         AVG(
+          ("employed_wholesale_trade" * 0.38423645320197042 +
+           ("employed_agriculture_forestry_fishing_hunting_mining" + "employed_construction") * 0.48071410777129553 +
+           "employed_arts_entertainment_recreation_accommodation_food" * 0.89455676291236841 +
+           "employed_information" * 0.31315240083507306 +
+           "employed_retail_trade" * 0.51)
+         ) AS "avg_vulnerable_employees"
+  FROM CENSUS_BUREAU_ACS_2.GEO_US_BOUNDARIES.ZIP_CODES z
+  JOIN CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2017_5YR t
+    ON z."zip_code" = t."geo_id"
+  GROUP BY z."state_name"
+)
+SELECT id."state_name", id."avg_income_difference", v."avg_vulnerable_employees"
+FROM IncomeDifference id
+JOIN Vulnerability v
+  ON id."state_name" = v."state_name"
+ORDER BY id."avg_income_difference" DESC
+LIMIT 5;
+Results:
+state_name,avg_income_difference,avg_vulnerable_employees
+Georgia (U.S. state),16522.466666666667,365.38619599040385
+District of Columbia,10497.681818181818,2144.167902431892
+Massachusetts,9121.021442495126,1157.2236465204808
+California,9077.418488444722,2136.8630037655767
+New Jersey,8674.214788732394,1344.1755020319931
+
+[Successfully executed]
+2025-07-01 04:20:54 - Thread-245 (execute) - INFO - itercount: 0
+2025-07-01 04:20:54 - Thread-245 (execute) - INFO - [Self-refine]
+Table full name: CENSUS_BUREAU_ACS_2.GEO_US_BOUNDARIES.ZIP_CODES
+Column name: zip_code Type: TEXT
+Column name: state_code Type: TEXT
+Column name: state_name Type: TEXT
+Sample rows:
+[{'zip_code': '99615', 'state_code': 'AK', 'state_name': 'Alaska'}, {'zip_code': '43536', 'state_code': 'OH', 'state_name': 'Ohio'}, {'zip_code': '53210', 'state_code': 'WI', 'state_name': 'Wisconsin'}, {'zip_code': '44082', 'state_code': 'OH', 'state_name': 'Ohio'}, {'zip_code': '61911', 'state_code': 'IL', 'state_name': 'Illinois'}]
+--------------------------------------------------
+Table full name: CENSUS_BUREAU_ACS_2.CYCLISTIC.STATE_FIPS
+Column name: state Type: TEXT
+Column name: postal_code Type: TEXT
+Column name: fips Type: NUMBER
+Sample rows:
+[{'state': 'Alabama', 'postal_code': 'AL', 'fips': 1}, {'state': 'Arkansas', 'postal_code': 'AR', 'fips': 5}, {'state': 'Hawaii', 'postal_code': 'HI', 'fips': 15}, {'state': 'Idaho', 'postal_code': 'ID', 'fips': 16}, {'state': 'Illinois', 'postal_code': 'IL', 'fips': 17}]
+--------------------------------------------------
+Table full name: CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2015_5YR
+Column name: employed_wholesale_trade Type: NUMBER Description: Workers employed in firms in wholesale trade. The Wholesale Trade sector comprises establishments engaged in wholesaling merchandise, generally without transformation, and rendering services incidental to the sale of merchandise. The wholesaling process is an intermediate step in the distribution of merchandise. Wholesalers are organized to sell or arrange the purchase or sale of (a) goods for resale (i.e., goods sold to other wholesalers or retailers), (b) capital or durable nonconsumer goods, and (c) raw and intermediate materials and supplies used in production.
+Column name: employed_retail_trade Type: NUMBER Description: Workers employed in firms in retail trade. The Retail Trade sector comprises establishments engaged in retailing merchandise, generally without transformation, and rendering services incidental to the sale of merchandise. The retailing process is the final step in the distribution of merchandise; retailers are, therefore, organized to sell merchandise in small quantities to the general public.
+Column name: employed_arts_entertainment_recreation_accommodation_food Type: NUMBER Description: Workers employed in firms in arts, entertainment, recreation, accommodation and food services. The Arts, Entertainment, and Recreation sector includes a wide range of establishments that operate facilities or provide services to meet varied cultural, entertainment, and recreational interests of their patrons. This sector comprises (1) establishments that are involved in producing, promoting, or participating in live performances, events, or exhibits intended for public viewing; (2) establishments that preserve and exhibit objects and sites of historical, cultural, or educational interest; and (3) establishments that operate facilities or provide services that enable patrons to participate in recreational activities or pursue amusement, hobby, and leisure-time interests.
+Column name: employed_construction Type: NUMBER Description: Workers employed in firms in construction. The Construction sector comprises establishments primarily engaged in the construction of buildings or engineering projects (e.g., highways and utility systems). Construction work done may include new work, additions, alterations, or maintenance and repairs.
+Column name: median_income Type: NUMBER Description: Median Household Income in the past 12 Months. Within a geographic area, the median income received by every household on a regular basis before payments for personal income taxes, social security, union dues, medicare deductions, etc.  It includes income received from wages, salary, commissions, bonuses, and tips; self-employment income from own nonfarm or farm businesses, including proprietorships and partnerships; interest, dividends, net rental income, royalty income, or income from estates and trusts; Social Security or Railroad Retirement income; Supplemental Security Income (SSI); any cash public assistance or welfare payments from the state or local welfare office; retirement, survivor, or disability benefits; and any other sources of income received regularly such as Veterans' (VA) payments, unemployment and/or worker's compensation, child support, and alimony.
+Column name: employed_agriculture_forestry_fishing_hunting_mining Type: NUMBER Description: Workers employed in firms in agriculture, forestry, fishing, hunting, or mining. The Agriculture, Forestry, Fishing and Hunting sector comprises establishments primarily engaged in growing crops, raising animals, harvesting timber, and harvesting fish and other animals from a farm, ranch, or their natural habitats.
+Column name: employed_information Type: NUMBER Description: Workers employed in firms in information. The Information sector comprises establishments engaged in the following processes: (a) producing and distributing information and cultural products, (b) providing the means to transmit or distribute these products as well as data or communications, and (c) processing data. Included are the publishing industries, the motion picture and sound recording industries; the broadcasting industries, the telecommunications industries; Web search portals, data processing industries, and the information services industries.
+Column name: geo_id Type: TEXT Description: US Census Zip Code Tabulation Areas Geoids
+Sample rows:
+[{'geo_id': '69128', 'median_income': '56471.000000000', 'employed_agriculture_forestry_fishing_hunting_mining': '30.000000000', 'employed_arts_entertainment_recreation_accommodation_food': '0E-9', 'employed_construction': '1.000000000', 'employed_information': '3.000000000', 'employed_retail_trade': '31.000000000', 'employed_wholesale_trade': '2.000000000'}, {'geo_id': '97486', 'median_income': '62083.000000000', 'employed_agriculture_forestry_fishing_hunting_mining': '9.000000000', 'employed_arts_entertainment_recreation_accommodation_food': '7.000000000', 'employed_construction': '0E-9', 'employed_information': '0E-9', 'employed_retail_trade': '56.000000000', 'employed_wholesale_trade': '0E-9'}, {'geo_id': '04491', 'median_income': '27500.000000000', 'employed_agriculture_forestry_fishing_hunting_mining': '7.000000000', 'employed_arts_entertainment_recreation_accommodation_food': '1.000000000', 'employed_construction': '6.000000000', 'employed_information': '0E-9', 'employed_retail_trade': '7.000000000', 'employed_wholesale_trade': '0E-9'}, {'geo_id': '11005', 'median_income': '58894.000000000', 'employed_agriculture_forestry_fishing_hunting_mining': '0E-9', 'employed_arts_entertainment_recreation_accommodation_food': '7.000000000', 'employed_construction': '9.000000000', 'employed_information': '0E-9', 'employed_retail_trade': '59.000000000', 'employed_wholesale_trade': '9.000000000'}, {'geo_id': '12195', 'median_income': None, 'employed_agriculture_forestry_fishing_hunting_mining': '0E-9', 'employed_arts_entertainment_recreation_accommodation_food': '7.000000000', 'employed_construction': '0E-9', 'employed_information': '0E-9', 'employed_retail_trade': '0E-9', 'employed_wholesale_trade': '0E-9'}]
+--------------------------------------------------
+Table full name: CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2017_5YR
+Column name: geo_id Type: TEXT Description: US Census Zip Code Tabulation Areas Geoids
+Column name: employed_arts_entertainment_recreation_accommodation_food Type: FLOAT Description: Workers employed in firms in arts, entertainment, recreation, accommodation and food services. The Arts, Entertainment, and Recreation sector includes a wide range of establishments that operate facilities or provide services to meet varied cultural, entertainment, and recreational interests of their patrons. This sector comprises (1) establishments that are involved in producing, promoting, or participating in live performances, events, or exhibits intended for public viewing; (2) establishments that preserve and exhibit objects and sites of historical, cultural, or educational interest; and (3) establishments that operate facilities or provide services that enable patrons to participate in recreational activities or pursue amusement, hobby, and leisure-time interests.
+Column name: employed_agriculture_forestry_fishing_hunting_mining Type: FLOAT Description: Workers employed in firms in agriculture, forestry, fishing, hunting, or mining. The Agriculture, Forestry, Fishing and Hunting sector comprises establishments primarily engaged in growing crops, raising animals, harvesting timber, and harvesting fish and other animals from a farm, ranch, or their natural habitats.
+Column name: employed_retail_trade Type: FLOAT Description: Workers employed in firms in retail trade. The Retail Trade sector comprises establishments engaged in retailing merchandise, generally without transformation, and rendering services incidental to the sale of merchandise. The retailing process is the final step in the distribution of merchandise; retailers are, therefore, organized to sell merchandise in small quantities to the general public.
+Column name: employed_information Type: FLOAT Description: Workers employed in firms in information. The Information sector comprises establishments engaged in the following processes: (a) producing and distributing information and cultural products, (b) providing the means to transmit or distribute these products as well as data or communications, and (c) processing data. Included are the publishing industries, the motion picture and sound recording industries; the broadcasting industries, the telecommunications industries; Web search portals, data processing industries, and the information services industries.
+Column name: employed_wholesale_trade Type: FLOAT Description: Workers employed in firms in wholesale trade. The Wholesale Trade sector comprises establishments engaged in wholesaling merchandise, generally without transformation, and rendering services incidental to the sale of merchandise. The wholesaling process is an intermediate step in the distribution of merchandise. Wholesalers are organized to sell or arrange the purchase or sale of (a) goods for resale (i.e., goods sold to other wholesalers or retailers), (b) capital or durable nonconsumer goods, and (c) raw and intermediate materials and supplies used in production.
+Column name: employed_construction Type: FLOAT Description: Workers employed in firms in construction. The Construction sector comprises establishments primarily engaged in the construction of buildings or engineering projects (e.g., highways and utility systems). Construction work done may include new work, additions, alterations, or maintenance and repairs.
+Column name: median_income Type: FLOAT Description: Median Household Income in the past 12 Months. Within a geographic area, the median income received by every household on a regular basis before payments for personal income taxes, social security, union dues, medicare deductions, etc.  It includes income received from wages, salary, commissions, bonuses, and tips; self-employment income from own nonfarm or farm businesses, including proprietorships and partnerships; interest, dividends, net rental income, royalty income, or income from estates and trusts; Social Security or Railroad Retirement income; Supplemental Security Income (SSI); any cash public assistance or welfare payments from the state or local welfare office; retirement, survivor, or disability benefits; and any other sources of income received regularly such as Veterans' (VA) payments, unemployment and/or worker's compensation, child support, and alimony.
+Sample rows:
+[{'geo_id': '43942', 'median_income': 44911.0, 'employed_agriculture_forestry_fishing_hunting_mining': 146.0, 'employed_arts_entertainment_recreation_accommodation_food': 38.0, 'employed_construction': 66.0, 'employed_information': 0.0, 'employed_retail_trade': 84.0, 'employed_wholesale_trade': 14.0}, {'geo_id': '14837', 'median_income': 49615.0, 'employed_agriculture_forestry_fishing_hunting_mining': 165.0, 'employed_arts_entertainment_recreation_accommodation_food': 191.0, 'employed_construction': 201.0, 'employed_information': 28.0, 'employed_retail_trade': 242.0, 'employed_wholesale_trade': 29.0}, {'geo_id': '35218', 'median_income': 24645.0, 'employed_agriculture_forestry_fishing_hunting_mining': 18.0, 'employed_arts_entertainment_recreation_accommodation_food': 170.0, 'employed_construction': 103.0, 'employed_information': 43.0, 'employed_retail_trade': 360.0, 'employed_wholesale_trade': 69.0}, {'geo_id': '80924', 'median_income': 124745.0, 'employed_agriculture_forestry_fishing_hunting_mining': 23.0, 'employed_arts_entertainment_recreation_accommodation_food': 237.0, 'employed_construction': 86.0, 'employed_information': 112.0, 'employed_retail_trade': 259.0, 'employed_wholesale_trade': 41.0}, {'geo_id': '40210', 'median_income': 22487.0, 'employed_agriculture_forestry_fishing_hunting_mining': 47.0, 'employed_arts_entertainment_recreation_accommodation_food': 657.0, 'employed_construction': 85.0, 'employed_information': 61.0, 'employed_retail_trade': 444.0, 'employed_wholesale_trade': 136.0}]
+--------------------------------------------------
+Table full name: CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2018_5YR
+Column name: employed_retail_trade Type: FLOAT
+Column name: employed_construction Type: FLOAT
+Column name: geo_id Type: TEXT
+Column name: employed_wholesale_trade Type: FLOAT
+Column name: employed_arts_entertainment_recreation_accommodation_food Type: FLOAT
+Column name: median_income Type: FLOAT
+Column name: employed_information Type: FLOAT
+Column name: employed_agriculture_forestry_fishing_hunting_mining Type: FLOAT
+Sample rows:
+[{'geo_id': '15537', 'median_income': 46265.0, 'employed_agriculture_forestry_fishing_hunting_mining': 104.0, 'employed_arts_entertainment_recreation_accommodation_food': 372.0, 'employed_construction': 538.0, 'employed_information': 10.0, 'employed_retail_trade': 574.0, 'employed_wholesale_trade': 82.0}, {'geo_id': '32310', 'median_income': 36653.0, 'employed_agriculture_forestry_fishing_hunting_mining': 77.0, 'employed_arts_entertainment_recreation_accommodation_food': 850.0, 'employed_construction': 512.0, 'employed_information': 32.0, 'employed_retail_trade': 1170.0, 'employed_wholesale_trade': 145.0}, {'geo_id': '29550', 'median_income': 42243.0, 'employed_agriculture_forestry_fishing_hunting_mining': 286.0, 'employed_arts_entertainment_recreation_accommodation_food': 692.0, 'employed_construction': 568.0, 'employed_information': 169.0, 'employed_retail_trade': 1582.0, 'employed_wholesale_trade': 129.0}, {'geo_id': '79403', 'median_income': 38891.0, 'employed_agriculture_forestry_fishing_hunting_mining': 122.0, 'employed_arts_entertainment_recreation_accommodation_food': 703.0, 'employed_construction': 544.0, 'employed_information': 47.0, 'employed_retail_trade': 766.0, 'employed_wholesale_trade': 176.0}, {'geo_id': '26047', 'median_income': 49755.0, 'employed_agriculture_forestry_fishing_hunting_mining': 151.0, 'employed_arts_entertainment_recreation_accommodation_food': 374.0, 'employed_construction': 137.0, 'employed_information': 30.0, 'employed_retail_trade': 234.0, 'employed_wholesale_trade': 41.0}]
+--------------------------------------------------
+External knowledge that might be helpful: 
+# Calculation of Average Vulnerable Population
+
+This document outlines the method for calculating the average vulnerable population across various industries based on their employment and vulnerability weights.
+
+## Variables
+
+- Let:
+  - wholesale_trade = Employment in Wholesale Trade
+  - natural_resources_construction = Employment in Natural Resources and Construction
+  - arts_entertainment_recreation = Employment in Arts, Entertainment, and Recreation
+  - information = Employment in Information
+  - retail = Employment in Retail Trade
+
+## Weights
+
+Each industry has a corresponding vulnerability weight:
+- wholesale_trade = 0.38423645320197042 
+- natural_resources_construction = 0.48071410777129553 
+- arts_entertainment_recreation = 0.89455676291236841
+- information = 0.31315240083507306 
+- retail = 0.51
+
+The table structure information is ({database name: {schema name: [table name]}}): 
+{'CENSUS_BUREAU_ACS_2': {'GEO_US_BOUNDARIES': ['ZIP_CODES'], 'CYCLISTIC': ['STATE_FIPS'], 'CENSUS_BUREAU_ACS': ['ZIP_CODES_2015_5YR', 'ZIP_CODES_2017_5YR', 'ZIP_CODES_2018_5YR']}}
+
+Some few-shot examples after column exploration may be helpful:
+Query:
+-- Description: This query retrieves distinct state names and their postal codes to match ZIP codes with their states.
+SELECT DISTINCT "state_name", "state_code"
+FROM CENSUS_BUREAU_ACS_2.GEO_US_BOUNDARIES.ZIP_CODES
+LIMIT 20;
+Answer:
+state_name,state_code
+Florida,FL
+Tennessee,TN
+Ohio,OH
+Iowa,IA
+Virginia,VA
+Mississippi,MS
+Georgia (U.S. state),GA
+Louisiana,LA
+South Carolina,SC
+Mississippi,GA
+Pennsylvania,PA
+West Virginia,WV
+Alabama,AL
+New York,NY
+Michigan,MI
+Minnesota,MN
+Illinois,IL
+Kentucky,KY
+Missouri,MO
+North Carolina,NC
+Query:
+-- Description: This query retrieves GEO IDs and the corresponding median income values in the 2015 dataset. GEO IDs represent ZIP areas.
+SELECT "geo_id", "median_income"
+FROM CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2015_5YR
+LIMIT 20;
+Answer:
+geo_id,median_income
+98304,36746.000000000
+22714,74625.000000000
+69128,56471.000000000
+97908,22321.000000000
+37228,15540.000000000
+97486,62083.000000000
+04491,27500.000000000
+11005,58894.000000000
+04936,40469.000000000
+12195,
+63102,39855.000000000
+06793,81711.000000000
+44669,67981.000000000
+96109,29958.000000000
+15638,51304.000000000
+Query:
+-- Description: This query retrieves GEO IDs and the corresponding median income values in the 2018 dataset for comparison with the 2015 data.
+SELECT "geo_id", "median_income"
+FROM CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2018_5YR
+LIMIT 20;
+Answer:
+geo_id,median_income
+15537,46265.0
+48215,22721.0
+29571,32764.0
+88063,24875.0
+32310,36653.0
+29550,42243.0
+79403,38891.0
+59034,44985.0
+26047,49755.0
+35954,40664.0
+59401,39530.0
+44041,40431.0
+48225,47864.0
+29418,39577.0
+44502,26606.0
+34491,46338.0
+33634,58013.0
+51106,56795.0
+47807,21288.0
+83402,51017.0
+Query:
+-- Description: This query joins the 2015 and 2018 tables on geo_id to calculate the difference in median income per ZIP code.
+SELECT t2015."geo_id", 
+       t2015."median_income" AS "income_2015", 
+       t2018."median_income" AS "income_2018",
+       (t2018."median_income" - t2015."median_income") AS "income_difference"
+FROM CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2015_5YR t2015
+JOIN CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2018_5YR t2018
+ON t2015."geo_id" = t2018."geo_id"
+WHERE t2015."median_income" IS NOT NULL AND t2018."median_income" IS NOT NULL
+LIMIT 20;
+Answer:
+geo_id,income_2015,income_2018,income_difference
+98304,36746.000000000,37759.0,1013.0
+22714,74625.000000000,92917.0,18292.0
+69128,56471.000000000,38125.0,-18346.0
+97908,22321.000000000,23750.0,1429.0
+37228,15540.000000000,29119.0,13579.0
+97486,62083.000000000,53393.0,-8690.0
+04491,27500.000000000,37500.0,10000.0
+11005,58894.000000000,62993.0,4099.0
+63102,39855.000000000,55053.0,15198.0
+06793,81711.000000000,99861.0,18150.0
+Query:
+-- Description: This query maps ZIP codes from geo_id to their corresponding state names and state codes using the ZIP_CODES table.
+SELECT z."state_name", z."state_code", t."geo_id", t."median_income"
+FROM CENSUS_BUREAU_ACS_2.GEO_US_BOUNDARIES.ZIP_CODES z
+JOIN CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2015_5YR t
+ON z."zip_code" = t."geo_id"
+LIMIT 20;
+Answer:
+state_name,state_code,geo_id,median_income
+Washington,WA,98304,36746.000000000
+Virginia,VA,22714,74625.000000000
+Nebraska,NE,69128,56471.000000000
+Oregon,OR,97908,22321.000000000
+Tennessee,TN,37228,15540.000000000
+Oregon,OR,97486,62083.000000000
+Maine,ME,04491,27500.000000000
+New York,NY,11005,58894.000000000
+Maine,ME,04936,40469.000000000
+New York,NY,12195,
+Query:
+-- Description: This query calculates the average difference in median income from 2015 to 2018 by state.
+SELECT z."state_name", 
+       AVG(t2018."median_income" - t2015."median_income") AS "avg_income_difference"
+FROM CENSUS_BUREAU_ACS_2.GEO_US_BOUNDARIES.ZIP_CODES z
+JOIN CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2015_5YR t2015
+  ON z."zip_code" = t2015."geo_id"
+JOIN CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2018_5YR t2018
+  ON t2015."geo_id" = t2018."geo_id"
+WHERE t2015."median_income" IS NOT NULL AND t2018."median_income" IS NOT NULL
+GROUP BY z."state_name"
+ORDER BY "avg_income_difference" DESC
+LIMIT 20;
+Answer:
+state_name,avg_income_difference
+Georgia (U.S. state),16522.466666666667
+District of Columbia,10497.681818181818
+Massachusetts,9121.021442495126
+California,9077.418488444722
+New Jersey,8674.214788732394
+Washington (state),8322.157894736842
+New Hampshire,8321.348547717842
+Hawaii,7776.481481481482
+Washington,7711.263862332696
+Maryland,7313.9740566037735
+Rhode Island,6987.333333333333
+Connecticut,6897.409961685824
+Oregon,6817.928571428572
+North Dakota,6814.220930232558
+Colorado,6617.
+Query:
+-- Description: This query retrieves employment data for vulnerability calculations from the 2017 dataset.
+SELECT "geo_id", 
+       "employed_retail_trade", 
+       "employed_wholesale_trade", 
+       "employed_arts_entertainment_recreation_accommodation_food", 
+       "employed_information", 
+       "employed_agriculture_forestry_fishing_hunting_mining", 
+       "employed_construction"
+FROM CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2017_5YR
+LIMIT 20;
+Answer:
+geo_id,employed_retail_trade,employed_wholesale_trade,employed_arts_entertainment_recreation_accommodation_food,employed_information,employed_agriculture_forestry_fishing_hunting_mining,employed_construction
+14521,114.0,13.0,103.0,14.0,56.0,72.0
+43942,84.0,14.0,38.0,0.0,146.0,66.0
+56097,156.0,43.0,94.0,81.0,202.0,125.0
+14837,242.0,29.0,191.0,28.0,165.0,201.0
+35218,360.0,69.0,170.0,43.0,18.0,103.0
+12721,543.0,175.0,212.0,150.0,9.0,202.0
+80924,259.0,41.0,237.0,112.0,23.0,86.0
+85607,663.0,6
+Query:
+-- Description: This query calculates the average number of vulnerable employees for five industries in 2017 by GEO ID.
+SELECT "geo_id", 
+       ("employed_wholesale_trade" * 0.38423645320197042 +
+        ("employed_agriculture_forestry_fishing_hunting_mining" + "employed_construction") * 0.48071410777129553 +
+        "employed_arts_entertainment_recreation_accommodation_food" * 0.89455676291236841 +
+        "employed_information" * 0.31315240083507306 +
+        "employed_retail_trade" * 0.51) AS "vulnerable_employees"
+FROM CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2017_5YR
+LIMIT 20;
+Answer:
+geo_id,vulnerable_employees
+14521,221.1899598780164
+43942,184.12385818301223
+56097,362.7293609103019
+14837,490.1328295267957
+35218,433.8189252422735
+12721,682.2209499127713
+80924,447.32455403211145
+85607,871.6321000842049
+40210,948.9765095456444
+46040,903.1645918765412
+70525,1194.2655859038755
+29582,2293.6865526431734
+32534,1332.2083103244838
+01569,1204.834539120599
+41001,1503.6238685358358
+14217,2133.313247650402
+48040,799.9760055429774
+77836,1145.0925191302672
+Query:
+-- Description: This query joins state mapping with vulnerability calculations to map each vulnerable count to its corresponding state.
+SELECT z."state_name", 
+       AVG(vul."vulnerable_employees") AS "avg_vulnerable_employees"
+FROM CENSUS_BUREAU_ACS_2.GEO_US_BOUNDARIES.ZIP_CODES z
+JOIN (
+  SELECT "geo_id", 
+         ("employed_wholesale_trade" * 0.38423645320197042 +
+          ("employed_agriculture_forestry_fishing_hunting_mining" + "employed_construction") * 0.48071410777129553 +
+          "employed_arts_entertainment_recreation_accommodation_food" * 0.89455676291236841 +
+          "employed_information" * 0.31315240083507306 +
+          "employed_retail_trade" * 0.51) AS "vulnerable_employees"
+  FROM CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2017_5YR
+) vul
+ON z."zip_code" = vul."geo_id"
+GROUP BY z."state_name"
+LIMIT 20;
+Answer:
+state_name,avg_vulnerable_employees
+Arizona,1580.9704853013955
+Mississippi,573.5645075601863
+West Virginia,223.51456538713245
+Virginia,838.5529902525731
+Wisconsin,715.0426047330368
+Arkansas,434.20044013604314
+Rhode Island,1371.5096253908632
+Vermont,263.445369460616
+Massachusetts,1157.2236465204808
+New Mexico,538.1402213547607
+Washington (state),735.0095962805751
+Iowa,326.7908551411079
+Washington,1189.542522789221
+Puerto Rico,1592.981324669586
+Hawaii,1862.9095817981795
+Idaho,582.3
+Query:
+-- Description: This query identifies the top 5 states by average median income difference and calculates the corresponding average number of vulnerable employees for those states.
+WITH IncomeDifference AS (
+  SELECT z."state_name", 
+         AVG(t2018."median_income" - t2015."median_income") AS "avg_income_difference"
+  FROM CENSUS_BUREAU_ACS_2.GEO_US_BOUNDARIES.ZIP_CODES z
+  JOIN CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2015_5YR t2015
+    ON z."zip_code" = t2015."geo_id"
+  JOIN CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2018_5YR t2018
+    ON t2015."geo_id" = t2018."geo_id"
+  WHERE t2015."median_income" IS NOT NULL AND t2018."median_income" IS NOT NULL
+  GROUP BY z."state_name"
+),
+Vulnerability AS (
+  SELECT z."state_name",
+         AVG(
+          ("employed_wholesale_trade" * 0.38423645320197042 +
+           ("employed_agriculture_forestry_fishing_hunting_mining" + "employed_construction") * 0.48071410777129553 +
+           "employed_arts_entertainment_recreation_accommodation_food" * 0.89455676291236841 +
+           "employed_information" * 0.31315240083507306 +
+           "employed_retail_trade" * 0.51)
+         ) AS "avg_vulnerable_employees"
+  FROM CENSUS_BUREAU_ACS_2.GEO_US_BOUNDARIES.ZIP_CODES z
+  JOIN CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2017_5YR t
+    ON z."zip_code" = t."geo_id"
+  GROUP BY z."state_name"
+)
+SELECT id."state_name", id."avg_income_difference", v."avg_vulnerable_employees"
+FROM IncomeDifference id
+JOIN Vulnerability v
+  ON id."state_name" = v."state_name"
+ORDER BY id."avg_income_difference" DESC
+LIMIT 5;
+Answer:
+state_name,avg_income_difference,avg_vulnerable_employees
+Georgia (U.S. state),16522.466666666667,365.38619599040385
+District of Columbia,10497.681818181818,2144.167902431892
+Massachusetts,9121.021442495126,1157.2236465204808
+California,9077.418488444722,2136.8630037655767
+New Jersey,8674.214788732394,1344.1755020319931
+Task: Which are the top five states with the greatest average difference in median income between 2015 and 2018 at the ZIP code level, and what is the corresponding average number of vulnerable employees across wholesale trade, natural resources and construction, arts and entertainment, information, and retail trade industries in 2017 according to the ACS Five-Year Estimates and ZIP code boundaries data?
+Another way to say it: What are the top 5 states with the highest average median income difference from 2015 to 2018? also provide the average number of vulnerable employees across various industries for these states, using data from the ACS 5-Year Estimates for 2017.
+
+Please think step by step and answer only one complete SQL in snowflake dialect in ```sql``` format.
+SQL usage example: ```sql
+SELECT "COLUMN_NAME" FROM DATABASE.SCHEMA.TABLE WHERE ... ``` (Adjust "DATABASE", "SCHEMA", and "TABLE" to match actual names, ensure all column names are enclosed in double quotations)
+Here are some useful tips for answering:
+When performing a UNION operation on many tables, ensure that all table names are explicitly listed. Union first and then add condition and selection. e.g. SELECT "col1", "col2" FROM (TABLE1 UNION ALL TABLE2) WHERE ...; Don't write sqls as (SELECT col1, col2 FROM TABLE1 WHERE ...) UNION ALL (SELECT col1, col2 FROM TABLE2 WHERE ...); Don't use ['-- Include all', '-- Omit', '-- Continue', '-- Union all', '-- ...', '-- List all', '-- Replace this', '-- Each table', '-- Add other'] to omit any table. Table names here: The table structure information is ({database name: {schema name: [table name]}}): 
+{'CENSUS_BUREAU_ACS_2': {'GEO_US_BOUNDARIES': ['ZIP_CODES'], 'CYCLISTIC': ['STATE_FIPS'], 'CENSUS_BUREAU_ACS': ['ZIP_CODES_2015_5YR', 'ZIP_CODES_2017_5YR', 'ZIP_CODES_2018_5YR']}}
+
+When using ORDER BY xxx DESC, add NULLS LAST to exclude null records: ORDER BY xxx DESC NULLS LAST.
+When asked something without stating name or id, return both of them. e.g. Which products ...? The answer should include product_name and product_id.
+When asked percentage decrease, you should return a positive value. e.g. How many percentage points in 2021 decrease compared to ...? The answer should be a positive value indicating the decresed number. Try to use ABS().
+If asked two tables, you should reply with the last one instead of combining two tables. e.g. Identifying the top five states ... examine the state that ranks fourth overall and identify its top five counties. You should only answer top five counties.
+Use ST_DISTANCE to calculate distance between two geographic points for more accurate answer.
+If the task description does not specify the number of decimal places, retain all decimals to four places.
+
+[Self-refine]
+2025-07-01 04:21:12 - Thread-245 (execute) - INFO - [Try to run SQL in self-refine]
+```sql
+WITH IncomeDifference AS (
+  SELECT z."state_name", 
+         AVG(t2018."median_income" - t2015."median_income") AS "avg_income_difference"
+  FROM CENSUS_BUREAU_ACS_2.GEO_US_BOUNDARIES.ZIP_CODES z
+  JOIN CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2015_5YR t2015
+    ON z."zip_code" = t2015."geo_id"
+  JOIN CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2018_5YR t2018
+    ON t2015."geo_id" = t2018."geo_id"
+  WHERE t2015."median_income" IS NOT NULL AND t2018."median_income" IS NOT NULL
+  GROUP BY z."state_name"
+),
+Vulnerability AS (
+  SELECT z."state_name",
+         AVG(
+          ("employed_wholesale_trade" * 0.38423645320197042 +
+           ("employed_agriculture_forestry_fishing_hunting_mining" + "employed_construction") * 0.48071410777129553 +
+           "employed_arts_entertainment_recreation_accommodation_food" * 0.89455676291236841 +
+           "employed_information" * 0.31315240083507306 +
+           "employed_retail_trade" * 0.51)
+         ) AS "avg_vulnerable_employees"
+  FROM CENSUS_BUREAU_ACS_2.GEO_US_BOUNDARIES.ZIP_CODES z
+  JOIN CENSUS_BUREAU_ACS_2.CENSUS_BUREAU_ACS.ZIP_CODES_2017_5YR t
+    ON z."zip_code" = t."geo_id"
+  GROUP BY z."state_name"
+)
+SELECT id."state_name", id."avg_income_difference", v."avg_vulnerable_employees"
+FROM IncomeDifference id
+JOIN Vulnerability v
+  ON id."state_name" = v."state_name"
+ORDER BY id."avg_income_difference" DESC NULLS LAST
+LIMIT 5;
+```
+[Try to run SQL in self-refine]
+2025-07-01 04:21:14 - Thread-245 (execute) - INFO - Total iteration counts: 0

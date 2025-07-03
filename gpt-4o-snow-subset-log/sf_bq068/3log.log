@@ -1,0 +1,714 @@
+2025-07-01 04:26:13 - Thread-316 (execute) - INFO - [Exploration]
+```sql
+-- Description: Select distinct address types from the OUTPUTS table to identify the unique "type" values available for grouping by address type.
+SELECT DISTINCT "type" 
+FROM CRYPTO.CRYPTO_BITCOIN_CASH.OUTPUTS 
+LIMIT 20;
+```
+
+```sql
+-- Description: Select distinct address types from the INPUTS table to identify the unique "type" values for inputs, focusing on addresses in March 2014.
+SELECT DISTINCT "type" 
+FROM CRYPTO.CRYPTO_BITCOIN_CASH.INPUTS 
+WHERE "block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000
+LIMIT 20;
+```
+
+```sql
+-- Description: Select all transactions from the TRANSACTIONS table that occurred in March 2014 along with their input and output counts. Verify the temporal range of transactions.
+SELECT "hash", "block_number", "input_count", "output_count", "block_timestamp" 
+FROM CRYPTO.CRYPTO_BITCOIN_CASH.TRANSACTIONS 
+WHERE "block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000 
+LIMIT 20;
+```
+
+```sql
+-- Description: Flatten the INPUTS table "addresses" column for transactions within March 2014. This reveals address entries at the individual level.
+SELECT t."addresses", f.value::STRING AS "address"
+FROM CRYPTO.CRYPTO_BITCOIN_CASH.INPUTS t, LATERAL FLATTEN(input => t."addresses") f
+WHERE t."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000 
+LIMIT 20;
+```
+
+```sql
+-- Description: Flatten the OUTPUTS table "addresses" column for March 2014 transactions. This provides outputs at the granularity of individual addresses.
+SELECT t."addresses", f.value::STRING AS "address", t."type", t."value"
+FROM CRYPTO.CRYPTO_BITCOIN_CASH.OUTPUTS t, LATERAL FLATTEN(input => t."addresses") f
+WHERE t."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000 
+LIMIT 20;
+```
+
+```sql
+-- Description: Retrieve and sum debits (inputs) grouped by address and type for March 2014. This represents the total "spent" on each address type.
+SELECT f.value::STRING AS "address", i."type", SUM(i."value") AS "total_debit"
+FROM CRYPTO.CRYPTO_BITCOIN_CASH.INPUTS i, LATERAL FLATTEN(input => i."addresses") f
+WHERE i."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000 
+GROUP BY f.value::STRING, i."type"
+LIMIT 20;
+```
+
+```sql
+-- Description: Retrieve and sum credits (outputs) grouped by address and type for March 2014. This represents the total "received" on each address type.
+SELECT f.value::STRING AS "address", o."type", SUM(o."value") AS "total_credit"
+FROM CRYPTO.CRYPTO_BITCOIN_CASH.OUTPUTS o, LATERAL FLATTEN(input => o."addresses") f
+WHERE o."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000 
+GROUP BY f.value::STRING, o."type"
+LIMIT 20;
+```
+
+```sql
+-- Description: Identify the maximum and minimum balance for March 2014 at the address level, joining debits and credits calculated earlier.
+WITH INPUT_SUM AS (
+    SELECT f.value::STRING AS "address", i."type", SUM(i."value") AS "total_debit"
+    FROM CRYPTO.CRYPTO_BITCOIN_CASH.INPUTS i, LATERAL FLATTEN(input => i."addresses") f
+    WHERE i."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000
+    GROUP BY f.value::STRING, i."type"
+),
+OUTPUT_SUM AS (
+    SELECT f.value::STRING AS "address", o."type", SUM(o."value") AS "total_credit"
+    FROM CRYPTO.CRYPTO_BITCOIN_CASH.OUTPUTS o, LATERAL FLATTEN(input => o."addresses") f
+    WHERE o."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000
+    GROUP BY f.value::STRING, o."type"
+)
+SELECT o."type", MAX(o."total_credit" - COALESCE(i."total_debit", 0)) AS "max_balance", MIN(o."total_credit" - COALESCE(i."total_debit", 0)) AS "min_balance"
+FROM OUTPUT_SUM o
+LEFT JOIN INPUT_SUM i
+ON o."address" = i."address" AND o."type" = i."type"
+GROUP BY o."type"
+LIMIT 20;
+```
+
+```sql
+-- Description: Drill deeper by evaluating individual address balances for March 2014. List addresses with their final balances grouped by type.
+WITH INPUT_SUM AS (
+    SELECT f.value::STRING AS "address", i."type", SUM(i."value") AS "total_debit"
+    FROM CRYPTO.CRYPTO_BITCOIN_CASH.INPUTS i, LATERAL FLATTEN(input => i."addresses") f
+    WHERE i."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000
+    GROUP BY f.value::STRING, i."type"
+),
+OUTPUT_SUM AS (
+    SELECT f.value::STRING AS "address", o."type", SUM(o."value") AS "total_credit"
+    FROM CRYPTO.CRYPTO_BITCOIN_CASH.OUTPUTS o, LATERAL FLATTEN(input => o."addresses") f
+    WHERE o."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000
+    GROUP BY f.value::STRING, o."type"
+)
+SELECT o."address", o."type", (o."total_credit" - COALESCE(i."total_debit", 0)) AS "final_balance"
+FROM OUTPUT_SUM o
+LEFT JOIN INPUT_SUM i
+ON o."address" = i."address" AND o."type" = i."type"
+ORDER BY "final_balance" DESC
+LIMIT 20;
+```
+
+```sql
+-- Description: Cross-check balances by summing final balances across all address types and addresses, ensuring consistency with the starting data.
+WITH INPUT_SUM AS (
+    SELECT f.value::STRING AS "address", i."type", SUM(i."value") AS "total_debit"
+    FROM CRYPTO.CRYPTO_BITCOIN_CASH.INPUTS i, LATERAL FLATTEN(input => i."addresses") f
+    WHERE i."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000
+    GROUP BY f.value::STRING, i."type"
+),
+OUTPUT_SUM AS (
+    SELECT f.value::STRING AS "address", o."type", SUM(o."value") AS "total_credit"
+    FROM CRYPTO.CRYPTO_BITCOIN_CASH.OUTPUTS o, LATERAL FLATTEN(input => o."addresses") f
+    WHERE o."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000
+    GROUP BY f.value::STRING, o."type"
+)
+SELECT SUM(o."total_credit" - COALESCE(i."total_debit", 0)) AS "net_balance_check"
+FROM OUTPUT_SUM o
+LEFT JOIN INPUT_SUM i
+ON o."address" = i."address" AND o."type" = i."type";
+```
+[Exploration]
+2025-07-01 04:26:13 - Thread-316 (execute) - INFO - [Try to execute]
+-- Description: Select distinct address types from the OUTPUTS table to identify the unique "type" values available for grouping by address type.
+SELECT DISTINCT "type" 
+FROM CRYPTO.CRYPTO_BITCOIN_CASH.OUTPUTS 
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:26:14 - Thread-316 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Select distinct address types from the OUTPUTS table to identify the unique "type" values available for grouping by address type.
+SELECT DISTINCT "type" 
+FROM CRYPTO.CRYPTO_BITCOIN_CASH.OUTPUTS 
+LIMIT 20;
+Results:
+type
+pubkey
+nonstandard
+pubkeyhash
+scripthash
+multisig
+
+[Successfully executed]
+2025-07-01 04:26:14 - Thread-316 (execute) - INFO - [Try to execute]
+-- Description: Select distinct address types from the INPUTS table to identify the unique "type" values for inputs, focusing on addresses in March 2014.
+SELECT DISTINCT "type" 
+FROM CRYPTO.CRYPTO_BITCOIN_CASH.INPUTS 
+WHERE "block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:29:18 - Thread-316 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Select distinct address types from the INPUTS table to identify the unique "type" values for inputs, focusing on addresses in March 2014.
+SELECT DISTINCT "type" 
+FROM CRYPTO.CRYPTO_BITCOIN_CASH.INPUTS 
+WHERE "block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000
+LIMIT 20;
+Results:
+type
+scripthash
+pubkeyhash
+
+[Successfully executed]
+2025-07-01 04:29:18 - Thread-316 (execute) - INFO - [Try to execute]
+-- Description: Select all transactions from the TRANSACTIONS table that occurred in March 2014 along with their input and output counts. Verify the temporal range of transactions.
+SELECT "hash", "block_number", "input_count", "output_count", "block_timestamp" 
+FROM CRYPTO.CRYPTO_BITCOIN_CASH.TRANSACTIONS 
+WHERE "block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000 
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:29:19 - Thread-316 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Select all transactions from the TRANSACTIONS table that occurred in March 2014 along with their input and output counts. Verify the temporal range of transactions.
+SELECT "hash", "block_number", "input_count", "output_count", "block_timestamp" 
+FROM CRYPTO.CRYPTO_BITCOIN_CASH.TRANSACTIONS 
+WHERE "block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000 
+LIMIT 20;
+Results:
+hash,block_number,input_count,output_count,block_timestamp
+9b89d79ad9e5a2b961daa607f0dbe488f6b7c747c805c7f56a5a0d8c5c5791dc,291943,67,2,1395541348000000
+9f1de89981eeb447d3f34048a8e108742aa8e109d908670b2cdee7b652a00744,288479,68,2,1393697790000000
+88e0eb1113ba5addd109ad6d35b2743d0cf9364774ca24a71ac6b9f296311890,291463,68,2,1395307543000000
+1076e99ed4c738a91d18b95595771cdb924132942bbaf987f9e2e667b6092fc7,291459,69,2,1395305017000000
+190784d6d825b7017b1505b1bc7fe0722e5329c7c1148aa2fa32190ffe6f
+
+[Successfully executed]
+2025-07-01 04:29:19 - Thread-316 (execute) - INFO - [Try to execute]
+-- Description: Flatten the INPUTS table "addresses" column for transactions within March 2014. This reveals address entries at the individual level.
+SELECT t."addresses", f.value::STRING AS "address"
+FROM CRYPTO.CRYPTO_BITCOIN_CASH.INPUTS t, LATERAL FLATTEN(input => t."addresses") f
+WHERE t."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000 
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:30:34 - Thread-316 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Flatten the INPUTS table "addresses" column for transactions within March 2014. This reveals address entries at the individual level.
+SELECT t."addresses", f.value::STRING AS "address"
+FROM CRYPTO.CRYPTO_BITCOIN_CASH.INPUTS t, LATERAL FLATTEN(input => t."addresses") f
+WHERE t."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000 
+LIMIT 20;
+Results:
+addresses,address
+"[
+  ""bitcoincash:qqy0t2d2pt050cguvp27j8gev0uwpsqqrytev3f0y9""
+]",bitcoincash:qqy0t2d2pt050cguvp27j8gev0uwpsqqrytev3f0y9
+"[
+  ""bitcoincash:qqxn3yahyjvunxyhx62p5v0yhamqh7e3tsu90r9w6m""
+]",bitcoincash:qqxn3yahyjvunxyhx62p5v0yhamqh7e3tsu90r9w6m
+"[
+  ""bitcoincash:qpe4v364h34733vwc33z20fvasqfe0vv65avgem0sj""
+]",bitcoincash:qpe4v364h34733vwc33z20fvasqfe0vv65avgem0sj
+"[
+  ""bitcoincash:qrvpjt4evfanrdv8g2cad9k6u0v5vww7e5r2nlh3au""
+]",bitcoincash:qrvpjt4evfanrdv8g2cad9k6u0v5vww7e
+
+[Successfully executed]
+2025-07-01 04:30:34 - Thread-316 (execute) - INFO - [Try to execute]
+-- Description: Flatten the OUTPUTS table "addresses" column for March 2014 transactions. This provides outputs at the granularity of individual addresses.
+SELECT t."addresses", f.value::STRING AS "address", t."type", t."value"
+FROM CRYPTO.CRYPTO_BITCOIN_CASH.OUTPUTS t, LATERAL FLATTEN(input => t."addresses") f
+WHERE t."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000 
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:30:35 - Thread-316 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Flatten the OUTPUTS table "addresses" column for March 2014 transactions. This provides outputs at the granularity of individual addresses.
+SELECT t."addresses", f.value::STRING AS "address", t."type", t."value"
+FROM CRYPTO.CRYPTO_BITCOIN_CASH.OUTPUTS t, LATERAL FLATTEN(input => t."addresses") f
+WHERE t."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000 
+LIMIT 20;
+Results:
+addresses,address,type,value
+"[
+  ""bitcoincash:qr8tuv93n3ffvnecetttkd8uwyq55ltjlslmgr9ejc""
+]",bitcoincash:qr8tuv93n3ffvnecetttkd8uwyq55ltjlslmgr9ejc,pubkeyhash,10000000.000000000
+"[
+  ""bitcoincash:qzklft44nhm7g5dg6r9q9jq8vt60c4wujqf2az2q8f""
+]",bitcoincash:qzklft44nhm7g5dg6r9q9jq8vt60c4wujqf2az2q8f,pubkeyhash,48200800.000000000
+"[
+  ""bitcoincash:qzd27azc0cp6pxwpmgrl3ny6y3d0uvmdxcq4gydwvc""
+]",bitcoincash:qzd27azc0cp6pxwpmgrl3ny6y3d0uvmdxcq4gydwvc,pubkeyhash,2531320.000000000
+
+[Successfully executed]
+2025-07-01 04:30:35 - Thread-316 (execute) - INFO - [Try to execute]
+-- Description: Retrieve and sum debits (inputs) grouped by address and type for March 2014. This represents the total "spent" on each address type.
+SELECT f.value::STRING AS "address", i."type", SUM(i."value") AS "total_debit"
+FROM CRYPTO.CRYPTO_BITCOIN_CASH.INPUTS i, LATERAL FLATTEN(input => i."addresses") f
+WHERE i."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000 
+GROUP BY f.value::STRING, i."type"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:33:03 - Thread-316 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Retrieve and sum debits (inputs) grouped by address and type for March 2014. This represents the total "spent" on each address type.
+SELECT f.value::STRING AS "address", i."type", SUM(i."value") AS "total_debit"
+FROM CRYPTO.CRYPTO_BITCOIN_CASH.INPUTS i, LATERAL FLATTEN(input => i."addresses") f
+WHERE i."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000 
+GROUP BY f.value::STRING, i."type"
+LIMIT 20;
+Results:
+address,type,total_debit
+bitcoincash:qz5sf3f7zs5a7u60m62jd6xgp2w40fkweqcvwrax7y,pubkeyhash,6324981.000000000
+bitcoincash:qzratgjdjzk8qmw743qqt9n90q4wdesp95hu93wsg4,pubkeyhash,5460.000000000
+bitcoincash:qpuf6j2t0a0tjw7dp4g7962e4qt9srvjssqtdllwrg,pubkeyhash,161350.000000000
+bitcoincash:qz0fwzmwh73jq94fr59h4npt3eeqzrc90u4ch6c0l8,pubkeyhash,100000000.000000000
+bitcoincash:qzn3flkg3ryc9ue25t4dw6xszpm65chxc58trx6xn3,pubkeyhash,1000000.000000000
+
+[Successfully executed]
+2025-07-01 04:33:03 - Thread-316 (execute) - INFO - [Try to execute]
+-- Description: Retrieve and sum credits (outputs) grouped by address and type for March 2014. This represents the total "received" on each address type.
+SELECT f.value::STRING AS "address", o."type", SUM(o."value") AS "total_credit"
+FROM CRYPTO.CRYPTO_BITCOIN_CASH.OUTPUTS o, LATERAL FLATTEN(input => o."addresses") f
+WHERE o."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000 
+GROUP BY f.value::STRING, o."type"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:34:34 - Thread-316 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Retrieve and sum credits (outputs) grouped by address and type for March 2014. This represents the total "received" on each address type.
+SELECT f.value::STRING AS "address", o."type", SUM(o."value") AS "total_credit"
+FROM CRYPTO.CRYPTO_BITCOIN_CASH.OUTPUTS o, LATERAL FLATTEN(input => o."addresses") f
+WHERE o."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000 
+GROUP BY f.value::STRING, o."type"
+LIMIT 20;
+Results:
+address,type,total_credit
+bitcoincash:qq9cjx670qss9syp30kcw3mmmww92exf7v47ys946n,pubkeyhash,98060000.000000000
+bitcoincash:qrrdajlsnmjqv5qqj82d8h8dsjvdfcgsqcggzyvwr5,pubkeyhash,23300000.000000000
+bitcoincash:qqhnnlv5z7rx8jse6g2qf6d2s4npl4p7wgnyvyy6ax,pubkeyhash,37138948.000000000
+bitcoincash:qrazcj7a5ahkahxj3f2qac83dsljkv6tjv8zpvac2d,pubkeyhash,5726874.000000000
+bitcoincash:qr3xfskctukwl72urunn5ddxa6nfd9uukgdgk6rwtc,pubkeyhash,503000000.000000000
+
+[Successfully executed]
+2025-07-01 04:34:34 - Thread-316 (execute) - INFO - [Try to execute]
+-- Description: Identify the maximum and minimum balance for March 2014 at the address level, joining debits and credits calculated earlier.
+WITH INPUT_SUM AS (
+    SELECT f.value::STRING AS "address", i."type", SUM(i."value") AS "total_debit"
+    FROM CRYPTO.CRYPTO_BITCOIN_CASH.INPUTS i, LATERAL FLATTEN(input => i."addresses") f
+    WHERE i."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000
+    GROUP BY f.value::STRING, i."type"
+),
+OUTPUT_SUM AS (
+    SELECT f.value::STRING AS "address", o."type", SUM(o."value") AS "total_credit"
+    FROM CRYPTO.CRYPTO_BITCOIN_CASH.OUTPUTS o, LATERAL FLATTEN(input => o."addresses") f
+    WHERE o."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000
+    GROUP BY f.value::STRING, o."type"
+)
+SELECT o."type", MAX(o."total_credit" - COALESCE(i."total_debit", 0)) AS "max_balance", MIN(o."total_credit" - COALESCE(i."total_debit", 0)) AS "min_balance"
+FROM OUTPUT_SUM o
+LEFT JOIN INPUT_SUM i
+ON o."address" = i."address" AND o."type" = i."type"
+GROUP BY o."type"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:36:10 - Thread-316 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Identify the maximum and minimum balance for March 2014 at the address level, joining debits and credits calculated earlier.
+WITH INPUT_SUM AS (
+    SELECT f.value::STRING AS "address", i."type", SUM(i."value") AS "total_debit"
+    FROM CRYPTO.CRYPTO_BITCOIN_CASH.INPUTS i, LATERAL FLATTEN(input => i."addresses") f
+    WHERE i."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000
+    GROUP BY f.value::STRING, i."type"
+),
+OUTPUT_SUM AS (
+    SELECT f.value::STRING AS "address", o."type", SUM(o."value") AS "total_credit"
+    FROM CRYPTO.CRYPTO_BITCOIN_CASH.OUTPUTS o, LATERAL FLATTEN(input => o."addresses") f
+    WHERE o."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000
+    GROUP BY f.value::STRING, o."type"
+)
+SELECT o."type", MAX(o."total_credit" - COALESCE(i."total_debit", 0)) AS "max_balance", MIN(o."total_credit" - COALESCE(i."total_debit", 0)) AS "min_balance"
+FROM OUTPUT_SUM o
+LEFT JOIN INPUT_SUM i
+ON o."address" = i."address" AND o."type" = i."type"
+GROUP BY o."type"
+LIMIT 20;
+Results:
+type,max_balance,min_balance
+pubkeyhash,192112095138.000000000,-3500000000.000000000
+multisig,10920.000000000,10017.000000000
+scripthash,50495618.000000000,190000.000000000
+
+[Successfully executed]
+2025-07-01 04:36:10 - Thread-316 (execute) - INFO - [Try to execute]
+-- Description: Drill deeper by evaluating individual address balances for March 2014. List addresses with their final balances grouped by type.
+WITH INPUT_SUM AS (
+    SELECT f.value::STRING AS "address", i."type", SUM(i."value") AS "total_debit"
+    FROM CRYPTO.CRYPTO_BITCOIN_CASH.INPUTS i, LATERAL FLATTEN(input => i."addresses") f
+    WHERE i."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000
+    GROUP BY f.value::STRING, i."type"
+),
+OUTPUT_SUM AS (
+    SELECT f.value::STRING AS "address", o."type", SUM(o."value") AS "total_credit"
+    FROM CRYPTO.CRYPTO_BITCOIN_CASH.OUTPUTS o, LATERAL FLATTEN(input => o."addresses") f
+    WHERE o."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000
+    GROUP BY f.value::STRING, o."type"
+)
+SELECT o."address", o."type", (o."total_credit" - COALESCE(i."total_debit", 0)) AS "final_balance"
+FROM OUTPUT_SUM o
+LEFT JOIN INPUT_SUM i
+ON o."address" = i."address" AND o."type" = i."type"
+ORDER BY "final_balance" DESC
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:36:23 - Thread-316 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Drill deeper by evaluating individual address balances for March 2014. List addresses with their final balances grouped by type.
+WITH INPUT_SUM AS (
+    SELECT f.value::STRING AS "address", i."type", SUM(i."value") AS "total_debit"
+    FROM CRYPTO.CRYPTO_BITCOIN_CASH.INPUTS i, LATERAL FLATTEN(input => i."addresses") f
+    WHERE i."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000
+    GROUP BY f.value::STRING, i."type"
+),
+OUTPUT_SUM AS (
+    SELECT f.value::STRING AS "address", o."type", SUM(o."value") AS "total_credit"
+    FROM CRYPTO.CRYPTO_BITCOIN_CASH.OUTPUTS o, LATERAL FLATTEN(input => o."addresses") f
+    WHERE o."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000
+    GROUP BY f.value::STRING, o."type"
+)
+SELECT o."address", o."type", (o."total_credit" - COALESCE(i."total_debit", 0)) AS "final_balance"
+FROM OUTPUT_SUM o
+LEFT JOIN INPUT_SUM i
+ON o."address" = i."address" AND o."type" = i."type"
+ORDER BY "final_balance" DESC
+LIMIT 20;
+Results:
+address,type,final_balance
+bitcoincash:qzlz6xlvtxk5h6tk3qugh5d6zqp9ykpcfvyl8g4gng,pubkeyhash,192112095138.000000000
+bitcoincash:qz886zc2ls2ejgva9fhy5d4apm3q6hqmmskwcyl8xn,pubkeyhash,137869291573.000000000
+bitcoincash:qpkm5s0n9ctt30eew39ccrypnxlcwzlz6g78zvmfnu,pubkeyhash,120090133664.000000000
+bitcoincash:qre9gcm73mgtgtyfk2qya4htwqw3j5ze2g6hewshgl,pubkeyhash,109347627904.000000000
+bitcoincash:qzsct64lufzphs0x57uk8alf8cpf2rwd8c3gqesl38,pubkeyhash,96313239680.000000000
+
+[Successfully executed]
+2025-07-01 04:36:23 - Thread-316 (execute) - INFO - [Try to execute]
+-- Description: Cross-check balances by summing final balances across all address types and addresses, ensuring consistency with the starting data.
+WITH INPUT_SUM AS (
+    SELECT f.value::STRING AS "address", i."type", SUM(i."value") AS "total_debit"
+    FROM CRYPTO.CRYPTO_BITCOIN_CASH.INPUTS i, LATERAL FLATTEN(input => i."addresses") f
+    WHERE i."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000
+    GROUP BY f.value::STRING, i."type"
+),
+OUTPUT_SUM AS (
+    SELECT f.value::STRING AS "address", o."type", SUM(o."value") AS "total_credit"
+    FROM CRYPTO.CRYPTO_BITCOIN_CASH.OUTPUTS o, LATERAL FLATTEN(input => o."addresses") f
+    WHERE o."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000
+    GROUP BY f.value::STRING, o."type"
+)
+SELECT SUM(o."total_credit" - COALESCE(i."total_debit", 0)) AS "net_balance_check"
+FROM OUTPUT_SUM o
+LEFT JOIN INPUT_SUM i
+ON o."address" = i."address" AND o."type" = i."type";
+[Try to execute]
+2025-07-01 04:36:30 - Thread-316 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Cross-check balances by summing final balances across all address types and addresses, ensuring consistency with the starting data.
+WITH INPUT_SUM AS (
+    SELECT f.value::STRING AS "address", i."type", SUM(i."value") AS "total_debit"
+    FROM CRYPTO.CRYPTO_BITCOIN_CASH.INPUTS i, LATERAL FLATTEN(input => i."addresses") f
+    WHERE i."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000
+    GROUP BY f.value::STRING, i."type"
+),
+OUTPUT_SUM AS (
+    SELECT f.value::STRING AS "address", o."type", SUM(o."value") AS "total_credit"
+    FROM CRYPTO.CRYPTO_BITCOIN_CASH.OUTPUTS o, LATERAL FLATTEN(input => o."addresses") f
+    WHERE o."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000
+    GROUP BY f.value::STRING, o."type"
+)
+SELECT SUM(o."total_credit" - COALESCE(i."total_debit", 0)) AS "net_balance_check"
+FROM OUTPUT_SUM o
+LEFT JOIN INPUT_SUM i
+ON o."address" = i."address" AND o."type" = i."type";
+Results:
+net_balance_check
+2805894326250.000000000
+
+[Successfully executed]
+2025-07-01 04:36:30 - Thread-316 (execute) - INFO - itercount: 0
+2025-07-01 04:36:30 - Thread-316 (execute) - INFO - [Self-refine]
+Table full name: CRYPTO.CRYPTO_BITCOIN_CASH.OUTPUTS
+Column name: block_timestamp Type: NUMBER
+Column name: block_number Type: NUMBER
+Column name: index Type: NUMBER
+Column name: type Type: TEXT
+Column name: value Type: NUMBER
+Column name: addresses Type: VARIANT
+Column name: transaction_hash Type: TEXT
+Sample rows:
+[{'transaction_hash': '746dc1f7266897ac047acda6cee2ab97bb7bea7c76f330e51bd557f9a97a5000', 'block_number': 623082, 'block_timestamp': 1582183140000000, 'index': 1, 'type': 'pubkeyhash', 'addresses': '[\n  "bitcoincash:qqrxa0h9jqnc7v4wmj9ysetsp3y7w9l36u8gnnjulq"\n]', 'value': '2858.000000000'}, {'transaction_hash': '48d76f258b83d6aff8fd05073d61b353b87755cdb7f5a015cb3788920d3def23', 'block_number': 471165, 'block_timestamp': 1497401226000000, 'index': 2, 'type': 'pubkeyhash', 'addresses': '[\n  "bitcoincash:qz5unqrypp3egtllk8hnpd59908pzyaqcq2jzdt94w"\n]', 'value': '467719733.000000000'}, {'transaction_hash': '4be25dacc786858fc8fef0ce4708d5d715fe90b1f4978adbe640e0bf7adcad68', 'block_number': 676943, 'block_timestamp': 1614668599000000, 'index': 0, 'type': 'pubkeyhash', 'addresses': '[\n  "bitcoincash:qzrhtmvxt0n4s56nxgykc8yh7cvpu8f5lgkugrll2l"\n]', 'value': '8025.000000000'}, {'transaction_hash': 'dc76690f572dc2a21a21f0a36716b0bd275c8938c8598a75e40754b8beb28c3f', 'block_number': 469282, 'block_timestamp': 1496356283000000, 'index': 1, 'type': 'pubkeyhash', 'addresses': '[\n  "bitcoincash:qrj4cettzsd7fed9ygntvmqg0gjrkd69y58uwllamt"\n]', 'value': '4149800.000000000'}, {'transaction_hash': '99bf4b790b9c198ff9c4f793bd332959047865cca57379f989f0ac2948d4b3f6', 'block_number': 465437, 'block_timestamp': 1494247825000000, 'index': 1, 'type': 'pubkeyhash', 'addresses': '[\n  "bitcoincash:qzeqyndkua2vhltg7tsxqzfch3fav702zgxdf69x7a"\n]', 'value': '904900.000000000'}]
+--------------------------------------------------
+Table full name: CRYPTO.CRYPTO_BITCOIN_CASH.BLOCKS
+Column name: timestamp Type: NUMBER Description: Block creation timestamp specified in block header
+Column name: hash Type: TEXT Description: Hash of this block
+Column name: transaction_count Type: NUMBER Description: Number of transactions included in this block
+Column name: number Type: NUMBER Description: The number of the block
+Sample rows:
+[{'hash': '0000000000000004753bd3347b58e55805fb17fb28116ca91962bd32e0fefdb9', 'number': 266149, 'timestamp': 1382772110000000, 'transaction_count': 100}, {'hash': '0000000000000000a9a4b9e17411828902e555579256fa34e87a406496ec36ba', 'number': 263467, 'timestamp': 1381711472000000, 'transaction_count': 108}, {'hash': '000000000000000cb4fe468e60bf9f1dd14fcd16c17e9ae2e89fa669c6d30f32', 'number': 263453, 'timestamp': 1381707719000000, 'transaction_count': 118}, {'hash': '000000000000000a4b97c0c77d5144230012829dc6121a4a886d5840fc369ab8', 'number': 262389, 'timestamp': 1381235248000000, 'transaction_count': 232}, {'hash': '00000000000000079e66a8b7ccda1d0534a8eb27db601f45d2f052463fc836ad', 'number': 261763, 'timestamp': 1380938295000000, 'transaction_count': 321}]
+--------------------------------------------------
+Table full name: CRYPTO.CRYPTO_BITCOIN_CASH.INPUTS
+Column name: value Type: NUMBER
+Column name: block_number Type: NUMBER
+Column name: type Type: TEXT
+Column name: addresses Type: VARIANT
+Column name: transaction_hash Type: TEXT
+Column name: block_timestamp Type: NUMBER
+Column name: spent_transaction_hash Type: TEXT
+Column name: spent_output_index Type: NUMBER
+Column name: index Type: NUMBER
+Sample rows:
+[{'transaction_hash': '7b4edf428b218b71143f0c3cf1479a2481785e80db76d18d166fd2b117cf6a8f', 'block_number': 784607, 'block_timestamp': 1679241843000000, 'index': 0, 'spent_transaction_hash': '5939eab7fd0e0629dd4c6388a2d10cd2d697ee7a3bc82aa04c3d1d128e5861cd', 'spent_output_index': 0, 'type': 'scripthash', 'addresses': '[\n  "bitcoincash:pzh922lrxs2mzwe50dx6nt623hcnqqugdsx6v2esml"\n]', 'value': '1957308.000000000'}, {'transaction_hash': 'dee0cd3d4b11fa89d5d4a05ab1095db6727736ae1dd554f78eb28399104c9748', 'block_number': 371617, 'block_timestamp': 1440602603000000, 'index': 0, 'spent_transaction_hash': 'd0e069c1767cc4956428ff66eaeca35c810f8e9b73dc6990fa4d9df70b00c4c2', 'spent_output_index': 0, 'type': 'pubkeyhash', 'addresses': '[\n  "bitcoincash:qz6c6cga9j0hfx0r3fdsj0mdq55yklrn6v8k34kyl4"\n]', 'value': '13689300.000000000'}, {'transaction_hash': 'cb161add9ddce08aff3888568bca5f38203159c980adf46ebe3fa86d8e856e05', 'block_number': 546256, 'block_timestamp': 1535974586000000, 'index': 0, 'spent_transaction_hash': 'ce074f26621c105c0a0ee136b523f9f921c0fe5e86b8bec619af847ad0856087', 'spent_output_index': 1879, 'type': 'pubkeyhash', 'addresses': '[\n  "bitcoincash:qr4kjpuwzdxhcshkrgc6saqg9jj40dn2ssv7u6cv7n"\n]', 'value': '1399226.000000000'}, {'transaction_hash': 'f7d695c956fe52d869a06dd1ebc91ae6374c0d32003fef2b67b28fdeab142138', 'block_number': 546425, 'block_timestamp': 1536081903000000, 'index': 0, 'spent_transaction_hash': '544b33a7584a4aabc8c9254a489e779e5ffa1760f6b43efab707a45ab95ccfc0', 'spent_output_index': 0, 'type': 'pubkeyhash', 'addresses': '[\n  "bitcoincash:qr8jg0cvr0nzhtj6edxcd8uh2ses0jdlaqrpscdjat"\n]', 'value': '2856.000000000'}, {'transaction_hash': '28a3ab9adb65c37adf3c9b325915300880b386ec412e93cb2c56a02ea17a9714', 'block_number': 546015, 'block_timestamp': 1535829579000000, 'index': 0, 'spent_transaction_hash': '980a701e39d8085a1d229cc3e648f846188738632f3e6bd8fbc11eb0bcbf7d65', 'spent_output_index': 0, 'type': 'pubkeyhash', 'addresses': '[\n  "bitcoincash:qqgd5lxg8azugud4c32w8dty7q35nzwsag9aj7g50n"\n]', 'value': '6006.000000000'}]
+--------------------------------------------------
+Table full name: CRYPTO.CRYPTO_BITCOIN_CASH.TRANSACTIONS
+Column name: block_number Type: NUMBER Description: Number of the block which contains this transaction
+Column name: output_count Type: NUMBER Description: The number of outputs in the transaction
+Column name: is_coinbase Type: BOOLEAN Description: true if this transaction is a coinbase transaction
+Column name: block_timestamp Type: NUMBER Description: Timestamp of the block which contains this transaction
+Column name: input_count Type: NUMBER Description: The number of inputs in the transaction
+Column name: block_timestamp_month Type: DATE Description: Month of the block which contains this transaction
+Column name: output_value Type: NUMBER Description: Total value of outputs in the transaction
+Column name: hash Type: TEXT Description: The hash of this transaction
+Column name: input_value Type: NUMBER Description: Total value of inputs in the transaction
+Column name: lock_time Type: NUMBER Description: Earliest time that miners can include the transaction in their hashing of the Merkle root to attach it in the latest block of the blockchain
+Sample rows:
+[{'hash': '9550ead74f556be17c85fdb7e3cc145c823ed7f0b8e828de74dee0118c92aa91', 'block_number': 292659, 'block_timestamp': 1395888795000000, 'block_timestamp_month': '2014-03-01', 'input_count': 233, 'output_count': 2, 'input_value': '1082460011.000000000', 'output_value': '1082100011.000000000', 'is_coinbase': False}, {'hash': '7496715db2fe51ca3e66a10725c4aa8edd8f0bfd87fb33cf1e1f762bfd298849', 'block_number': 290204, 'block_timestamp': 1394630782000000, 'block_timestamp_month': '2014-03-01', 'input_count': 233, 'output_count': 1, 'input_value': '1554778291.000000000', 'output_value': '1554348291.000000000', 'is_coinbase': False}, {'hash': '04f13869c6768ec60104c7de98b361529f69a2cddda7df5bd22c33b671df7873', 'block_number': 471038, 'block_timestamp': 1497322790000000, 'block_timestamp_month': '2017-06-01', 'input_count': 241, 'output_count': 2, 'input_value': '307453572.000000000', 'output_value': '300411610.000000000', 'is_coinbase': False}, {'hash': 'ba6be87459d4b6b4cebe9c10cd0a8eea1a0bad3940d9997bf7dfc1aded3222dd', 'block_number': 290712, 'block_timestamp': 1394901707000000, 'block_timestamp_month': '2014-03-01', 'input_count': 243, 'output_count': 1, 'input_value': '1160000.000000000', 'output_value': '800000.000000000', 'is_coinbase': False}, {'hash': 'b074c19420b84b1cd2e07c15c75fa5d6c605716fb7141c388ad4e62764e49316', 'block_number': 331241, 'block_timestamp': 1416724700000000, 'block_timestamp_month': '2014-11-01', 'input_count': 246, 'output_count': 1, 'input_value': '339849450.000000000', 'output_value': '339459448.000000000', 'is_coinbase': False}]
+--------------------------------------------------
+External knowledge that might be helpful: 
+None
+The table structure information is ({database name: {schema name: [table name]}}): 
+{'CRYPTO': {'CRYPTO_BITCOIN_CASH': ['OUTPUTS', 'BLOCKS', 'INPUTS', 'TRANSACTIONS']}}
+
+Some few-shot examples after column exploration may be helpful:
+Query:
+-- Description: Select distinct address types from the OUTPUTS table to identify the unique "type" values available for grouping by address type.
+SELECT DISTINCT "type" 
+FROM CRYPTO.CRYPTO_BITCOIN_CASH.OUTPUTS 
+LIMIT 20;
+Answer:
+type
+pubkey
+nonstandard
+pubkeyhash
+scripthash
+multisig
+Query:
+-- Description: Select distinct address types from the INPUTS table to identify the unique "type" values for inputs, focusing on addresses in March 2014.
+SELECT DISTINCT "type" 
+FROM CRYPTO.CRYPTO_BITCOIN_CASH.INPUTS 
+WHERE "block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000
+LIMIT 20;
+Answer:
+type
+scripthash
+pubkeyhash
+Query:
+-- Description: Select all transactions from the TRANSACTIONS table that occurred in March 2014 along with their input and output counts. Verify the temporal range of transactions.
+SELECT "hash", "block_number", "input_count", "output_count", "block_timestamp" 
+FROM CRYPTO.CRYPTO_BITCOIN_CASH.TRANSACTIONS 
+WHERE "block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000 
+LIMIT 20;
+Answer:
+hash,block_number,input_count,output_count,block_timestamp
+9b89d79ad9e5a2b961daa607f0dbe488f6b7c747c805c7f56a5a0d8c5c5791dc,291943,67,2,1395541348000000
+9f1de89981eeb447d3f34048a8e108742aa8e109d908670b2cdee7b652a00744,288479,68,2,1393697790000000
+88e0eb1113ba5addd109ad6d35b2743d0cf9364774ca24a71ac6b9f296311890,291463,68,2,1395307543000000
+1076e99ed4c738a91d18b95595771cdb924132942bbaf987f9e2e667b6092fc7,291459,69,2,1395305017000000
+190784d6d825b7017b1505b1bc7fe0722e5329c7c1148aa2fa32190ffe6f
+Query:
+-- Description: Flatten the INPUTS table "addresses" column for transactions within March 2014. This reveals address entries at the individual level.
+SELECT t."addresses", f.value::STRING AS "address"
+FROM CRYPTO.CRYPTO_BITCOIN_CASH.INPUTS t, LATERAL FLATTEN(input => t."addresses") f
+WHERE t."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000 
+LIMIT 20;
+Answer:
+addresses,address
+"[
+  ""bitcoincash:qqy0t2d2pt050cguvp27j8gev0uwpsqqrytev3f0y9""
+]",bitcoincash:qqy0t2d2pt050cguvp27j8gev0uwpsqqrytev3f0y9
+"[
+  ""bitcoincash:qqxn3yahyjvunxyhx62p5v0yhamqh7e3tsu90r9w6m""
+]",bitcoincash:qqxn3yahyjvunxyhx62p5v0yhamqh7e3tsu90r9w6m
+"[
+  ""bitcoincash:qpe4v364h34733vwc33z20fvasqfe0vv65avgem0sj""
+]",bitcoincash:qpe4v364h34733vwc33z20fvasqfe0vv65avgem0sj
+"[
+  ""bitcoincash:qrvpjt4evfanrdv8g2cad9k6u0v5vww7e5r2nlh3au""
+]",bitcoincash:qrvpjt4evfanrdv8g2cad9k6u0v5vww7e
+Query:
+-- Description: Flatten the OUTPUTS table "addresses" column for March 2014 transactions. This provides outputs at the granularity of individual addresses.
+SELECT t."addresses", f.value::STRING AS "address", t."type", t."value"
+FROM CRYPTO.CRYPTO_BITCOIN_CASH.OUTPUTS t, LATERAL FLATTEN(input => t."addresses") f
+WHERE t."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000 
+LIMIT 20;
+Answer:
+addresses,address,type,value
+"[
+  ""bitcoincash:qr8tuv93n3ffvnecetttkd8uwyq55ltjlslmgr9ejc""
+]",bitcoincash:qr8tuv93n3ffvnecetttkd8uwyq55ltjlslmgr9ejc,pubkeyhash,10000000.000000000
+"[
+  ""bitcoincash:qzklft44nhm7g5dg6r9q9jq8vt60c4wujqf2az2q8f""
+]",bitcoincash:qzklft44nhm7g5dg6r9q9jq8vt60c4wujqf2az2q8f,pubkeyhash,48200800.000000000
+"[
+  ""bitcoincash:qzd27azc0cp6pxwpmgrl3ny6y3d0uvmdxcq4gydwvc""
+]",bitcoincash:qzd27azc0cp6pxwpmgrl3ny6y3d0uvmdxcq4gydwvc,pubkeyhash,2531320.000000000
+Query:
+-- Description: Retrieve and sum debits (inputs) grouped by address and type for March 2014. This represents the total "spent" on each address type.
+SELECT f.value::STRING AS "address", i."type", SUM(i."value") AS "total_debit"
+FROM CRYPTO.CRYPTO_BITCOIN_CASH.INPUTS i, LATERAL FLATTEN(input => i."addresses") f
+WHERE i."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000 
+GROUP BY f.value::STRING, i."type"
+LIMIT 20;
+Answer:
+address,type,total_debit
+bitcoincash:qz5sf3f7zs5a7u60m62jd6xgp2w40fkweqcvwrax7y,pubkeyhash,6324981.000000000
+bitcoincash:qzratgjdjzk8qmw743qqt9n90q4wdesp95hu93wsg4,pubkeyhash,5460.000000000
+bitcoincash:qpuf6j2t0a0tjw7dp4g7962e4qt9srvjssqtdllwrg,pubkeyhash,161350.000000000
+bitcoincash:qz0fwzmwh73jq94fr59h4npt3eeqzrc90u4ch6c0l8,pubkeyhash,100000000.000000000
+bitcoincash:qzn3flkg3ryc9ue25t4dw6xszpm65chxc58trx6xn3,pubkeyhash,1000000.000000000
+Query:
+-- Description: Retrieve and sum credits (outputs) grouped by address and type for March 2014. This represents the total "received" on each address type.
+SELECT f.value::STRING AS "address", o."type", SUM(o."value") AS "total_credit"
+FROM CRYPTO.CRYPTO_BITCOIN_CASH.OUTPUTS o, LATERAL FLATTEN(input => o."addresses") f
+WHERE o."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000 
+GROUP BY f.value::STRING, o."type"
+LIMIT 20;
+Answer:
+address,type,total_credit
+bitcoincash:qq9cjx670qss9syp30kcw3mmmww92exf7v47ys946n,pubkeyhash,98060000.000000000
+bitcoincash:qrrdajlsnmjqv5qqj82d8h8dsjvdfcgsqcggzyvwr5,pubkeyhash,23300000.000000000
+bitcoincash:qqhnnlv5z7rx8jse6g2qf6d2s4npl4p7wgnyvyy6ax,pubkeyhash,37138948.000000000
+bitcoincash:qrazcj7a5ahkahxj3f2qac83dsljkv6tjv8zpvac2d,pubkeyhash,5726874.000000000
+bitcoincash:qr3xfskctukwl72urunn5ddxa6nfd9uukgdgk6rwtc,pubkeyhash,503000000.000000000
+Query:
+-- Description: Identify the maximum and minimum balance for March 2014 at the address level, joining debits and credits calculated earlier.
+WITH INPUT_SUM AS (
+    SELECT f.value::STRING AS "address", i."type", SUM(i."value") AS "total_debit"
+    FROM CRYPTO.CRYPTO_BITCOIN_CASH.INPUTS i, LATERAL FLATTEN(input => i."addresses") f
+    WHERE i."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000
+    GROUP BY f.value::STRING, i."type"
+),
+OUTPUT_SUM AS (
+    SELECT f.value::STRING AS "address", o."type", SUM(o."value") AS "total_credit"
+    FROM CRYPTO.CRYPTO_BITCOIN_CASH.OUTPUTS o, LATERAL FLATTEN(input => o."addresses") f
+    WHERE o."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000
+    GROUP BY f.value::STRING, o."type"
+)
+SELECT o."type", MAX(o."total_credit" - COALESCE(i."total_debit", 0)) AS "max_balance", MIN(o."total_credit" - COALESCE(i."total_debit", 0)) AS "min_balance"
+FROM OUTPUT_SUM o
+LEFT JOIN INPUT_SUM i
+ON o."address" = i."address" AND o."type" = i."type"
+GROUP BY o."type"
+LIMIT 20;
+Answer:
+type,max_balance,min_balance
+pubkeyhash,192112095138.000000000,-3500000000.000000000
+multisig,10920.000000000,10017.000000000
+scripthash,50495618.000000000,190000.000000000
+Query:
+-- Description: Drill deeper by evaluating individual address balances for March 2014. List addresses with their final balances grouped by type.
+WITH INPUT_SUM AS (
+    SELECT f.value::STRING AS "address", i."type", SUM(i."value") AS "total_debit"
+    FROM CRYPTO.CRYPTO_BITCOIN_CASH.INPUTS i, LATERAL FLATTEN(input => i."addresses") f
+    WHERE i."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000
+    GROUP BY f.value::STRING, i."type"
+),
+OUTPUT_SUM AS (
+    SELECT f.value::STRING AS "address", o."type", SUM(o."value") AS "total_credit"
+    FROM CRYPTO.CRYPTO_BITCOIN_CASH.OUTPUTS o, LATERAL FLATTEN(input => o."addresses") f
+    WHERE o."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000
+    GROUP BY f.value::STRING, o."type"
+)
+SELECT o."address", o."type", (o."total_credit" - COALESCE(i."total_debit", 0)) AS "final_balance"
+FROM OUTPUT_SUM o
+LEFT JOIN INPUT_SUM i
+ON o."address" = i."address" AND o."type" = i."type"
+ORDER BY "final_balance" DESC
+LIMIT 20;
+Answer:
+address,type,final_balance
+bitcoincash:qzlz6xlvtxk5h6tk3qugh5d6zqp9ykpcfvyl8g4gng,pubkeyhash,192112095138.000000000
+bitcoincash:qz886zc2ls2ejgva9fhy5d4apm3q6hqmmskwcyl8xn,pubkeyhash,137869291573.000000000
+bitcoincash:qpkm5s0n9ctt30eew39ccrypnxlcwzlz6g78zvmfnu,pubkeyhash,120090133664.000000000
+bitcoincash:qre9gcm73mgtgtyfk2qya4htwqw3j5ze2g6hewshgl,pubkeyhash,109347627904.000000000
+bitcoincash:qzsct64lufzphs0x57uk8alf8cpf2rwd8c3gqesl38,pubkeyhash,96313239680.000000000
+Query:
+-- Description: Cross-check balances by summing final balances across all address types and addresses, ensuring consistency with the starting data.
+WITH INPUT_SUM AS (
+    SELECT f.value::STRING AS "address", i."type", SUM(i."value") AS "total_debit"
+    FROM CRYPTO.CRYPTO_BITCOIN_CASH.INPUTS i, LATERAL FLATTEN(input => i."addresses") f
+    WHERE i."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000
+    GROUP BY f.value::STRING, i."type"
+),
+OUTPUT_SUM AS (
+    SELECT f.value::STRING AS "address", o."type", SUM(o."value") AS "total_credit"
+    FROM CRYPTO.CRYPTO_BITCOIN_CASH.OUTPUTS o, LATERAL FLATTEN(input => o."addresses") f
+    WHERE o."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000
+    GROUP BY f.value::STRING, o."type"
+)
+SELECT SUM(o."total_credit" - COALESCE(i."total_debit", 0)) AS "net_balance_check"
+FROM OUTPUT_SUM o
+LEFT JOIN INPUT_SUM i
+ON o."address" = i."address" AND o."type" = i."type";
+Answer:
+net_balance_check
+2805894326250.000000000
+Task: Using double-entry bookkeeping principles by treating transaction inputs as debits (negative values) and outputs as credits (positive values) for all Bitcoin Cash transactions between 2014-03-01 and 2014-04-01, how can we calculate the maximum and minimum final balances grouped by address type from these transactions?
+Another way to say it: What are the maximum and minimum balances across all addresses for different address types on Bitcoin Cash during March 2014?
+
+Please think step by step and answer only one complete SQL in snowflake dialect in ```sql``` format.
+SQL usage example: ```sql
+SELECT "COLUMN_NAME" FROM DATABASE.SCHEMA.TABLE WHERE ... ``` (Adjust "DATABASE", "SCHEMA", and "TABLE" to match actual names, ensure all column names are enclosed in double quotations)
+Here are some useful tips for answering:
+When performing a UNION operation on many tables, ensure that all table names are explicitly listed. Union first and then add condition and selection. e.g. SELECT "col1", "col2" FROM (TABLE1 UNION ALL TABLE2) WHERE ...; Don't write sqls as (SELECT col1, col2 FROM TABLE1 WHERE ...) UNION ALL (SELECT col1, col2 FROM TABLE2 WHERE ...); Don't use ['-- Include all', '-- Omit', '-- Continue', '-- Union all', '-- ...', '-- List all', '-- Replace this', '-- Each table', '-- Add other'] to omit any table. Table names here: The table structure information is ({database name: {schema name: [table name]}}): 
+{'CRYPTO': {'CRYPTO_BITCOIN_CASH': ['OUTPUTS', 'BLOCKS', 'INPUTS', 'TRANSACTIONS']}}
+
+When using ORDER BY xxx DESC, add NULLS LAST to exclude null records: ORDER BY xxx DESC NULLS LAST.
+When asked something without stating name or id, return both of them. e.g. Which products ...? The answer should include product_name and product_id.
+When asked percentage decrease, you should return a positive value. e.g. How many percentage points in 2021 decrease compared to ...? The answer should be a positive value indicating the decresed number. Try to use ABS().
+If asked two tables, you should reply with the last one instead of combining two tables. e.g. Identifying the top five states ... examine the state that ranks fourth overall and identify its top five counties. You should only answer top five counties.
+Use ST_DISTANCE to calculate distance between two geographic points for more accurate answer.
+If the task description does not specify the number of decimal places, retain all decimals to four places.
+
+[Self-refine]
+2025-07-01 04:36:42 - Thread-316 (execute) - INFO - [Try to run SQL in self-refine]
+```sql
+WITH INPUT_SUM AS (
+    SELECT 
+        f.value::STRING AS "address", 
+        i."type", 
+        SUM(i."value") AS "total_debit"
+    FROM CRYPTO.CRYPTO_BITCOIN_CASH.INPUTS i, 
+         LATERAL FLATTEN(input => i."addresses") f
+    WHERE i."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000
+    GROUP BY f.value::STRING, i."type"
+),
+OUTPUT_SUM AS (
+    SELECT 
+        f.value::STRING AS "address", 
+        o."type", 
+        SUM(o."value") AS "total_credit"
+    FROM CRYPTO.CRYPTO_BITCOIN_CASH.OUTPUTS o, 
+         LATERAL FLATTEN(input => o."addresses") f
+    WHERE o."block_timestamp" BETWEEN 1393632000000000 AND 1396319999000000
+    GROUP BY f.value::STRING, o."type"
+)
+SELECT 
+    o."type", 
+    MAX(o."total_credit" - COALESCE(i."total_debit", 0)) AS "max_balance", 
+    MIN(o."total_credit" - COALESCE(i."total_debit", 0)) AS "min_balance"
+FROM OUTPUT_SUM o
+LEFT JOIN INPUT_SUM i
+ON o."address" = i."address" AND o."type" = i."type"
+GROUP BY o."type";
+```
+[Try to run SQL in self-refine]
+2025-07-01 04:36:44 - Thread-316 (execute) - INFO - Total iteration counts: 0

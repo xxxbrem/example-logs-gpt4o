@@ -1,0 +1,1224 @@
+2025-07-01 04:44:37 - Thread-566 (execute) - INFO - [Exploration]
+```sql
+-- Description: Retrieve distinct "collection_name" to identify the exact collections and ensure we focus on TCGA-LUAD and TCGA-LUSC.
+SELECT DISTINCT "collection_name" 
+FROM "IDC"."IDC_V17"."DICOM_ALL" 
+LIMIT 20;
+```
+
+```sql
+-- Description: Check distinct "Modality" values to ensure only SM modality is selected for slide microscopy images.
+SELECT DISTINCT "Modality" 
+FROM "IDC"."IDC_V17"."DICOM_ALL" 
+LIMIT 20;
+```
+
+```sql
+-- Description: Verify "VolumetricProperties" values to filter SM images marked as VOLUME.
+SELECT DISTINCT "VolumetricProperties" 
+FROM "IDC"."IDC_V17"."DICOM_ALL" 
+WHERE "Modality" = 'SM' 
+LIMIT 20;
+```
+
+```sql
+-- Description: Explore distinct "TransferSyntaxUID" values to identify JPEG and JPEG2000 compression and exclude others.
+SELECT DISTINCT "TransferSyntaxUID" 
+FROM "IDC"."IDC_V17"."DICOM_ALL" 
+WHERE "Modality" = 'SM' AND "VolumetricProperties" = 'VOLUME' 
+LIMIT 20;
+```
+
+```sql
+-- Description: Examine the "SpecimenDescriptionSequence" column structure to identify the embedding method and tissue type (normal or tumor).
+SELECT t."SpecimenDescriptionSequence" 
+FROM "IDC"."IDC_V17"."DICOM_ALL" t
+WHERE t."Modality" = 'SM' AND t."VolumetricProperties" = 'VOLUME'
+AND (t."collection_name" = 'TCGA-LUAD' OR t."collection_name" = 'TCGA-LUSC')
+LIMIT 20;
+```
+
+```sql
+-- Description: Flatten the "SpecimenDescriptionSequence" column to inspect the embedding medium and its specific key details.
+SELECT 
+  f.value::VARIANT:"SpecimenPreparationSequence"::VARIANT[0]:"SpecimenPreparationStepContentItemSequence"::VARIANT[0]:"ConceptNameCodeSequence"::VARIANT[0]::STRING AS "embedding_method",
+  f.value::VARIANT:"PrimaryAnatomicStructureSequence"::VARIANT[0] AS "tissue_type_detail"
+FROM "IDC"."IDC_V17"."DICOM_ALL" t, LATERAL FLATTEN(input => t."SpecimenDescriptionSequence") f
+WHERE t."Modality" = 'SM' AND t."VolumetricProperties" = 'VOLUME'
+  AND (t."collection_name" = 'TCGA-LUAD' OR t."collection_name" = 'TCGA-LUSC')
+LIMIT 20;
+```
+
+```sql
+-- Description: Expand the "SpecimenPreparationSequence" to locate "Embedding medium" with key "Tissue freezing medium".
+SELECT 
+  f.value::VARIANT:"SpecimenPreparationStepContentItemSequence"::VARIANT[0]:"ConceptNameCodeSequence"::VARIANT[0]::STRING AS "step_name",
+  f.value::VARIANT:"SpecimenPreparationStepContentItemSequence"::VARIANT[0]::VARIANT AS "step_detail"
+FROM "IDC"."IDC_V17"."DICOM_ALL" t, LATERAL FLATTEN(input => t."SpecimenDescriptionSequence") f
+WHERE t."Modality" = 'SM' AND t."VolumetricProperties" = 'VOLUME'
+  AND (t."collection_name" = 'TCGA-LUAD' OR t."collection_name" = 'TCGA-LUSC')
+LIMIT 20;
+```
+
+```sql
+-- Description: Explore "PixelSpacing" to capture details about pixel spacing in mm/px.
+SELECT DISTINCT 
+  t."PixelSpacing" 
+FROM "IDC"."IDC_V17"."DICOM_ALL" t
+WHERE t."Modality" = 'SM' AND t."VolumetricProperties" = 'VOLUME'
+  AND (t."collection_name" = 'TCGA-LUAD' OR t."collection_name" = 'TCGA-LUSC')
+LIMIT 20;
+```
+
+```sql
+-- Description: Retrieve key metadata (digital slide ID, patient ID, instance ID, GCS URL, width/height, etc.) for slides that meet the requirements thus far.
+SELECT
+  t."ContainerIdentifier" AS "digital_slide_id",
+  t."PatientID" AS "patient_id",
+  t."SOPInstanceUID" AS "instance_id",
+  t."gcs_url",
+  t."TotalPixelMatrixColumns" AS "width",
+  t."TotalPixelMatrixRows" AS "height",
+  t."PixelSpacing",
+  CASE 
+    WHEN t."TransferSyntaxUID" ILIKE '%jpeg%' THEN 'jpeg'
+    WHEN t."TransferSyntaxUID" ILIKE '%jpeg2000%' THEN 'jpeg2000'
+    ELSE 'other'
+  END AS "compression_type"
+FROM "IDC"."IDC_V17"."DICOM_ALL" t
+WHERE t."Modality" = 'SM' AND t."VolumetricProperties" = 'VOLUME'
+  AND (t."collection_name" = 'TCGA-LUAD' OR t."collection_name" = 'TCGA-LUSC')
+  AND t."TransferSyntaxUID" IN ('1.2.840.10008.1.2.4.50', '1.2.840.10008.1.2.4.90')
+LIMIT 20;
+```
+
+```sql
+-- Description: Combine all conditions together and filter for tissue type (normal/tumor) and cancer subtype (luad/lscc).
+SELECT
+  t."ContainerIdentifier" AS "digital_slide_id",
+  t."idc_case_id" AS "case_id",
+  t."ContainerIdentifier" AS "physical_slide_id",
+  t."PatientID" AS "patient_id",
+  t."collection_id",
+  t."SOPInstanceUID" AS "instance_id",
+  t."gcs_url",
+  t."TotalPixelMatrixColumns" AS "width",
+  t."TotalPixelMatrixRows" AS "height",
+  t."PixelSpacing",
+  CASE 
+    WHEN t."TransferSyntaxUID" ILIKE '%jpeg%' THEN 'jpeg'
+    WHEN t."TransferSyntaxUID" ILIKE '%jpeg2000%' THEN 'jpeg2000'
+    ELSE 'other'
+  END AS "compression_type",
+  CASE 
+    WHEN f.value::VARIANT:"PrimaryAnatomicStructureSequence"::VARIANT[0]:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue"::STRING = '86049000' THEN 'tumor'
+    WHEN f.value::VARIANT:"PrimaryAnatomicStructureSequence"::VARIANT[0]:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue"::STRING = '17621005' THEN 'normal'
+    ELSE NULL
+  END AS "tissue_type",
+  CASE 
+    WHEN t."collection_name" = 'TCGA-LUAD' THEN 'luad'
+    WHEN t."collection_name" = 'TCGA-LUSC' THEN 'lscc'
+    ELSE NULL
+  END AS "cancer_subtype"
+FROM "IDC"."IDC_V17"."DICOM_ALL" t, LATERAL FLATTEN(input => t."SpecimenDescriptionSequence") f
+WHERE t."Modality" = 'SM' AND t."VolumetricProperties" = 'VOLUME'
+  AND (t."collection_name" = 'TCGA-LUAD' OR t."collection_name" = 'TCGA-LUSC')
+  AND t."TransferSyntaxUID" IN ('1.2.840.10008.1.2.4.50', '1.2.840.10008.1.2.4.90')
+  AND f.value::VARIANT:"SpecimenPreparationSequence"::VARIANT[0]:"SpecimenPreparationStepContentItemSequence"::VARIANT[0]:"ConceptNameCodeSequence"::VARIANT[0]:"CodeMeaning"::STRING ILIKE '%Tissue freezing medium%'
+LIMIT 20;
+```
+[Exploration]
+2025-07-01 04:44:37 - Thread-566 (execute) - INFO - [Try to execute]
+-- Description: Retrieve distinct "collection_name" to identify the exact collections and ensure we focus on TCGA-LUAD and TCGA-LUSC.
+SELECT DISTINCT "collection_name" 
+FROM "IDC"."IDC_V17"."DICOM_ALL" 
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:44:38 - Thread-566 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Retrieve distinct "collection_name" to identify the exact collections and ensure we focus on TCGA-LUAD and TCGA-LUSC.
+SELECT DISTINCT "collection_name" 
+FROM "IDC"."IDC_V17"."DICOM_ALL" 
+LIMIT 20;
+Results:
+collection_name
+TCGA-TGCT
+QIN-PROSTATE-Repeatability
+TCGA-ESCA
+NaF PROSTATE
+BREAST-DIAGNOSIS
+CT-Phantom4Radiomics
+TCGA-KIRP
+CPTAC-UCEC
+TCGA-LUAD
+GBM-DSC-MRI-DRO
+Pancreatic-CT-CBCT-SEG
+PDMR-Texture-Analysis
+Duke-Breast-Cancer-MRI
+TCGA-SKCM
+PDMR-997537-175-T
+TCGA-SARC
+PROSTATE-MRI
+TCGA-LIHC
+B-mode-and-CEUS-Liver
+NLST
+
+[Successfully executed]
+2025-07-01 04:44:38 - Thread-566 (execute) - INFO - [Try to execute]
+-- Description: Check distinct "Modality" values to ensure only SM modality is selected for slide microscopy images.
+SELECT DISTINCT "Modality" 
+FROM "IDC"."IDC_V17"."DICOM_ALL" 
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:44:38 - Thread-566 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Check distinct "Modality" values to ensure only SM modality is selected for slide microscopy images.
+SELECT DISTINCT "Modality" 
+FROM "IDC"."IDC_V17"."DICOM_ALL" 
+LIMIT 20;
+Results:
+Modality
+CT
+DX
+PR
+OT
+US
+XA
+CR
+REG
+RTPLAN
+RTSTRUCT
+RTDOSE
+M3D
+SC
+FUSION
+XC
+SM
+NM
+MR
+SEG
+SR
+
+[Successfully executed]
+2025-07-01 04:44:38 - Thread-566 (execute) - INFO - [Try to execute]
+-- Description: Verify "VolumetricProperties" values to filter SM images marked as VOLUME.
+SELECT DISTINCT "VolumetricProperties" 
+FROM "IDC"."IDC_V17"."DICOM_ALL" 
+WHERE "Modality" = 'SM' 
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:44:38 - Thread-566 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Verify "VolumetricProperties" values to filter SM images marked as VOLUME.
+SELECT DISTINCT "VolumetricProperties" 
+FROM "IDC"."IDC_V17"."DICOM_ALL" 
+WHERE "Modality" = 'SM' 
+LIMIT 20;
+Results:
+VolumetricProperties
+VOLUME
+
+[Successfully executed]
+2025-07-01 04:44:38 - Thread-566 (execute) - INFO - [Try to execute]
+-- Description: Explore distinct "TransferSyntaxUID" values to identify JPEG and JPEG2000 compression and exclude others.
+SELECT DISTINCT "TransferSyntaxUID" 
+FROM "IDC"."IDC_V17"."DICOM_ALL" 
+WHERE "Modality" = 'SM' AND "VolumetricProperties" = 'VOLUME' 
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:44:39 - Thread-566 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Explore distinct "TransferSyntaxUID" values to identify JPEG and JPEG2000 compression and exclude others.
+SELECT DISTINCT "TransferSyntaxUID" 
+FROM "IDC"."IDC_V17"."DICOM_ALL" 
+WHERE "Modality" = 'SM' AND "VolumetricProperties" = 'VOLUME' 
+LIMIT 20;
+Results:
+TransferSyntaxUID
+1.2.840.10008.1.2.1
+1.2.840.10008.1.2.4.90
+1.2.840.10008.1.2.4.91
+1.2.840.10008.1.2.4.50
+
+[Successfully executed]
+2025-07-01 04:44:39 - Thread-566 (execute) - INFO - [Try to execute]
+-- Description: Examine the "SpecimenDescriptionSequence" column structure to identify the embedding method and tissue type (normal or tumor).
+SELECT t."SpecimenDescriptionSequence" 
+FROM "IDC"."IDC_V17"."DICOM_ALL" t
+WHERE t."Modality" = 'SM' AND t."VolumetricProperties" = 'VOLUME'
+AND (t."collection_name" = 'TCGA-LUAD' OR t."collection_name" = 'TCGA-LUSC')
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:44:40 - Thread-566 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Examine the "SpecimenDescriptionSequence" column structure to identify the embedding method and tissue type (normal or tumor).
+SELECT t."SpecimenDescriptionSequence" 
+FROM "IDC"."IDC_V17"."DICOM_ALL" t
+WHERE t."Modality" = 'SM' AND t."VolumetricProperties" = 'VOLUME'
+AND (t."collection_name" = 'TCGA-LUAD' OR t."collection_name" = 'TCGA-LUSC')
+LIMIT 20;
+Results:
+SpecimenDescriptionSequence
+"[
+  {
+    ""PrimaryAnatomicStructureSequence"": [
+      {
+        ""CodeMeaning"": ""Lung"",
+        ""CodeValue"": ""39607008"",
+        ""CodingSchemeDesignator"": ""SCT"",
+        ""PrimaryAnatomicStructureModifierSequence"": [
+          {
+            ""CodeMeaning"": ""Neoplasm, Primary"",
+            ""CodeValue"": ""86049000"",
+            ""CodingSchemeDesignator"": ""SCT""
+          }
+        ]
+      }
+    ],
+    ""SpecimenIdentifier"": ""TCGA-78-8648-01Z-00
+
+[Successfully executed]
+2025-07-01 04:44:40 - Thread-566 (execute) - INFO - [Try to execute]
+-- Description: Flatten the "SpecimenDescriptionSequence" column to inspect the embedding medium and its specific key details.
+SELECT 
+  f.value::VARIANT:"SpecimenPreparationSequence"::VARIANT[0]:"SpecimenPreparationStepContentItemSequence"::VARIANT[0]:"ConceptNameCodeSequence"::VARIANT[0]::STRING AS "embedding_method",
+  f.value::VARIANT:"PrimaryAnatomicStructureSequence"::VARIANT[0] AS "tissue_type_detail"
+FROM "IDC"."IDC_V17"."DICOM_ALL" t, LATERAL FLATTEN(input => t."SpecimenDescriptionSequence") f
+WHERE t."Modality" = 'SM' AND t."VolumetricProperties" = 'VOLUME'
+  AND (t."collection_name" = 'TCGA-LUAD' OR t."collection_name" = 'TCGA-LUSC')
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:44:41 - Thread-566 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Flatten the "SpecimenDescriptionSequence" column to inspect the embedding medium and its specific key details.
+SELECT 
+  f.value::VARIANT:"SpecimenPreparationSequence"::VARIANT[0]:"SpecimenPreparationStepContentItemSequence"::VARIANT[0]:"ConceptNameCodeSequence"::VARIANT[0]::STRING AS "embedding_method",
+  f.value::VARIANT:"PrimaryAnatomicStructureSequence"::VARIANT[0] AS "tissue_type_detail"
+FROM "IDC"."IDC_V17"."DICOM_ALL" t, LATERAL FLATTEN(input => t."SpecimenDescriptionSequence") f
+WHERE t."Modality" = 'SM' AND t."VolumetricProperties" = 'VOLUME'
+  AND (t."collection_name" = 'TCGA-LUAD' OR t."collection_name" = 'TCGA-LUSC')
+LIMIT 20;
+Results:
+embedding_method,tissue_type_detail
+"{""CodeMeaning"":""Specimen Identifier"",""CodeValue"":""121041"",""CodingSchemeDesignator"":""DCM""}","{
+  ""CodeMeaning"": ""Lung"",
+  ""CodeValue"": ""39607008"",
+  ""CodingSchemeDesignator"": ""SCT"",
+  ""PrimaryAnatomicStructureModifierSequence"": [
+    {
+      ""CodeMeaning"": ""Neoplasm, Primary"",
+      ""CodeValue"": ""86049000"",
+      ""CodingSchemeDesignator"": ""SCT""
+    }
+  ]
+}"
+"{""CodeMeaning"":""Specimen Identifier"",""CodeValue"":""121041
+
+[Successfully executed]
+2025-07-01 04:44:41 - Thread-566 (execute) - INFO - [Try to execute]
+-- Description: Expand the "SpecimenPreparationSequence" to locate "Embedding medium" with key "Tissue freezing medium".
+SELECT 
+  f.value::VARIANT:"SpecimenPreparationStepContentItemSequence"::VARIANT[0]:"ConceptNameCodeSequence"::VARIANT[0]::STRING AS "step_name",
+  f.value::VARIANT:"SpecimenPreparationStepContentItemSequence"::VARIANT[0]::VARIANT AS "step_detail"
+FROM "IDC"."IDC_V17"."DICOM_ALL" t, LATERAL FLATTEN(input => t."SpecimenDescriptionSequence") f
+WHERE t."Modality" = 'SM' AND t."VolumetricProperties" = 'VOLUME'
+  AND (t."collection_name" = 'TCGA-LUAD' OR t."collection_name" = 'TCGA-LUSC')
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:44:41 - Thread-566 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Expand the "SpecimenPreparationSequence" to locate "Embedding medium" with key "Tissue freezing medium".
+SELECT 
+  f.value::VARIANT:"SpecimenPreparationStepContentItemSequence"::VARIANT[0]:"ConceptNameCodeSequence"::VARIANT[0]::STRING AS "step_name",
+  f.value::VARIANT:"SpecimenPreparationStepContentItemSequence"::VARIANT[0]::VARIANT AS "step_detail"
+FROM "IDC"."IDC_V17"."DICOM_ALL" t, LATERAL FLATTEN(input => t."SpecimenDescriptionSequence") f
+WHERE t."Modality" = 'SM' AND t."VolumetricProperties" = 'VOLUME'
+  AND (t."collection_name" = 'TCGA-LUAD' OR t."collection_name" = 'TCGA-LUSC')
+LIMIT 20;
+Results:
+step_name,step_detail
+,
+,
+,
+,
+,
+,
+,
+,
+,
+,
+,
+,
+,
+,
+,
+,
+,
+,
+,
+,
+
+[Successfully executed]
+2025-07-01 04:44:41 - Thread-566 (execute) - INFO - [Try to execute]
+-- Description: Explore "PixelSpacing" to capture details about pixel spacing in mm/px.
+SELECT DISTINCT 
+  t."PixelSpacing" 
+FROM "IDC"."IDC_V17"."DICOM_ALL" t
+WHERE t."Modality" = 'SM' AND t."VolumetricProperties" = 'VOLUME'
+  AND (t."collection_name" = 'TCGA-LUAD' OR t."collection_name" = 'TCGA-LUSC')
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:44:41 - Thread-566 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Explore "PixelSpacing" to capture details about pixel spacing in mm/px.
+SELECT DISTINCT 
+  t."PixelSpacing" 
+FROM "IDC"."IDC_V17"."DICOM_ALL" t
+WHERE t."Modality" = 'SM' AND t."VolumetricProperties" = 'VOLUME'
+  AND (t."collection_name" = 'TCGA-LUAD' OR t."collection_name" = 'TCGA-LUSC')
+LIMIT 20;
+Results:
+PixelSpacing
+[]
+
+[Successfully executed]
+2025-07-01 04:44:41 - Thread-566 (execute) - INFO - [Try to execute]
+-- Description: Retrieve key metadata (digital slide ID, patient ID, instance ID, GCS URL, width/height, etc.) for slides that meet the requirements thus far.
+SELECT
+  t."ContainerIdentifier" AS "digital_slide_id",
+  t."PatientID" AS "patient_id",
+  t."SOPInstanceUID" AS "instance_id",
+  t."gcs_url",
+  t."TotalPixelMatrixColumns" AS "width",
+  t."TotalPixelMatrixRows" AS "height",
+  t."PixelSpacing",
+  CASE 
+    WHEN t."TransferSyntaxUID" ILIKE '%jpeg%' THEN 'jpeg'
+    WHEN t."TransferSyntaxUID" ILIKE '%jpeg2000%' THEN 'jpeg2000'
+    ELSE 'other'
+  END AS "compression_type"
+FROM "IDC"."IDC_V17"."DICOM_ALL" t
+WHERE t."Modality" = 'SM' AND t."VolumetricProperties" = 'VOLUME'
+  AND (t."collection_name" = 'TCGA-LUAD' OR t."collection_name" = 'TCGA-LUSC')
+  AND t."TransferSyntaxUID" IN ('1.2.840.10008.1.2.4.50', '1.2.840.10008.1.2.4.90')
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:44:42 - Thread-566 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Retrieve key metadata (digital slide ID, patient ID, instance ID, GCS URL, width/height, etc.) for slides that meet the requirements thus far.
+SELECT
+  t."ContainerIdentifier" AS "digital_slide_id",
+  t."PatientID" AS "patient_id",
+  t."SOPInstanceUID" AS "instance_id",
+  t."gcs_url",
+  t."TotalPixelMatrixColumns" AS "width",
+  t."TotalPixelMatrixRows" AS "height",
+  t."PixelSpacing",
+  CASE 
+    WHEN t."TransferSyntaxUID" ILIKE '%jpeg%' THEN 'jpeg'
+    WHEN t."TransferSyntaxUID" ILIKE '%jpeg2000%' THEN 'jpeg2000'
+    ELSE 'other'
+  END AS "compression_type"
+FROM "IDC"."IDC_V17"."DICOM_ALL" t
+WHERE t."Modality" = 'SM' AND t."VolumetricProperties" = 'VOLUME'
+  AND (t."collection_name" = 'TCGA-LUAD' OR t."collection_name" = 'TCGA-LUSC')
+  AND t."TransferSyntaxUID" IN ('1.2.840.10008.1.2.4.50', '1.2.840.10008.1.2.4.90')
+LIMIT 20;
+Results:
+digital_slide_id,patient_id,instance_id,gcs_url,width,height,PixelSpacing,compression_type
+TCGA-44-7669-11A-01-TS1,TCGA-44-7669,1.3.6.1.4.1.5962.99.1.1071036877.1283893717.1637453609421.8.0,gs://public-datasets-idc/40595aa0-01a9-4bf0-9c79-fc052ddf1e00/dac8cd3e-163f-443a-80a3-8c05cd3124b1.dcm,39840,42446,[],other
+TCGA-55-7815-11A-01-TS1,TCGA-55-7815,1.3.6.1.4.1.5962.99.1.1056457835.372549953.1637439030379.29.0,gs://public-datasets-idc/e54f829b-045a-4d99-b513-af52d35322cd/3dba5160-b511-470a-9572
+
+[Successfully executed]
+2025-07-01 04:44:42 - Thread-566 (execute) - INFO - [Try to execute]
+-- Description: Combine all conditions together and filter for tissue type (normal/tumor) and cancer subtype (luad/lscc).
+SELECT
+  t."ContainerIdentifier" AS "digital_slide_id",
+  t."idc_case_id" AS "case_id",
+  t."ContainerIdentifier" AS "physical_slide_id",
+  t."PatientID" AS "patient_id",
+  t."collection_id",
+  t."SOPInstanceUID" AS "instance_id",
+  t."gcs_url",
+  t."TotalPixelMatrixColumns" AS "width",
+  t."TotalPixelMatrixRows" AS "height",
+  t."PixelSpacing",
+  CASE 
+    WHEN t."TransferSyntaxUID" ILIKE '%jpeg%' THEN 'jpeg'
+    WHEN t."TransferSyntaxUID" ILIKE '%jpeg2000%' THEN 'jpeg2000'
+    ELSE 'other'
+  END AS "compression_type",
+  CASE 
+    WHEN f.value::VARIANT:"PrimaryAnatomicStructureSequence"::VARIANT[0]:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue"::STRING = '86049000' THEN 'tumor'
+    WHEN f.value::VARIANT:"PrimaryAnatomicStructureSequence"::VARIANT[0]:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue"::STRING = '17621005' THEN 'normal'
+    ELSE NULL
+  END AS "tissue_type",
+  CASE 
+    WHEN t."collection_name" = 'TCGA-LUAD' THEN 'luad'
+    WHEN t."collection_name" = 'TCGA-LUSC' THEN 'lscc'
+    ELSE NULL
+  END AS "cancer_subtype"
+FROM "IDC"."IDC_V17"."DICOM_ALL" t, LATERAL FLATTEN(input => t."SpecimenDescriptionSequence") f
+WHERE t."Modality" = 'SM' AND t."VolumetricProperties" = 'VOLUME'
+  AND (t."collection_name" = 'TCGA-LUAD' OR t."collection_name" = 'TCGA-LUSC')
+  AND t."TransferSyntaxUID" IN ('1.2.840.10008.1.2.4.50', '1.2.840.10008.1.2.4.90')
+  AND f.value::VARIANT:"SpecimenPreparationSequence"::VARIANT[0]:"SpecimenPreparationStepContentItemSequence"::VARIANT[0]:"ConceptNameCodeSequence"::VARIANT[0]:"CodeMeaning"::STRING ILIKE '%Tissue freezing medium%'
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:44:42 - Thread-566 (execute) - INFO - [Error occurred]
+No data found for the specified query.
+
+[Error occurred]
+2025-07-01 04:46:20 - Thread-566 (execute) - INFO - [Corrected SQL]
+```sql
+-- Description: To ensure we retrieve some data for further analysis, I will simplify the query as much as possible while still meeting the key initial requirements. 
+-- The focus will be on:
+-- 1. Selecting only slide microscopy (SM) images with "VOLUME" volumetric properties.
+-- 2. Filtering by the two relevant collections: "TCGA-LUAD" and "TCGA-LUSC".
+-- 3. Including only images with compression types "jpeg" or "jpeg2000", identified by their "TransferSyntaxUID".
+-- All other filtering conditions (such as tissue type or embedding medium) will be temporarily ignored to avoid overly restrictive filtering.
+-- The goal is to verify that there is relevant data and then refine queries further.
+
+SELECT
+  t."ContainerIdentifier" AS "digital_slide_id",
+  t."PatientID" AS "patient_id",
+  t."idc_case_id" AS "case_id",
+  t."collection_id",
+  t."collection_name",
+  t."SOPInstanceUID" AS "instance_id",
+  t."gcs_url",
+  t."TotalPixelMatrixColumns" AS "width",
+  t."TotalPixelMatrixRows" AS "height",
+  t."PixelSpacing",
+  CASE 
+    WHEN t."TransferSyntaxUID" ILIKE '%jpeg%' THEN 'jpeg'
+    WHEN t."TransferSyntaxUID" ILIKE '%jpeg2000%' THEN 'jpeg2000'
+    ELSE 'other'
+  END AS "compression_type"
+FROM "IDC"."IDC_V17"."DICOM_ALL" t
+WHERE t."Modality" = 'SM'
+  AND t."VolumetricProperties" = 'VOLUME'
+  AND (t."collection_name" = 'TCGA-LUAD' OR t."collection_name" = 'TCGA-LUSC')
+  AND t."TransferSyntaxUID" IN ('1.2.840.10008.1.2.4.50', '1.2.840.10008.1.2.4.90')
+LIMIT 20;
+```
+[Corrected SQL]
+2025-07-01 04:46:21 - Thread-566 (execute) - INFO - [Results for corrected sql]
+digital_slide_id,patient_id,case_id,collection_id,collection_name,instance_id,gcs_url,width,height,PixelSpacing,compression_type
+TCGA-75-5122-01A-01-TS1,TCGA-75-5122,2a6f04cc-d4b7-4ee0-845b-7e0bb7d944f9,tcga_luad,TCGA-LUAD,1.3.6.1.4.1.5962.99.1.1068273314.1290959488.1637450845858.8.0,gs://public-datasets-idc/803813be-6c9c-4ed4-bdd0-48e3343ec472/9bfadcdc-e6f9-492c-8470-5bfe1d328be7.dcm,14000,15178,[],other
+TCGA-44-7671-01A-01-BS1,TCGA-44-7671,4401ef3d-5bce-4c36-b03d-431e90827683,tcga_luad,TCGA-
+
+[Results for corrected sql]
+2025-07-01 04:46:21 - Thread-566 (execute) - INFO - [Successfully corrected]
+Successfully executed. SQL:
+-- Description: Combine all conditions together and filter for tissue type (normal/tumor) and cancer subtype (luad/lscc).
+SELECT
+  t."ContainerIdentifier" AS "digital_slide_id",
+  t."idc_case_id" AS "case_id",
+  t."ContainerIdentifier" AS "physical_slide_id",
+  t."PatientID" AS "patient_id",
+  t."collection_id",
+  t."SOPInstanceUID" AS "instance_id",
+  t."gcs_url",
+  t."TotalPixelMatrixColumns" AS "width",
+  t."TotalPixelMatrixRows" AS "height",
+  t."PixelSpacing",
+  CASE 
+    WHEN t."TransferSyntaxUID" ILIKE '%jpeg%' THEN 'jpeg'
+    WHEN t."TransferSyntaxUID" ILIKE '%jpeg2000%' THEN 'jpeg2000'
+    ELSE 'other'
+  END AS "compression_type",
+  CASE 
+    WHEN f.value::VARIANT:"PrimaryAnatomicStructureSequence"::VARIANT[0]:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue"::STRING = '86049000' THEN 'tumor'
+    WHEN f.value::VARIANT:"PrimaryAnatomicStructureSequence"::VARIANT[0]:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue"::STRING = '17621005' THEN 'normal'
+    ELSE NULL
+  END AS "tissue_type",
+  CASE 
+    WHEN t."collection_name" = 'TCGA-LUAD' THEN 'luad'
+    WHEN t."collection_name" = 'TCGA-LUSC' THEN 'lscc'
+    ELSE NULL
+  END AS "cancer_subtype"
+FROM "IDC"."IDC_V17"."DICOM_ALL" t, LATERAL FLATTEN(input => t."SpecimenDescriptionSequence") f
+WHERE t."Modality" = 'SM' AND t."VolumetricProperties" = 'VOLUME'
+  AND (t."collection_name" = 'TCGA-LUAD' OR t."collection_name" = 'TCGA-LUSC')
+  AND t."TransferSyntaxUID" IN ('1.2.840.10008.1.2.4.50', '1.2.840.10008.1.2.4.90')
+  AND f.value::VARIANT:"SpecimenPreparationSequence"::VARIANT[0]:"SpecimenPreparationStepContentItemSequence"::VARIANT[0]:"ConceptNameCodeSequence"::VARIANT[0]:"CodeMeaning"::STRING ILIKE '%Tissue freezing medium%'
+LIMIT 20;
+Results:
+digital_slide_id,patient_id,case_id,collection_id,collection_name,instance_id,gcs_url,width,height,PixelSpacing,compression_type
+TCGA-75-5122-01A-01-TS1,TCGA-75-5122,2a6f04cc-d4b7-4ee0-845b-7e0bb7d944f9,tcga_luad,TCGA-LUAD,1.3.6.1.4.1.5962.99.1.1068273314.1290959488.1637450845858.8.0,gs://public-datasets-idc/803813be-6c9c-4ed4-bdd0-48e3343ec472/9bfadcdc-e6f9-492c-8470-5bfe1d328be7.dcm,14000,15178,[],other
+TCGA-44-7671-01A-01-BS1,TCGA-44-7671,4401ef3d-5bce-4c36-b03d-431e90827683,tcga_luad,TCGA-
+
+[Successfully corrected]
+2025-07-01 04:46:21 - Thread-566 (execute) - INFO - itercount: 0
+2025-07-01 04:46:21 - Thread-566 (execute) - INFO - [Self-refine]
+Table full name: IDC.IDC_V17.DICOM_METADATA
+Column name: MediaStorageSOPInstanceUID Type: TEXT
+Column name: TotalPixelMatrixRows Type: NUMBER
+Column name: SeriesInstanceUID Type: TEXT
+Column name: ClinicalTrialSubjectID Type: TEXT
+Column name: ContainerIdentifier Type: TEXT
+Column name: Type Type: TEXT
+Column name: CodeValue Type: TEXT
+Column name: SeriesDescription Type: TEXT
+Column name: SpecimenDescriptionSequence Type: VARIANT
+Column name: ImageType Type: VARIANT
+Column name: MediaStorageSOPClassUID Type: TEXT
+Column name: ClinicalTrialProtocolName Type: TEXT
+Column name: CodingSchemeDesignator Type: TEXT
+Column name: Manufacturer Type: TEXT
+Column name: TotalPixelMatrixColumns Type: NUMBER
+Column name: VolumetricProperties Type: TEXT
+Column name: ContrastBolusIngredientConcentration Type: TEXT
+Column name: TransferSyntaxUID Type: TEXT
+Column name: CodingSchemeUID Type: TEXT
+Column name: SOPInstanceUID Type: TEXT
+Column name: ClinicalTrialSeriesID Type: TEXT
+Column name: Modality Type: TEXT
+Column name: ProtocolName Type: TEXT
+Column name: PixelSpacing Type: VARIANT
+Column name: BodyPartExamined Type: TEXT
+Column name: DerivationCodeSequence Type: VARIANT
+Column name: StudyInstanceUID Type: TEXT
+Column name: ReferencedImageSequence Type: VARIANT
+Column name: PatientID Type: TEXT
+Column name: OpticalPathSequence Type: VARIANT
+Column name: ContrastBolusIngredient Type: TEXT
+Column name: ClinicalTrialProtocolID Type: TEXT
+Column name: PixelPresentation Type: TEXT
+Column name: UID Type: TEXT
+Column name: DeviceSerialNumber Type: TEXT
+Column name: ProcedureCodeSequence Type: VARIANT
+Column name: Rows Type: NUMBER
+Column name: StudyDescription Type: TEXT
+Column name: AccessionNumber Type: TEXT
+Column name: CompressionCode Type: TEXT
+Column name: Columns Type: NUMBER
+Column name: SOPClassUID Type: TEXT
+Sample rows:
+[{'MediaStorageSOPClassUID': '1.2.840.10008.5.1.4.1.1.77.1.6', 'MediaStorageSOPInstanceUID': '1.3.6.1.4.1.5962.99.1.154767222.292368839.1640832307062.7.0', 'TransferSyntaxUID': '1.2.840.10008.1.2.4.50', 'ImageType': '[\n  "DERIVED",\n  "PRIMARY",\n  "VOLUME",\n  "NONE"\n]', 'SOPInstanceUID': '1.3.6.1.4.1.5962.99.1.154767222.292368839.1640832307062.7.0', 'AccessionNumber': 'C3N-01088', 'Modality': 'SM', 'Manufacturer': 'Leica Biosystems', 'CodeValue': None, 'CodingSchemeDesignator': None, 'CodingSchemeUID': None, 'StudyDescription': 'Histopathology', 'ProcedureCodeSequence': '[]', 'SeriesDescription': 'HE tumor', 'ReferencedImageSequence': '[]', 'PixelPresentation': None, 'VolumetricProperties': 'VOLUME', 'DerivationCodeSequence': '[]', 'PatientID': 'C3N-01088', 'ClinicalTrialProtocolID': 'CPTAC-CCRCC', 'ClinicalTrialProtocolName': 'CPTAC Clear Cell Carcinoma', 'ClinicalTrialSubjectID': 'C3N-01088', 'ClinicalTrialSeriesID': None, 'BodyPartExamined': None, 'DeviceSerialNumber': 'SS1553', 'ProtocolName': None, 'ContrastBolusIngredient': None, 'ContrastBolusIngredientConcentration': None, 'StudyInstanceUID': '2.25.58706717250894429958007117275973416179', 'SeriesInstanceUID': '1.3.6.1.4.1.5962.99.1.154767222.292368839.1640832307062.2.0', 'Rows': 240, 'Columns': 240, 'PixelSpacing': '[]', 'CompressionCode': None, 'ContainerIdentifier': 'C3N-01088-24', 'SpecimenDescriptionSequence': '[\n  {\n    "PrimaryAnatomicStructureSequence": [\n      {\n        "CodeMeaning": "Kidney",\n        "CodeValue": "64033007",\n        "CodingSchemeDesignator": "SCT",\n        "PrimaryAnatomicStructureModifierSequence": [\n          {\n            "CodeMeaning": "Neoplasm, Primary",\n            "CodeValue": "86049000",\n            "CodingSchemeDesignator": "SCT"\n          }\n        ]\n      }\n    ],\n    "SpecimenDetailedDescription": "tissue_type: tumor",\n    "SpecimenIdentifier": "C3N-01088-04",\n    "SpecimenPreparationSequence": [\n      {\n        "SpecimenPreparationStepContentItemSequence": [\n          {\n            "ConceptCodeSequence": [],\n            "ConceptNameCodeSequence": [\n              {\n                "CodeMeaning": "Specimen Identifier",\n                "CodeValue": "121041",\n                "CodingSchemeDesignator": "DCM"\n              }\n            ],\n            "TextValue": "C3N-01088-04",\n            "ValueType": "TEXT"\n          },\n          {\n            "ConceptCodeSequence": [\n              {\n                "CodeMeaning": "Staining",\n                "CodeValue": "127790008",\n                "CodingSchemeDesignator": "SCT"\n              }\n            ],\n            "ConceptNameCodeSequence": [\n              {\n                "CodeMeaning": "Processing type",\n                "CodeValue": "111701",\n                "CodingSchemeDesignator": "DCM"\n              }\n            ],\n            "ValueType": "CODE"\n          },\n          {\n            "ConceptCodeSequence": [\n              {\n                "CodeMeaning": "hematoxylin stain",\n                "CodeValue": "12710003",\n                "CodingSchemeDesignator": "SCT"\n              }\n            ],\n            "ConceptNameCodeSequence": [\n              {\n                "CodeMeaning": "Using substance",\n                "CodeValue": "424361007",\n                "CodingSchemeDesignator": "SCT"\n              }\n            ],\n            "ValueType": "CODE"\n          },\n          {\n            "ConceptCodeSequence": [\n              {\n                "CodeMeaning": "water soluble eosin stain",\n                "CodeValue": "36879007",\n                "CodingSchemeDesignator": "SCT"\n              }\n            ],\n            "ConceptNameCodeSequence": [\n              {\n                "CodeMeaning": "Using substance",\n                "CodeValue": "424361007",\n                "CodingSchemeDesignator": "SCT"\n              }\n            ],\n            "ValueType": "CODE"\n          }\n        ]\n      }\n    ],\n    "SpecimenShortDescription": "HE tumor",\n    "SpecimenUID": "2.25.108560481862813932613922460373481252572"\n  }\n]', 'UID': None, 'TotalPixelMatrixColumns': 53783, 'TotalPixelMatrixRows': 37372, 'OpticalPathSequence': '[\n  {\n    "IlluminationColorCodeSequence": [\n      {\n        "CodeMeaning": "Full Spectrum",\n        "CodeValue": "414298005",\n        "CodingSchemeDesignator": "SCT"\n      }\n    ],\n    "IlluminationTypeCodeSequence": [\n      {\n        "CodeMeaning": "Brightfield illumination",\n        "CodeValue": "111744",\n        "CodingSchemeDesignator": "DCM"\n      }\n    ],\n    "ObjectiveLensPower": "20",\n    "OpticalPathIdentifier": "1"\n  }\n]', 'Type': 'CREATE'}, {'MediaStorageSOPClassUID': '1.2.840.10008.5.1.4.1.1.77.1.6', 'MediaStorageSOPInstanceUID': '1.3.6.1.4.1.5962.99.1.154767222.292368839.1640832307062.35.0', 'TransferSyntaxUID': '1.2.840.10008.1.2.1', 'ImageType': '[\n  "DERIVED",\n  "PRIMARY",\n  "OVERVIEW",\n  "NONE"\n]', 'SOPInstanceUID': '1.3.6.1.4.1.5962.99.1.154767222.292368839.1640832307062.35.0', 'AccessionNumber': 'C3N-01088', 'Modality': 'SM', 'Manufacturer': 'Leica Biosystems', 'CodeValue': None, 'CodingSchemeDesignator': None, 'CodingSchemeUID': None, 'StudyDescription': 'Histopathology', 'ProcedureCodeSequence': '[]', 'SeriesDescription': 'HE tumor', 'ReferencedImageSequence': '[]', 'PixelPresentation': None, 'VolumetricProperties': 'VOLUME', 'DerivationCodeSequence': '[]', 'PatientID': 'C3N-01088', 'ClinicalTrialProtocolID': 'CPTAC-CCRCC', 'ClinicalTrialProtocolName': 'CPTAC Clear Cell Carcinoma', 'ClinicalTrialSubjectID': 'C3N-01088', 'ClinicalTrialSeriesID': None, 'BodyPartExamined': None, 'DeviceSerialNumber': 'SS1553', 'ProtocolName': None, 'ContrastBolusIngredient': None, 'ContrastBolusIngredientConcentration': None, 'StudyInstanceUID': '2.25.58706717250894429958007117275973416179', 'SeriesInstanceUID': '1.3.6.1.4.1.5962.99.1.154767222.292368839.1640832307062.2.0', 'Rows': 629, 'Columns': 1600, 'PixelSpacing': '[]', 'CompressionCode': None, 'ContainerIdentifier': 'C3N-01088-24', 'SpecimenDescriptionSequence': '[\n  {\n    "PrimaryAnatomicStructureSequence": [\n      {\n        "CodeMeaning": "Kidney",\n        "CodeValue": "64033007",\n        "CodingSchemeDesignator": "SCT",\n        "PrimaryAnatomicStructureModifierSequence": [\n          {\n            "CodeMeaning": "Neoplasm, Primary",\n            "CodeValue": "86049000",\n            "CodingSchemeDesignator": "SCT"\n          }\n        ]\n      }\n    ],\n    "SpecimenDetailedDescription": "tissue_type: tumor",\n    "SpecimenIdentifier": "C3N-01088-04",\n    "SpecimenPreparationSequence": [\n      {\n        "SpecimenPreparationStepContentItemSequence": [\n          {\n            "ConceptCodeSequence": [],\n            "ConceptNameCodeSequence": [\n              {\n                "CodeMeaning": "Specimen Identifier",\n                "CodeValue": "121041",\n                "CodingSchemeDesignator": "DCM"\n              }\n            ],\n            "TextValue": "C3N-01088-04",\n            "ValueType": "TEXT"\n          },\n          {\n            "ConceptCodeSequence": [\n              {\n                "CodeMeaning": "Staining",\n                "CodeValue": "127790008",\n                "CodingSchemeDesignator": "SCT"\n              }\n            ],\n            "ConceptNameCodeSequence": [\n              {\n                "CodeMeaning": "Processing type",\n                "CodeValue": "111701",\n                "CodingSchemeDesignator": "DCM"\n              }\n            ],\n            "ValueType": "CODE"\n          },\n          {\n            "ConceptCodeSequence": [\n              {\n                "CodeMeaning": "hematoxylin stain",\n                "CodeValue": "12710003",\n                "CodingSchemeDesignator": "SCT"\n              }\n            ],\n            "ConceptNameCodeSequence": [\n              {\n                "CodeMeaning": "Using substance",\n                "CodeValue": "424361007",\n                "CodingSchemeDesignator": "SCT"\n              }\n            ],\n            "ValueType": "CODE"\n          },\n          {\n            "ConceptCodeSequence": [\n              {\n                "CodeMeaning": "water soluble eosin stain",\n                "CodeValue": "36879007",\n                "CodingSchemeDesignator": "SCT"\n              }\n            ],\n            "ConceptNameCodeSequence": [\n              {\n                "CodeMeaning": "Using substance",\n                "CodeValue": "424361007",\n                "CodingSchemeDesignator": "SCT"\n              }\n            ],\n            "ValueType": "CODE"\n          }\n        ]\n      }\n    ],\n    "SpecimenShortDescription": "HE tumor",\n    "SpecimenUID": "2.25.108560481862813932613922460373481252572"\n  }\n]', 'UID': None, 'TotalPixelMatrixColumns': 1600, 'TotalPixelMatrixRows': 629, 'OpticalPathSequence': '[\n  {\n    "IlluminationColorCodeSequence": [\n      {\n        "CodeMeaning": "Full Spectrum",\n        "CodeValue": "414298005",\n        "CodingSchemeDesignator": "SCT"\n      }\n    ],\n    "IlluminationTypeCodeSequence": [\n      {\n        "CodeMeaning": "Brightfield illumination",\n        "CodeValue": "111744",\n        "CodingSchemeDesignator": "DCM"\n      }\n    ],\n    "ObjectiveLensPower": "20",\n    "OpticalPathIdentifier": "1"\n  }\n]', 'Type': 'CREATE'}, {'MediaStorageSOPClassUID': '1.2.840.10008.5.1.4.1.1.77.1.6', 'MediaStorageSOPInstanceUID': '1.3.6.1.4.1.5962.99.1.2133926228.1619968177.1655696367956.37.0', 'TransferSyntaxUID': '1.2.840.10008.1.2.1', 'ImageType': '[\n  "DERIVED",\n  "PRIMARY",\n  "LABEL",\n  "NONE"\n]', 'SOPInstanceUID': '1.3.6.1.4.1.5962.99.1.2133926228.1619968177.1655696367956.37.0', 'AccessionNumber': 'C3N-01088', 'Modality': 'SM', 'Manufacturer': 'Leica Biosystems', 'CodeValue': None, 'CodingSchemeDesignator': None, 'CodingSchemeUID': None, 'StudyDescription': 'Histopathology', 'ProcedureCodeSequence': '[]', 'SeriesDescription
+--------------------------------------------------
+Table full name: IDC.IDC_V17.DICOM_METADATA_CURATED
+Column name: BodyPartExamined Type: TEXT Description: Curated value of BodyPartExamined following the manually created mapping. For the mapping details, please refer to the query referenced in the series description.
+Column name: SOPInstanceUID Type: TEXT Description: DICOM SOPInstanceUID
+Sample rows:
+[{'SOPInstanceUID': '1.3.6.1.4.1.14519.5.2.1.1620.1225.337801122878670074294531806897', 'BodyPartExamined': None}, {'SOPInstanceUID': '1.3.6.1.4.1.5962.99.1.2140475088.421872551.1655702916816.37.0', 'BodyPartExamined': None}, {'SOPInstanceUID': '1.3.6.1.4.1.5962.99.1.3388672280.250944349.1639771244824.22.0', 'BodyPartExamined': None}, {'SOPInstanceUID': '1.3.6.1.4.1.5962.99.1.285798320.1466497774.1640963338160.42.0', 'BodyPartExamined': None}, {'SOPInstanceUID': '1.2.276.0.7230010.3.1.4.481037312.39574.1685071533.519153', 'BodyPartExamined': None}]
+--------------------------------------------------
+Table full name: IDC.IDC_V17.DICOM_ALL
+Column name: ReferencedImageSequence Type: VARIANT
+Column name: ContrastBolusIngredientConcentration Type: TEXT
+Column name: VolumetricProperties Type: TEXT
+Column name: DerivationCodeSequence Type: VARIANT
+Column name: CodingSchemeDesignator Type: TEXT
+Column name: SOPClassUID Type: TEXT
+Column name: PatientID Type: TEXT Description: Patient ID assigned by submitter of this data
+Column name: StudyDescription Type: TEXT
+Column name: UID Type: TEXT
+Column name: Modality Type: TEXT
+Column name: idc_case_id Type: TEXT Description: IDC assigned UUID4 id of this version of the case/patient containing this instance
+Column name: SpecimenDescriptionSequence Type: VARIANT
+Column name: ClinicalTrialProtocolID Type: TEXT
+Column name: SeriesDescription Type: TEXT
+Column name: SOPInstanceUID Type: TEXT
+Column name: DeviceSerialNumber Type: TEXT
+Column name: collection_id Type: TEXT Description: The ID of the collection containing this instance as expected by the IDC web app and API. Duplicate of the idc_webapp_collection_id column.
+Column name: ImageType Type: VARIANT
+Column name: ProcedureCodeSequence Type: VARIANT
+Column name: PixelSpacing Type: VARIANT
+Column name: Rows Type: NUMBER
+Column name: OpticalPathSequence Type: VARIANT
+Column name: TotalPixelMatrixColumns Type: NUMBER
+Column name: AccessionNumber Type: TEXT
+Column name: StudyInstanceUID Type: TEXT
+Column name: CompressionCode Type: TEXT
+Column name: Columns Type: NUMBER
+Column name: ClinicalTrialSeriesID Type: TEXT
+Column name: CodeValue Type: TEXT
+Column name: MediaStorageSOPInstanceUID Type: TEXT
+Column name: Manufacturer Type: TEXT
+Column name: collection_name Type: TEXT Description: The ID of the collection containing this instance as expected by the TCIA API
+Column name: CodingSchemeUID Type: TEXT
+Column name: ClinicalTrialProtocolName Type: TEXT
+Column name: PixelPresentation Type: TEXT
+Column name: ProtocolName Type: TEXT
+Column name: ContrastBolusIngredient Type: TEXT
+Column name: SeriesInstanceUID Type: TEXT
+Column name: ClinicalTrialSubjectID Type: TEXT
+Column name: MediaStorageSOPClassUID Type: TEXT
+Column name: Type Type: TEXT
+Column name: BodyPartExamined Type: TEXT
+Column name: ContainerIdentifier Type: TEXT
+Column name: TransferSyntaxUID Type: TEXT
+Column name: gcs_url Type: TEXT Description: URL of the Google Cloud Storage (GCS) object containing the current version of this instance
+Column name: TotalPixelMatrixRows Type: NUMBER
+Sample rows:
+[{'collection_name': 'NLST', 'collection_id': 'nlst', 'PatientID': '115644', 'idc_case_id': 'f999d808-731d-4c65-b1b1-a462e80c4e0d', 'StudyInstanceUID': '1.2.840.113654.2.55.62621785606309318595425188615995118704', 'SeriesInstanceUID': '1.2.840.113654.2.55.286585074629136673697149467703631406338', 'SOPInstanceUID': '1.2.840.113654.2.55.232251254905686701117181565039442087865', 'gcs_url': 'gs://public-datasets-idc/46f9c801-aff7-4c6c-af45-23827e1a9c85/010ce390-7c5a-42c3-b5ba-75dd090ee4c1.dcm', 'MediaStorageSOPClassUID': '1.2.840.10008.5.1.4.1.1.2', 'MediaStorageSOPInstanceUID': '1.2.840.113654.2.55.232251254905686701117181565039442087865', 'TransferSyntaxUID': '1.2.840.10008.1.2.1', 'ImageType': '[\n  "ORIGINAL",\n  "PRIMARY",\n  "AXIAL"\n]', 'AccessionNumber': '660837', 'Modality': 'CT', 'Manufacturer': 'GE MEDICAL SYSTEMS', 'CodeValue': None, 'CodingSchemeDesignator': None, 'CodingSchemeUID': None, 'StudyDescription': 'NLST-LSS', 'ProcedureCodeSequence': '[]', 'SeriesDescription': '1,OPA,GE,HSQX,STANDARD,310,2.5,120,56,0.1,1.5', 'ReferencedImageSequence': '[]', 'PixelPresentation': None, 'VolumetricProperties': None, 'DerivationCodeSequence': '[]', 'ClinicalTrialProtocolID': 'NCT00047385', 'ClinicalTrialProtocolName': 'NLST-LSS', 'ClinicalTrialSubjectID': '003699', 'ClinicalTrialSeriesID': None, 'BodyPartExamined': 'CHEST', 'DeviceSerialNumber': None, 'ProtocolName': None, 'ContrastBolusIngredient': None, 'ContrastBolusIngredientConcentration': None, 'Rows': 512, 'Columns': 512, 'PixelSpacing': '[\n  "0.605469",\n  "0.605469"\n]', 'CompressionCode': None, 'ContainerIdentifier': None, 'SpecimenDescriptionSequence': '[]', 'UID': None, 'TotalPixelMatrixColumns': None, 'TotalPixelMatrixRows': None, 'OpticalPathSequence': '[]', 'Type': 'CREATE'}, {'collection_name': 'NLST', 'collection_id': 'nlst', 'PatientID': '125284', 'idc_case_id': '8ee64c7b-aa5a-419e-9dc2-bd9766aaeaae', 'StudyInstanceUID': '1.2.840.113654.2.55.252823246291318780125419075611881707753', 'SeriesInstanceUID': '1.2.840.113654.2.55.206816254587970136084378013338289118172', 'SOPInstanceUID': '1.2.840.113654.2.55.281149784892428811639464384293629235745', 'gcs_url': 'gs://public-datasets-idc/2eaea355-1729-44e6-9504-9b7c745bcce2/80ff05d2-7971-465d-a822-3356ae172458.dcm', 'MediaStorageSOPClassUID': '1.2.840.10008.5.1.4.1.1.2', 'MediaStorageSOPInstanceUID': '1.2.840.113654.2.55.281149784892428811639464384293629235745', 'TransferSyntaxUID': '1.2.840.10008.1.2.1', 'ImageType': '[\n  "ORIGINAL",\n  "PRIMARY",\n  "AXIAL"\n]', 'AccessionNumber': '259106', 'Modality': 'CT', 'Manufacturer': 'GE MEDICAL SYSTEMS', 'CodeValue': None, 'CodingSchemeDesignator': None, 'CodingSchemeUID': None, 'StudyDescription': 'NLST-LSS', 'ProcedureCodeSequence': '[]', 'SeriesDescription': '1,OPA,GE,HSQX,STANDARD,310,2.5,120,56,0.1,1.5', 'ReferencedImageSequence': '[]', 'PixelPresentation': None, 'VolumetricProperties': None, 'DerivationCodeSequence': '[]', 'ClinicalTrialProtocolID': 'NCT00047385', 'ClinicalTrialProtocolName': 'NLST-LSS', 'ClinicalTrialSubjectID': '090464', 'ClinicalTrialSeriesID': None, 'BodyPartExamined': 'CHEST', 'DeviceSerialNumber': None, 'ProtocolName': None, 'ContrastBolusIngredient': None, 'ContrastBolusIngredientConcentration': None, 'Rows': 512, 'Columns': 512, 'PixelSpacing': '[\n  "0.605469",\n  "0.605469"\n]', 'CompressionCode': None, 'ContainerIdentifier': None, 'SpecimenDescriptionSequence': '[]', 'UID': None, 'TotalPixelMatrixColumns': None, 'TotalPixelMatrixRows': None, 'OpticalPathSequence': '[]', 'Type': 'CREATE'}, {'collection_name': 'NLST', 'collection_id': 'nlst', 'PatientID': '111916', 'idc_case_id': '0c48f973-a8bb-493f-8479-34dd31d0df0a', 'StudyInstanceUID': '1.2.840.113654.2.55.321739936466302978441987047842606358921', 'SeriesInstanceUID': '1.2.840.113654.2.55.177630169322150231721484650076633097612', 'SOPInstanceUID': '1.2.840.113654.2.55.169820662853239776981123072671212105735', 'gcs_url': 'gs://public-datasets-idc/1b6ee4c5-822c-4eae-8b48-f22c113b78a2/055a66f5-7e54-4b46-ae42-df7e377be8e3.dcm', 'MediaStorageSOPClassUID': '1.2.840.10008.5.1.4.1.1.2', 'MediaStorageSOPInstanceUID': '1.2.840.113654.2.55.169820662853239776981123072671212105735', 'TransferSyntaxUID': '1.2.840.10008.1.2.1', 'ImageType': '[\n  "ORIGINAL",\n  "PRIMARY",\n  "AXIAL"\n]', 'AccessionNumber': '788115', 'Modality': 'CT', 'Manufacturer': 'GE MEDICAL SYSTEMS', 'CodeValue': None, 'CodingSchemeDesignator': None, 'CodingSchemeUID': None, 'StudyDescription': 'NLST-LSS', 'ProcedureCodeSequence': '[]', 'SeriesDescription': '1,OPA,GE,HSQX,STANDARD,350,2.5,120,56,0.1,1.5', 'ReferencedImageSequence': '[]', 'PixelPresentation': None, 'VolumetricProperties': None, 'DerivationCodeSequence': '[]', 'ClinicalTrialProtocolID': 'NCT00047385', 'ClinicalTrialProtocolName': 'NLST-LSS', 'ClinicalTrialSubjectID': '037648', 'ClinicalTrialSeriesID': None, 'BodyPartExamined': 'CHEST', 'DeviceSerialNumber': None, 'ProtocolName': None, 'ContrastBolusIngredient': None, 'ContrastBolusIngredientConcentration': None, 'Rows': 512, 'Columns': 512, 'PixelSpacing': '[\n  "0.683594",\n  "0.683594"\n]', 'CompressionCode': None, 'ContainerIdentifier': None, 'SpecimenDescriptionSequence': '[]', 'UID': None, 'TotalPixelMatrixColumns': None, 'TotalPixelMatrixRows': None, 'OpticalPathSequence': '[]', 'Type': 'CREATE'}, {'collection_name': 'NLST', 'collection_id': 'nlst', 'PatientID': '105094', 'idc_case_id': '9e94ea23-01e5-4447-a72c-cb204537f440', 'StudyInstanceUID': '1.2.840.113654.2.55.238810784403423496900404050276632823832', 'SeriesInstanceUID': '1.2.840.113654.2.55.241127592238091291973528290810645287066', 'SOPInstanceUID': '1.2.840.113654.2.55.195670402165839899895759391289032265317', 'gcs_url': 'gs://public-datasets-idc/fd1c26b5-8eec-4003-9729-3ab76316ddad/61306e6a-ce32-442f-86e2-18a74e3f8af1.dcm', 'MediaStorageSOPClassUID': '1.2.840.10008.5.1.4.1.1.2', 'MediaStorageSOPInstanceUID': '1.2.840.113654.2.55.195670402165839899895759391289032265317', 'TransferSyntaxUID': '1.2.840.10008.1.2.1', 'ImageType': '[\n  "ORIGINAL",\n  "PRIMARY",\n  "AXIAL"\n]', 'AccessionNumber': '325296', 'Modality': 'CT', 'Manufacturer': 'GE MEDICAL SYSTEMS', 'CodeValue': None, 'CodingSchemeDesignator': None, 'CodingSchemeUID': None, 'StudyDescription': 'NLST-LSS', 'ProcedureCodeSequence': '[]', 'SeriesDescription': '1,OPA,GE,HSQX,STANDARD,350,2.5,120,56,0.1,1.5', 'ReferencedImageSequence': '[]', 'PixelPresentation': None, 'VolumetricProperties': None, 'DerivationCodeSequence': '[]', 'ClinicalTrialProtocolID': 'NCT00047385', 'ClinicalTrialProtocolName': 'NLST-LSS', 'ClinicalTrialSubjectID': '148551', 'ClinicalTrialSeriesID': None, 'BodyPartExamined': 'CHEST', 'DeviceSerialNumber': None, 'ProtocolName': None, 'ContrastBolusIngredient': None, 'ContrastBolusIngredientConcentration': None, 'Rows': 512, 'Columns': 512, 'PixelSpacing': '[\n  "0.683594",\n  "0.683594"\n]', 'CompressionCode': None, 'ContainerIdentifier': None, 'SpecimenDescriptionSequence': '[]', 'UID': None, 'TotalPixelMatrixColumns': None, 'TotalPixelMatrixRows': None, 'OpticalPathSequence': '[]', 'Type': 'CREATE'}, {'collection_name': 'NLST', 'collection_id': 'nlst', 'PatientID': '131538', 'idc_case_id': '9f139ffd-7773-44fd-aa12-899d2c7f4975', 'StudyInstanceUID': '1.2.840.113654.2.55.65506226137788125731294707744660637427', 'SeriesInstanceUID': '1.2.840.113654.2.55.256299343016283789104389095516984631610', 'SOPInstanceUID': '1.2.840.113654.2.55.85167056264528248627639073741729153183', 'gcs_url': 'gs://public-datasets-idc/b86ac545-5f48-4295-8372-ec5cf8fc22e7/bbe6d6ab-a151-4e51-8bac-6731b850d02a.dcm', 'MediaStorageSOPClassUID': '1.2.840.10008.5.1.4.1.1.2', 'MediaStorageSOPInstanceUID': '1.2.840.113654.2.55.85167056264528248627639073741729153183', 'TransferSyntaxUID': '1.2.840.10008.1.2.1', 'ImageType': '[\n  "ORIGINAL",\n  "PRIMARY",\n  "AXIAL"\n]', 'AccessionNumber': '734510', 'Modality': 'CT', 'Manufacturer': 'GE MEDICAL SYSTEMS', 'CodeValue': None, 'CodingSchemeDesignator': None, 'CodingSchemeUID': None, 'StudyDescription': 'NLST-LSS', 'ProcedureCodeSequence': '[]', 'SeriesDescription': '1,OPA,GE,HSQX,STANDARD,350,2.5,120,56,0.1,1.5', 'ReferencedImageSequence': '[]', 'PixelPresentation': None, 'VolumetricProperties': None, 'DerivationCodeSequence': '[]', 'ClinicalTrialProtocolID': 'NCT00047385', 'ClinicalTrialProtocolName': 'NLST-LSS', 'ClinicalTrialSubjectID': '141028', 'ClinicalTrialSeriesID': None, 'BodyPartExamined': 'CHEST', 'DeviceSerialNumber': None, 'ProtocolName': None, 'ContrastBolusIngredient': None, 'ContrastBolusIngredientConcentration': None, 'Rows': 512, 'Columns': 512, 'PixelSpacing': '[\n  "0.683594",\n  "0.683594"\n]', 'CompressionCode': None, 'ContainerIdentifier': None, 'SpecimenDescriptionSequence': '[]', 'UID': None, 'TotalPixelMatrixColumns': None, 'TotalPixelMatrixRows': None, 'OpticalPathSequence': '[]', 'Type': 'CREATE'}]
+--------------------------------------------------
+Table full name: IDC.IDC_V17.DICOM_METADATA_CURATED_SERIES_LEVEL
+Column name: max_TotalPixelMatrixRows Type: NUMBER Description: Minimum value of the Rows attribute across instances within the series. Contains first non-null value between the top-level Rows attribute and the one in TotalPixelMatrixRows (encountered in SM modality).
+Column name: SeriesInstanceUID Type: TEXT Description: DICOM SeriesInstanceUID
+Column name: Modality Type: TEXT Description: DICOM Modality
+Column name: primaryAnatomicStructure_code_designator_value_str Type: TEXT Description: Concatenated values of `CodingSchemeDesignator` and `CodeValue` separated by `:` from SpecimenDescriptionSequence[0] > PrimaryAnatomicStructureSequence[0] (applicable in SM).
+Column name: illuminationType_CodeMeaning Type: TEXT Description: `CodeMeaning` from OpticalPathSequence[0].IlluminationTypeCodeSequence[0] (applicable in SM).
+Column name: min_PixelSpacing_2sf Type: FLOAT Description: Minimum value of the first component of pixel spacing across all instances in the series. Contains first non-null value between first component of the top-level PixelSpacing attribute and the one in SharedFunctionalGroupSequence[0] > PixelMeasuresSequence[0]. Rounded to two significant figures.
+Column name: primaryAnatomicStructure_CodeMeaning Type: TEXT Description: `CodeMeaning` from SpecimenDescriptionSequence[0] > PrimaryAnatomicStructureSequence[0] (applicable in SM).
+Column name: max_TotalPixelMatrixColumns Type: NUMBER Description: Minimum value of the Columns attribute across instances within the series. Contains first non-null value between the top-level Columns attribute and the one in TotalPixelMatrixColumns (encountered in SM modality).
+Sample rows:
+[{'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.2103.7010.269874.1.2', 'min_PixelSpacing_2sf': None, 'max_TotalPixelMatrixColumns': None, 'max_TotalPixelMatrixRows': None, 'primaryAnatomicStructure_code_designator_value_str': None, 'primaryAnatomicStructure_CodeMeaning': None, 'illuminationType_CodeMeaning': None, 'Modality': 'KO'}, {'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.2103.7010.269874.1.1', 'min_PixelSpacing_2sf': None, 'max_TotalPixelMatrixColumns': None, 'max_TotalPixelMatrixRows': None, 'primaryAnatomicStructure_code_designator_value_str': None, 'primaryAnatomicStructure_CodeMeaning': None, 'illuminationType_CodeMeaning': None, 'Modality': 'KO'}, {'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.2103.7010.237254.1.2', 'min_PixelSpacing_2sf': None, 'max_TotalPixelMatrixColumns': None, 'max_TotalPixelMatrixRows': None, 'primaryAnatomicStructure_code_designator_value_str': None, 'primaryAnatomicStructure_CodeMeaning': None, 'illuminationType_CodeMeaning': None, 'Modality': 'KO'}, {'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.2103.7010.263376.2.1', 'min_PixelSpacing_2sf': None, 'max_TotalPixelMatrixColumns': None, 'max_TotalPixelMatrixRows': None, 'primaryAnatomicStructure_code_designator_value_str': None, 'primaryAnatomicStructure_CodeMeaning': None, 'illuminationType_CodeMeaning': None, 'Modality': 'KO'}, {'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.2103.7010.135953.2.2', 'min_PixelSpacing_2sf': None, 'max_TotalPixelMatrixColumns': None, 'max_TotalPixelMatrixRows': None, 'primaryAnatomicStructure_code_designator_value_str': None, 'primaryAnatomicStructure_CodeMeaning': None, 'illuminationType_CodeMeaning': None, 'Modality': 'KO'}]
+--------------------------------------------------
+External knowledge that might be helpful: 
+Detailed requirements include:
+- The slides must belong to the TCGA-LUAD or TCGA-LUSC collections;
+- The slides must be JPEG or JPEG2000 compressed;
+- The slides must be digital images and exclude non-volume ones;
+- The slides must contain either normal (`17621005`) or tumor (`86049000`) tissue, identified by specific DICOM codes;
+- The slides must be prepared using the "Tissue freezing medium" embedding method;
+
+With respect to the output, it should contain the following basic metadata and attributes related to slide microscopy images. Concretely,
+- digital slide ID: unique numeric identifier of a digital slide, i.e., a digital image of a physical slide;
+- case ID: unique numeric identifier of the study in the context of which the ditial slide was created;
+- physical slide ID: unique numeric identifier of the physical slide as prepared in the wet lab; 
+- patient ID: unique numeric identifier of the patient from whose tissue the physical slide was obtained;
+- collection ID: numeric or character sequence describing the dataset the physical slide is part of;
+- instance ID: universally unique identifier of the DICOM instance;
+- GCS URL: how to access the DICOM file;
+- width/height: image width and height in pixels, respectively;
+- pixel spacing: image pixel spacing in mm/px;
+- compression type (either value `jpeg`, `jpeg2000`, or `other`).
+
+And the target two labels are:
+- tissue_type: either `normal` or `tumor`;
+- cancer_subtype: either `luad` or `lscc`.
+Sort the results according to instance ID in ascending order.
+The table structure information is ({database name: {schema name: [table name]}}): 
+{'IDC': {'IDC_V17': ['DICOM_METADATA', 'DICOM_METADATA_CURATED', 'DICOM_ALL', 'DICOM_METADATA_CURATED_SERIES_LEVEL']}}
+
+Some few-shot examples after column exploration may be helpful:
+Query:
+-- Description: Retrieve distinct "collection_name" to identify the exact collections and ensure we focus on TCGA-LUAD and TCGA-LUSC.
+SELECT DISTINCT "collection_name" 
+FROM "IDC"."IDC_V17"."DICOM_ALL" 
+LIMIT 20;
+Answer:
+collection_name
+TCGA-TGCT
+QIN-PROSTATE-Repeatability
+TCGA-ESCA
+NaF PROSTATE
+BREAST-DIAGNOSIS
+CT-Phantom4Radiomics
+TCGA-KIRP
+CPTAC-UCEC
+TCGA-LUAD
+GBM-DSC-MRI-DRO
+Pancreatic-CT-CBCT-SEG
+PDMR-Texture-Analysis
+Duke-Breast-Cancer-MRI
+TCGA-SKCM
+PDMR-997537-175-T
+TCGA-SARC
+PROSTATE-MRI
+TCGA-LIHC
+B-mode-and-CEUS-Liver
+NLST
+Query:
+-- Description: Check distinct "Modality" values to ensure only SM modality is selected for slide microscopy images.
+SELECT DISTINCT "Modality" 
+FROM "IDC"."IDC_V17"."DICOM_ALL" 
+LIMIT 20;
+Answer:
+Modality
+CT
+DX
+PR
+OT
+US
+XA
+CR
+REG
+RTPLAN
+RTSTRUCT
+RTDOSE
+M3D
+SC
+FUSION
+XC
+SM
+NM
+MR
+SEG
+SR
+Query:
+-- Description: Verify "VolumetricProperties" values to filter SM images marked as VOLUME.
+SELECT DISTINCT "VolumetricProperties" 
+FROM "IDC"."IDC_V17"."DICOM_ALL" 
+WHERE "Modality" = 'SM' 
+LIMIT 20;
+Answer:
+VolumetricProperties
+VOLUME
+Query:
+-- Description: Explore distinct "TransferSyntaxUID" values to identify JPEG and JPEG2000 compression and exclude others.
+SELECT DISTINCT "TransferSyntaxUID" 
+FROM "IDC"."IDC_V17"."DICOM_ALL" 
+WHERE "Modality" = 'SM' AND "VolumetricProperties" = 'VOLUME' 
+LIMIT 20;
+Answer:
+TransferSyntaxUID
+1.2.840.10008.1.2.1
+1.2.840.10008.1.2.4.90
+1.2.840.10008.1.2.4.91
+1.2.840.10008.1.2.4.50
+Query:
+-- Description: Examine the "SpecimenDescriptionSequence" column structure to identify the embedding method and tissue type (normal or tumor).
+SELECT t."SpecimenDescriptionSequence" 
+FROM "IDC"."IDC_V17"."DICOM_ALL" t
+WHERE t."Modality" = 'SM' AND t."VolumetricProperties" = 'VOLUME'
+AND (t."collection_name" = 'TCGA-LUAD' OR t."collection_name" = 'TCGA-LUSC')
+LIMIT 20;
+Answer:
+SpecimenDescriptionSequence
+"[
+  {
+    ""PrimaryAnatomicStructureSequence"": [
+      {
+        ""CodeMeaning"": ""Lung"",
+        ""CodeValue"": ""39607008"",
+        ""CodingSchemeDesignator"": ""SCT"",
+        ""PrimaryAnatomicStructureModifierSequence"": [
+          {
+            ""CodeMeaning"": ""Neoplasm, Primary"",
+            ""CodeValue"": ""86049000"",
+            ""CodingSchemeDesignator"": ""SCT""
+          }
+        ]
+      }
+    ],
+    ""SpecimenIdentifier"": ""TCGA-78-8648-01Z-00
+Query:
+-- Description: Flatten the "SpecimenDescriptionSequence" column to inspect the embedding medium and its specific key details.
+SELECT 
+  f.value::VARIANT:"SpecimenPreparationSequence"::VARIANT[0]:"SpecimenPreparationStepContentItemSequence"::VARIANT[0]:"ConceptNameCodeSequence"::VARIANT[0]::STRING AS "embedding_method",
+  f.value::VARIANT:"PrimaryAnatomicStructureSequence"::VARIANT[0] AS "tissue_type_detail"
+FROM "IDC"."IDC_V17"."DICOM_ALL" t, LATERAL FLATTEN(input => t."SpecimenDescriptionSequence") f
+WHERE t."Modality" = 'SM' AND t."VolumetricProperties" = 'VOLUME'
+  AND (t."collection_name" = 'TCGA-LUAD' OR t."collection_name" = 'TCGA-LUSC')
+LIMIT 20;
+Answer:
+embedding_method,tissue_type_detail
+"{""CodeMeaning"":""Specimen Identifier"",""CodeValue"":""121041"",""CodingSchemeDesignator"":""DCM""}","{
+  ""CodeMeaning"": ""Lung"",
+  ""CodeValue"": ""39607008"",
+  ""CodingSchemeDesignator"": ""SCT"",
+  ""PrimaryAnatomicStructureModifierSequence"": [
+    {
+      ""CodeMeaning"": ""Neoplasm, Primary"",
+      ""CodeValue"": ""86049000"",
+      ""CodingSchemeDesignator"": ""SCT""
+    }
+  ]
+}"
+"{""CodeMeaning"":""Specimen Identifier"",""CodeValue"":""121041
+Query:
+-- Description: Expand the "SpecimenPreparationSequence" to locate "Embedding medium" with key "Tissue freezing medium".
+SELECT 
+  f.value::VARIANT:"SpecimenPreparationStepContentItemSequence"::VARIANT[0]:"ConceptNameCodeSequence"::VARIANT[0]::STRING AS "step_name",
+  f.value::VARIANT:"SpecimenPreparationStepContentItemSequence"::VARIANT[0]::VARIANT AS "step_detail"
+FROM "IDC"."IDC_V17"."DICOM_ALL" t, LATERAL FLATTEN(input => t."SpecimenDescriptionSequence") f
+WHERE t."Modality" = 'SM' AND t."VolumetricProperties" = 'VOLUME'
+  AND (t."collection_name" = 'TCGA-LUAD' OR t."collection_name" = 'TCGA-LUSC')
+LIMIT 20;
+Answer:
+step_name,step_detail
+,
+,
+,
+,
+,
+,
+,
+,
+,
+,
+,
+,
+,
+,
+,
+,
+,
+,
+,
+,
+Query:
+-- Description: Explore "PixelSpacing" to capture details about pixel spacing in mm/px.
+SELECT DISTINCT 
+  t."PixelSpacing" 
+FROM "IDC"."IDC_V17"."DICOM_ALL" t
+WHERE t."Modality" = 'SM' AND t."VolumetricProperties" = 'VOLUME'
+  AND (t."collection_name" = 'TCGA-LUAD' OR t."collection_name" = 'TCGA-LUSC')
+LIMIT 20;
+Answer:
+PixelSpacing
+[]
+Query:
+-- Description: Retrieve key metadata (digital slide ID, patient ID, instance ID, GCS URL, width/height, etc.) for slides that meet the requirements thus far.
+SELECT
+  t."ContainerIdentifier" AS "digital_slide_id",
+  t."PatientID" AS "patient_id",
+  t."SOPInstanceUID" AS "instance_id",
+  t."gcs_url",
+  t."TotalPixelMatrixColumns" AS "width",
+  t."TotalPixelMatrixRows" AS "height",
+  t."PixelSpacing",
+  CASE 
+    WHEN t."TransferSyntaxUID" ILIKE '%jpeg%' THEN 'jpeg'
+    WHEN t."TransferSyntaxUID" ILIKE '%jpeg2000%' THEN 'jpeg2000'
+    ELSE 'other'
+  END AS "compression_type"
+FROM "IDC"."IDC_V17"."DICOM_ALL" t
+WHERE t."Modality" = 'SM' AND t."VolumetricProperties" = 'VOLUME'
+  AND (t."collection_name" = 'TCGA-LUAD' OR t."collection_name" = 'TCGA-LUSC')
+  AND t."TransferSyntaxUID" IN ('1.2.840.10008.1.2.4.50', '1.2.840.10008.1.2.4.90')
+LIMIT 20;
+Answer:
+digital_slide_id,patient_id,instance_id,gcs_url,width,height,PixelSpacing,compression_type
+TCGA-44-7669-11A-01-TS1,TCGA-44-7669,1.3.6.1.4.1.5962.99.1.1071036877.1283893717.1637453609421.8.0,gs://public-datasets-idc/40595aa0-01a9-4bf0-9c79-fc052ddf1e00/dac8cd3e-163f-443a-80a3-8c05cd3124b1.dcm,39840,42446,[],other
+TCGA-55-7815-11A-01-TS1,TCGA-55-7815,1.3.6.1.4.1.5962.99.1.1056457835.372549953.1637439030379.29.0,gs://public-datasets-idc/e54f829b-045a-4d99-b513-af52d35322cd/3dba5160-b511-470a-9572
+Task: Could you provide a clean, structured dataset from dicom_all table that only includes SM images marked as VOLUME from the TCGA-LUAD and TCGA-LUSC collections, excluding any slides with compression type “other,” where the specimen preparation step explicitly has “Embedding medium” set to “Tissue freezing medium,” and ensuring that the tissue type is only “normal” or “tumor” and the cancer subtype is reported accordingly?
+Another way to say it: Could you construct a structured clean dataset from `dicom_all` for me? It should retrieve digital slide microscopy (SM) images from the TCGA-LUAD and TCGA-LUSC datasets and meet the requirements in `dicom_dataset_selection.md`. The target labels are tissue type and cancer subtype.
+
+Please think step by step and answer only one complete SQL in snowflake dialect in ```sql``` format.
+SQL usage example: ```sql
+SELECT "COLUMN_NAME" FROM DATABASE.SCHEMA.TABLE WHERE ... ``` (Adjust "DATABASE", "SCHEMA", and "TABLE" to match actual names, ensure all column names are enclosed in double quotations)
+Here are some useful tips for answering:
+When performing a UNION operation on many tables, ensure that all table names are explicitly listed. Union first and then add condition and selection. e.g. SELECT "col1", "col2" FROM (TABLE1 UNION ALL TABLE2) WHERE ...; Don't write sqls as (SELECT col1, col2 FROM TABLE1 WHERE ...) UNION ALL (SELECT col1, col2 FROM TABLE2 WHERE ...); Don't use ['-- Include all', '-- Omit', '-- Continue', '-- Union all', '-- ...', '-- List all', '-- Replace this', '-- Each table', '-- Add other'] to omit any table. Table names here: The table structure information is ({database name: {schema name: [table name]}}): 
+{'IDC': {'IDC_V17': ['DICOM_METADATA', 'DICOM_METADATA_CURATED', 'DICOM_ALL', 'DICOM_METADATA_CURATED_SERIES_LEVEL']}}
+
+When using ORDER BY xxx DESC, add NULLS LAST to exclude null records: ORDER BY xxx DESC NULLS LAST.
+When asked something without stating name or id, return both of them. e.g. Which products ...? The answer should include product_name and product_id.
+When asked percentage decrease, you should return a positive value. e.g. How many percentage points in 2021 decrease compared to ...? The answer should be a positive value indicating the decresed number. Try to use ABS().
+If asked two tables, you should reply with the last one instead of combining two tables. e.g. Identifying the top five states ... examine the state that ranks fourth overall and identify its top five counties. You should only answer top five counties.
+Use ST_DISTANCE to calculate distance between two geographic points for more accurate answer.
+If the task description does not specify the number of decimal places, retain all decimals to four places.
+
+[Self-refine]
+2025-07-01 04:46:52 - Thread-566 (execute) - INFO - [Try to run SQL in self-refine]
+```sql
+SELECT 
+    t."ContainerIdentifier" AS "digital_slide_id",
+    t."PatientID" AS "patient_id",
+    t."AccessionNumber" AS "case_id",
+    t."SOPInstanceUID" AS "instance_id",
+    t."gcs_url",
+    t."TotalPixelMatrixColumns" AS "width",
+    t."TotalPixelMatrixRows" AS "height",
+    t."PixelSpacing",
+    CASE 
+        WHEN t."TransferSyntaxUID" = '1.2.840.10008.1.2.4.50' THEN 'jpeg'
+        WHEN t."TransferSyntaxUID" = '1.2.840.10008.1.2.4.90' THEN 'jpeg2000'
+    END AS "compression_type",
+    CASE
+        WHEN f.value::VARIANT:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue" = '17621005' THEN 'normal'
+        WHEN f.value::VARIANT:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue" = '86049000' THEN 'tumor'
+    END AS "tissue_type",
+    CASE
+        WHEN t."collection_name" = 'TCGA-LUAD' THEN 'luad'
+        WHEN t."collection_name" = 'TCGA-LUSC' THEN 'lscc'
+    END AS "cancer_subtype"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL" t,
+    LATERAL FLATTEN(input => t."SpecimenDescriptionSequence") f,
+    LATERAL FLATTEN(input => f.value::VARIANT:"SpecimenPreparationSequence") fp
+WHERE 
+    t."Modality" = 'SM'
+    AND t."VolumetricProperties" = 'VOLUME'
+    AND (t."collection_name" = 'TCGA-LUAD' OR t."collection_name" = 'TCGA-LUSC')
+    AND t."TransferSyntaxUID" IN ('1.2.840.10008.1.2.4.50', '1.2.840.10008.1.2.4.90') -- Match JPEG or JPEG2000
+    AND fp.value::VARIANT:"SpecimenPreparationStepContentItemSequence"::VARIANT[0]:"ConceptNameCodeSequence"::VARIANT[0]:"CodeValue" = '121041' -- Specimen preparation embedding medium
+    AND fp.value::VARIANT:"SpecimenPreparationStepContentItemSequence"::VARIANT[0]:"ValueType" = 'TEXT'
+    AND fp.value::VARIANT:"SpecimenPreparationStepContentItemSequence"::VARIANT[0]:"TextValue" ILIKE '%Tissue freezing medium%' -- Embedding medium as Tissue freezing medium
+    AND (
+        f.value::VARIANT:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue" = '17621005' -- Normal tissue
+        OR f.value::VARIANT:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue" = '86049000' -- Tumor tissue
+    )
+ORDER BY 
+    t."SOPInstanceUID" ASC;
+```
+[Try to run SQL in self-refine]
+2025-07-01 04:46:55 - Thread-566 (execute) - INFO - itercount: 1
+2025-07-01 04:46:55 - Thread-566 (execute) - INFO - [Self-refine]
+Input sql:
+SELECT 
+    t."ContainerIdentifier" AS "digital_slide_id",
+    t."PatientID" AS "patient_id",
+    t."AccessionNumber" AS "case_id",
+    t."SOPInstanceUID" AS "instance_id",
+    t."gcs_url",
+    t."TotalPixelMatrixColumns" AS "width",
+    t."TotalPixelMatrixRows" AS "height",
+    t."PixelSpacing",
+    CASE 
+        WHEN t."TransferSyntaxUID" = '1.2.840.10008.1.2.4.50' THEN 'jpeg'
+        WHEN t."TransferSyntaxUID" = '1.2.840.10008.1.2.4.90' THEN 'jpeg2000'
+    END AS "compression_type",
+    CASE
+        WHEN f.value::VARIANT:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue" = '17621005' THEN 'normal'
+        WHEN f.value::VARIANT:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue" = '86049000' THEN 'tumor'
+    END AS "tissue_type",
+    CASE
+        WHEN t."collection_name" = 'TCGA-LUAD' THEN 'luad'
+        WHEN t."collection_name" = 'TCGA-LUSC' THEN 'lscc'
+    END AS "cancer_subtype"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL" t,
+    LATERAL FLATTEN(input => t."SpecimenDescriptionSequence") f,
+    LATERAL FLATTEN(input => f.value::VARIANT:"SpecimenPreparationSequence") fp
+WHERE 
+    t."Modality" = 'SM'
+    AND t."VolumetricProperties" = 'VOLUME'
+    AND (t."collection_name" = 'TCGA-LUAD' OR t."collection_name" = 'TCGA-LUSC')
+    AND t."TransferSyntaxUID" IN ('1.2.840.10008.1.2.4.50', '1.2.840.10008.1.2.4.90') -- Match JPEG or JPEG2000
+    AND fp.value::VARIANT:"SpecimenPreparationStepContentItemSequence"::VARIANT[0]:"ConceptNameCodeSequence"::VARIANT[0]:"CodeValue" = '121041' -- Specimen preparation embedding medium
+    AND fp.value::VARIANT:"SpecimenPreparationStepContentItemSequence"::VARIANT[0]:"ValueType" = 'TEXT'
+    AND fp.value::VARIANT:"SpecimenPreparationStepContentItemSequence"::VARIANT[0]:"TextValue" ILIKE '%Tissue freezing medium%' -- Embedding medium as Tissue freezing medium
+    AND (
+        f.value::VARIANT:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue" = '17621005' -- Normal tissue
+        OR f.value::VARIANT:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue" = '86049000' -- Tumor tissue
+    )
+ORDER BY 
+    t."SOPInstanceUID" ASC;
+The error information is:
+No data found for the specified query.
+
+Please correct it and output only 1 complete SQL query.
+[Self-refine]
+2025-07-01 04:47:14 - Thread-566 (execute) - INFO - [Try to run SQL in self-refine]
+```sql
+SELECT 
+    t."ContainerIdentifier" AS "digital_slide_id",
+    t."PatientID" AS "patient_id",
+    t."AccessionNumber" AS "case_id",
+    t."SOPInstanceUID" AS "instance_id",
+    t."gcs_url",
+    t."TotalPixelMatrixColumns" AS "width",
+    t."TotalPixelMatrixRows" AS "height",
+    t."PixelSpacing",
+    CASE 
+        WHEN t."TransferSyntaxUID" = '1.2.840.10008.1.2.4.50' THEN 'jpeg'
+        WHEN t."TransferSyntaxUID" = '1.2.840.10008.1.2.4.90' THEN 'jpeg2000'
+    END AS "compression_type",
+    CASE
+        WHEN s.value::VARIANT[0]:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue" = '17621005' THEN 'normal'
+        WHEN s.value::VARIANT[0]:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue" = '86049000' THEN 'tumor'
+    END AS "tissue_type",
+    CASE
+        WHEN t."collection_name" = 'TCGA-LUAD' THEN 'luad'
+        WHEN t."collection_name" = 'TCGA-LUSC' THEN 'lscc'
+    END AS "cancer_subtype"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL" t,
+    LATERAL FLATTEN(input => t."SpecimenDescriptionSequence") s,
+    LATERAL FLATTEN(input => s.value::VARIANT:"SpecimenPreparationSequence") sp
+WHERE 
+    t."Modality" = 'SM'
+    AND t."VolumetricProperties" = 'VOLUME'
+    AND (t."collection_name" = 'TCGA-LUAD' OR t."collection_name" = 'TCGA-LUSC')
+    AND t."TransferSyntaxUID" IN ('1.2.840.10008.1.2.4.50', '1.2.840.10008.1.2.4.90') -- Match JPEG or JPEG2000
+    AND sp.value::VARIANT:"SpecimenPreparationStepContentItemSequence"::VARIANT[0]:"ConceptNameCodeSequence"::VARIANT[0]:"CodeValue" = '111701' -- Specimen preparation embedding method
+    AND sp.value::VARIANT:"SpecimenPreparationStepContentItemSequence"::VARIANT[0]:"ValueType" = 'CODE'
+    AND sp.value::VARIANT:"SpecimenPreparationStepContentItemSequence"::VARIANT[0]:"ConceptCodeSequence"::VARIANT[0]:"CodeMeaning" = 'Tissue freezing medium' -- Embedding medium as Tissue freezing medium
+    AND (
+        s.value::VARIANT[0]:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue" = '17621005' -- Normal tissue
+        OR s.value::VARIANT[0]:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue" = '86049000' -- Tumor tissue
+    )
+ORDER BY 
+    t."SOPInstanceUID" ASC;
+```
+[Try to run SQL in self-refine]
+2025-07-01 04:47:22 - Thread-566 (execute) - INFO - itercount: 2
+2025-07-01 04:47:22 - Thread-566 (execute) - INFO - [Self-refine]
+Input sql:
+SELECT 
+    t."ContainerIdentifier" AS "digital_slide_id",
+    t."PatientID" AS "patient_id",
+    t."AccessionNumber" AS "case_id",
+    t."SOPInstanceUID" AS "instance_id",
+    t."gcs_url",
+    t."TotalPixelMatrixColumns" AS "width",
+    t."TotalPixelMatrixRows" AS "height",
+    t."PixelSpacing",
+    CASE 
+        WHEN t."TransferSyntaxUID" = '1.2.840.10008.1.2.4.50' THEN 'jpeg'
+        WHEN t."TransferSyntaxUID" = '1.2.840.10008.1.2.4.90' THEN 'jpeg2000'
+    END AS "compression_type",
+    CASE
+        WHEN s.value::VARIANT[0]:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue" = '17621005' THEN 'normal'
+        WHEN s.value::VARIANT[0]:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue" = '86049000' THEN 'tumor'
+    END AS "tissue_type",
+    CASE
+        WHEN t."collection_name" = 'TCGA-LUAD' THEN 'luad'
+        WHEN t."collection_name" = 'TCGA-LUSC' THEN 'lscc'
+    END AS "cancer_subtype"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL" t,
+    LATERAL FLATTEN(input => t."SpecimenDescriptionSequence") s,
+    LATERAL FLATTEN(input => s.value::VARIANT:"SpecimenPreparationSequence") sp
+WHERE 
+    t."Modality" = 'SM'
+    AND t."VolumetricProperties" = 'VOLUME'
+    AND (t."collection_name" = 'TCGA-LUAD' OR t."collection_name" = 'TCGA-LUSC')
+    AND t."TransferSyntaxUID" IN ('1.2.840.10008.1.2.4.50', '1.2.840.10008.1.2.4.90') -- Match JPEG or JPEG2000
+    AND sp.value::VARIANT:"SpecimenPreparationStepContentItemSequence"::VARIANT[0]:"ConceptNameCodeSequence"::VARIANT[0]:"CodeValue" = '111701' -- Specimen preparation embedding method
+    AND sp.value::VARIANT:"SpecimenPreparationStepContentItemSequence"::VARIANT[0]:"ValueType" = 'CODE'
+    AND sp.value::VARIANT:"SpecimenPreparationStepContentItemSequence"::VARIANT[0]:"ConceptCodeSequence"::VARIANT[0]:"CodeMeaning" = 'Tissue freezing medium' -- Embedding medium as Tissue freezing medium
+    AND (
+        s.value::VARIANT[0]:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue" = '17621005' -- Normal tissue
+        OR s.value::VARIANT[0]:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue" = '86049000' -- Tumor tissue
+    )
+ORDER BY 
+    t."SOPInstanceUID" ASC;
+The error information is:
+No data found for the specified query.
+
+Please correct it and output only 1 complete SQL query.
+[Self-refine]
+2025-07-01 04:47:40 - Thread-566 (execute) - INFO - [Try to run SQL in self-refine]
+```sql
+SELECT 
+    t."ContainerIdentifier" AS "digital_slide_id",
+    t."PatientID" AS "patient_id",
+    t."AccessionNumber" AS "case_id",
+    t."SOPInstanceUID" AS "instance_id",
+    t."gcs_url",
+    t."TotalPixelMatrixColumns" AS "width",
+    t."TotalPixelMatrixRows" AS "height",
+    t."PixelSpacing",
+    CASE 
+        WHEN t."TransferSyntaxUID" = '1.2.840.10008.1.2.4.50' THEN 'jpeg'
+        WHEN t."TransferSyntaxUID" = '1.2.840.10008.1.2.4.90' THEN 'jpeg2000'
+    END AS "compression_type",
+    CASE
+        WHEN s.value::VARIANT:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue" = '17621005' THEN 'normal'
+        WHEN s.value::VARIANT:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue" = '86049000' THEN 'tumor'
+    END AS "tissue_type",
+    CASE
+        WHEN t."collection_name" = 'TCGA-LUAD' THEN 'luad'
+        WHEN t."collection_name" = 'TCGA-LUSC' THEN 'lscc'
+    END AS "cancer_subtype"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL" t,
+    LATERAL FLATTEN(input => t."SpecimenDescriptionSequence") s,
+    LATERAL FLATTEN(input => s.value::VARIANT:"SpecimenPreparationSequence") sp,
+    LATERAL FLATTEN(input => sp.value::VARIANT:"SpecimenPreparationStepContentItemSequence") step
+WHERE 
+    t."Modality" = 'SM'
+    AND t."VolumetricProperties" = 'VOLUME'
+    AND (t."collection_name" = 'TCGA-LUAD' OR t."collection_name" = 'TCGA-LUSC')
+    AND t."TransferSyntaxUID" IN ('1.2.840.10008.1.2.4.50', '1.2.840.10008.1.2.4.90') -- Match JPEG or JPEG2000
+    AND step.value::VARIANT:"ConceptNameCodeSequence"::VARIANT[0]:"CodeValue" = '111701' -- Specimen preparation embedding method
+    AND step.value::VARIANT:"ValueType" = 'CODE'
+    AND step.value::VARIANT:"ConceptCodeSequence"::VARIANT[0]:"CodeMeaning" ILIKE '%Tissue freezing medium%' -- Embedding medium as Tissue freezing medium
+    AND (
+        s.value::VARIANT:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue" = '17621005' -- Normal tissue
+        OR s.value::VARIANT:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue" = '86049000' -- Tumor tissue
+    )
+ORDER BY 
+    t."SOPInstanceUID" ASC;
+```
+[Try to run SQL in self-refine]
+2025-07-01 04:47:47 - Thread-566 (execute) - INFO - itercount: 3
+2025-07-01 04:47:47 - Thread-566 (execute) - INFO - [Self-refine]
+Input sql:
+SELECT 
+    t."ContainerIdentifier" AS "digital_slide_id",
+    t."PatientID" AS "patient_id",
+    t."AccessionNumber" AS "case_id",
+    t."SOPInstanceUID" AS "instance_id",
+    t."gcs_url",
+    t."TotalPixelMatrixColumns" AS "width",
+    t."TotalPixelMatrixRows" AS "height",
+    t."PixelSpacing",
+    CASE 
+        WHEN t."TransferSyntaxUID" = '1.2.840.10008.1.2.4.50' THEN 'jpeg'
+        WHEN t."TransferSyntaxUID" = '1.2.840.10008.1.2.4.90' THEN 'jpeg2000'
+    END AS "compression_type",
+    CASE
+        WHEN s.value::VARIANT:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue" = '17621005' THEN 'normal'
+        WHEN s.value::VARIANT:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue" = '86049000' THEN 'tumor'
+    END AS "tissue_type",
+    CASE
+        WHEN t."collection_name" = 'TCGA-LUAD' THEN 'luad'
+        WHEN t."collection_name" = 'TCGA-LUSC' THEN 'lscc'
+    END AS "cancer_subtype"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL" t,
+    LATERAL FLATTEN(input => t."SpecimenDescriptionSequence") s,
+    LATERAL FLATTEN(input => s.value::VARIANT:"SpecimenPreparationSequence") sp,
+    LATERAL FLATTEN(input => sp.value::VARIANT:"SpecimenPreparationStepContentItemSequence") step
+WHERE 
+    t."Modality" = 'SM'
+    AND t."VolumetricProperties" = 'VOLUME'
+    AND (t."collection_name" = 'TCGA-LUAD' OR t."collection_name" = 'TCGA-LUSC')
+    AND t."TransferSyntaxUID" IN ('1.2.840.10008.1.2.4.50', '1.2.840.10008.1.2.4.90') -- Match JPEG or JPEG2000
+    AND step.value::VARIANT:"ConceptNameCodeSequence"::VARIANT[0]:"CodeValue" = '111701' -- Specimen preparation embedding method
+    AND step.value::VARIANT:"ValueType" = 'CODE'
+    AND step.value::VARIANT:"ConceptCodeSequence"::VARIANT[0]:"CodeMeaning" ILIKE '%Tissue freezing medium%' -- Embedding medium as Tissue freezing medium
+    AND (
+        s.value::VARIANT:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue" = '17621005' -- Normal tissue
+        OR s.value::VARIANT:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue" = '86049000' -- Tumor tissue
+    )
+ORDER BY 
+    t."SOPInstanceUID" ASC;
+The error information is:
+No data found for the specified query.
+
+Please correct it and output only 1 complete SQL query.
+[Self-refine]
+2025-07-01 04:48:09 - Thread-566 (execute) - INFO - [Try to run SQL in self-refine]
+```sql
+SELECT 
+    t."ContainerIdentifier" AS "digital_slide_id",
+    t."PatientID" AS "patient_id",
+    t."AccessionNumber" AS "case_id",
+    t."SOPInstanceUID" AS "instance_id",
+    t."gcs_url",
+    t."TotalPixelMatrixColumns" AS "width",
+    t."TotalPixelMatrixRows" AS "height",
+    t."PixelSpacing",
+    CASE 
+        WHEN t."TransferSyntaxUID" = '1.2.840.10008.1.2.4.50' THEN 'jpeg'
+        WHEN t."TransferSyntaxUID" = '1.2.840.10008.1.2.4.90' THEN 'jpeg2000'
+    END AS "compression_type",
+    CASE
+        WHEN s.value::VARIANT:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue" = '17621005' THEN 'normal'
+        WHEN s.value::VARIANT:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue" = '86049000' THEN 'tumor'
+    END AS "tissue_type",
+    CASE
+        WHEN t."collection_name" = 'TCGA-LUAD' THEN 'luad'
+        WHEN t."collection_name" = 'TCGA-LUSC' THEN 'lscc'
+    END AS "cancer_subtype"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL" t,
+    LATERAL FLATTEN(input => t."SpecimenDescriptionSequence") s,
+    LATERAL FLATTEN(input => s.value::VARIANT:"SpecimenPreparationSequence") sp,
+    LATERAL FLATTEN(input => sp.value::VARIANT:"SpecimenPreparationStepContentItemSequence") step,
+    LATERAL FLATTEN(input => step.value::VARIANT:"ConceptCodeSequence") concept_code
+WHERE 
+    t."Modality" = 'SM'
+    AND t."VolumetricProperties" = 'VOLUME'
+    AND (t."collection_name" = 'TCGA-LUAD' OR t."collection_name" = 'TCGA-LUSC')
+    AND t."TransferSyntaxUID" IN ('1.2.840.10008.1.2.4.50', '1.2.840.10008.1.2.4.90') -- Match JPEG or JPEG2000
+    AND step.value::VARIANT:"ConceptNameCodeSequence"::VARIANT[0]:"CodeValue" = '111701' -- Specimen preparation embedding method
+    AND step.value::VARIANT:"ValueType" = 'CODE'
+    AND concept_code.value::VARIANT:"CodeMeaning" = 'Tissue freezing medium' -- Embedding medium as Tissue freezing medium
+    AND (
+        s.value::VARIANT:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue" = '17621005' -- Normal tissue
+        OR s.value::VARIANT:"PrimaryAnatomicStructureModifierSequence"::VARIANT[0]:"CodeValue" = '86049000' -- Tumor tissue
+    )
+ORDER BY 
+    t."SOPInstanceUID" ASC;
+```
+[Try to run SQL in self-refine]
+2025-07-01 04:48:20 - Thread-566 (execute) - INFO - No data found for the specified query, remove file.
+2025-07-01 04:48:20 - Thread-566 (execute) - INFO - Total iteration counts: 3

@@ -1,0 +1,1034 @@
+2025-07-01 04:43:38 - Thread-515 (execute) - INFO - [Exploration]
+Here are the SQL queries to understand the relevant data and eventually help calculate the required t-statistic for specific samples:
+
+```sql
+-- Description: Identify all patients in the "CLINICAL" table who belong to the TCGA-BRCA project, are 80 years old or younger at diagnosis, and have a pathological stage of Stage I, Stage II, or Stage IIA.
+SELECT DISTINCT "case_barcode", "project_short_name", "age_at_diagnosis", "pathologic_stage"
+FROM "TCGA_HG38_DATA_V0"."TCGA_BIOCLIN_V0"."CLINICAL"
+WHERE "project_short_name" = 'TCGA-BRCA' 
+  AND "age_at_diagnosis" <= 80 
+  AND "pathologic_stage" IN ('Stage I', 'Stage II', 'Stage IIA')
+LIMIT 20;
+```
+
+```sql
+-- Description: Verify the available sample barcodes for the identified cases (patients) in the RNA-Seq gene expression data.
+SELECT DISTINCT "sample_barcode", "case_barcode"
+FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."RNASEQ_GENE_EXPRESSION"
+WHERE "case_barcode" IN (
+  SELECT DISTINCT "case_barcode"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_BIOCLIN_V0"."CLINICAL"
+  WHERE "project_short_name" = 'TCGA-BRCA' 
+    AND "age_at_diagnosis" <= 80 
+    AND "pathologic_stage" IN ('Stage I', 'Stage II', 'Stage IIA')
+)
+LIMIT 20;
+```
+
+```sql
+-- Description: Extract RNA-Seq expression information specific to the gene SNORA31 and the cases filtered above.
+SELECT DISTINCT "sample_barcode", "case_barcode", "gene_name", "HTSeq__Counts"
+FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."RNASEQ_GENE_EXPRESSION"
+WHERE "gene_name" = 'SNORA31'
+  AND "case_barcode" IN (
+    SELECT DISTINCT "case_barcode"
+    FROM "TCGA_HG38_DATA_V0"."TCGA_BIOCLIN_V0"."CLINICAL"
+    WHERE "project_short_name" = 'TCGA-BRCA'
+      AND "age_at_diagnosis" <= 80
+      AND "pathologic_stage" IN ('Stage I', 'Stage II', 'Stage IIA')
+  )
+LIMIT 20;
+```
+
+```sql
+-- Description: Retrieve unique microRNA (miRNA) identifiers and their expression values for the filtered cases based on their samples.
+SELECT DISTINCT "sample_barcode", "case_barcode", "mirna_id", "reads_per_million_miRNA_mapped"
+FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."MIRNASEQ_EXPRESSION"
+WHERE "case_barcode" IN (
+  SELECT DISTINCT "case_barcode"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_BIOCLIN_V0"."CLINICAL"
+  WHERE "project_short_name" = 'TCGA-BRCA' 
+    AND "age_at_diagnosis" <= 80 
+    AND "pathologic_stage" IN ('Stage I', 'Stage II', 'Stage IIA')
+)
+LIMIT 20;
+```
+
+```sql
+-- Description: Calculate the average gene expression (HTSeq__Counts) for SNORA31 for each sample in the RNA-Seq data.
+SELECT "sample_barcode", AVG(LOG10("HTSeq__Counts" + 1)) AS "avg_log10_snora31_expression"
+FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."RNASEQ_GENE_EXPRESSION"
+WHERE "gene_name" = 'SNORA31'
+GROUP BY "sample_barcode"
+LIMIT 20;
+```
+
+```sql
+-- Description: Calculate the average miRNA-Seq expression levels for each unique miRNA grouped by sample.
+SELECT "sample_barcode", "mirna_id", AVG("reads_per_million_miRNA_mapped") AS "avg_mirna_expression"
+FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."MIRNASEQ_EXPRESSION"
+GROUP BY "sample_barcode", "mirna_id"
+LIMIT 20;
+```
+
+```sql
+-- Description: Combine RNA-Seq (SNORA31) average expression and miRNA-Seq average expression for samples present in both datasets.
+SELECT r."sample_barcode", r."avg_log10_snora31_expression", m."mirna_id", m."avg_mirna_expression"
+FROM (
+  SELECT "sample_barcode", AVG(LOG10("HTSeq__Counts" + 1)) AS "avg_log10_snora31_expression"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."RNASEQ_GENE_EXPRESSION"
+  WHERE "gene_name" = 'SNORA31'
+  GROUP BY "sample_barcode"
+) r
+JOIN (
+  SELECT "sample_barcode", "mirna_id", AVG("reads_per_million_miRNA_mapped") AS "avg_mirna_expression"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."MIRNASEQ_EXPRESSION"
+  GROUP BY "sample_barcode", "mirna_id"
+) m
+ON r."sample_barcode" = m."sample_barcode"
+LIMIT 20;
+```
+
+```sql
+-- Description: Check the number of samples available in the joined RNA-Seq and miRNA-Seq expression dataset to filter pairs with sample size > 25.
+SELECT r."mirna_id", COUNT(DISTINCT r."sample_barcode") AS "sample_count"
+FROM (
+  SELECT "sample_barcode", AVG(LOG10("HTSeq__Counts" + 1)) AS "avg_log10_snora31_expression"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."RNASEQ_GENE_EXPRESSION"
+  WHERE "gene_name" = 'SNORA31'
+  GROUP BY "sample_barcode"
+) r
+JOIN (
+  SELECT "sample_barcode", "mirna_id", AVG("reads_per_million_miRNA_mapped") AS "avg_mirna_expression"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."MIRNASEQ_EXPRESSION"
+  GROUP BY "sample_barcode", "mirna_id"
+) m
+ON r."sample_barcode" = m."sample_barcode"
+GROUP BY r."mirna_id"
+HAVING COUNT(DISTINCT r."sample_barcode") > 25
+LIMIT 20;
+```
+
+```sql
+-- Description: Perform Pearson correlation calculation between SNORA31 log-transformed RNA-Seq expression and miRNA-Seq expression for valid sample pairs.
+SELECT "mirna_id", CORR(r."avg_log10_snora31_expression", m."avg_mirna_expression") AS "pearson_correlation"
+FROM (
+  SELECT "sample_barcode", AVG(LOG10("HTSeq__Counts" + 1)) AS "avg_log10_snora31_expression"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."RNASEQ_GENE_EXPRESSION"
+  WHERE "gene_name" = 'SNORA31'
+  GROUP BY "sample_barcode"
+) r
+JOIN (
+  SELECT "sample_barcode", "mirna_id", AVG("reads_per_million_miRNA_mapped") AS "avg_mirna_expression"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."MIRNASEQ_EXPRESSION"
+  GROUP BY "sample_barcode", "mirna_id"
+) m
+ON r."sample_barcode" = m."sample_barcode"
+GROUP BY "mirna_id"
+HAVING ABS(CORR(r."avg_log10_snora31_expression", m."avg_mirna_expression")) BETWEEN 0.3 AND 1.0
+LIMIT 20;
+```
+
+```sql
+-- Description: Generate the t-statistic for the filtered Pearson correlation coefficients based on valid pairs.
+SELECT "mirna_id", "pearson_correlation", 
+       ("pearson_correlation" * SQRT("sample_count" - 2)) / SQRT(1 - POWER("pearson_correlation", 2)) AS "t_statistic"
+FROM (
+  SELECT r."mirna_id", COUNT(DISTINCT r."sample_barcode") AS "sample_count", 
+         CORR(r."avg_log10_snora31_expression", m."avg_mirna_expression") AS "pearson_correlation"
+  FROM (
+    SELECT "sample_barcode", AVG(LOG10("HTSeq__Counts" + 1)) AS "avg_log10_snora31_expression"
+    FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."RNASEQ_GENE_EXPRESSION"
+    WHERE "gene_name" = 'SNORA31'
+    GROUP BY "sample_barcode"
+  ) r
+  JOIN (
+    SELECT "sample_barcode", "mirna_id", AVG("reads_per_million_miRNA_mapped") AS "avg_mirna_expression"
+    FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."MIRNASEQ_EXPRESSION"
+    GROUP BY "sample_barcode", "mirna_id"
+  ) m
+  ON r."sample_barcode" = m."sample_barcode"
+  GROUP BY r."mirna_id"
+  HAVING COUNT(DISTINCT r."sample_barcode") > 25 
+     AND ABS(CORR(r."avg_log10_snora31_expression", m."avg_mirna_expression")) BETWEEN 0.3 AND 1.0
+) filtered_data
+LIMIT 20;
+```
+
+These queries build upon each other and systematically extract the necessary data before calculating Pearson correlation and t-statistic based on the filtered cohort conditions.
+[Exploration]
+2025-07-01 04:43:38 - Thread-515 (execute) - INFO - [Try to execute]
+-- Description: Identify all patients in the "CLINICAL" table who belong to the TCGA-BRCA project, are 80 years old or younger at diagnosis, and have a pathological stage of Stage I, Stage II, or Stage IIA.
+SELECT DISTINCT "case_barcode", "project_short_name", "age_at_diagnosis", "pathologic_stage"
+FROM "TCGA_HG38_DATA_V0"."TCGA_BIOCLIN_V0"."CLINICAL"
+WHERE "project_short_name" = 'TCGA-BRCA' 
+  AND "age_at_diagnosis" <= 80 
+  AND "pathologic_stage" IN ('Stage I', 'Stage II', 'Stage IIA')
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:43:39 - Thread-515 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Identify all patients in the "CLINICAL" table who belong to the TCGA-BRCA project, are 80 years old or younger at diagnosis, and have a pathological stage of Stage I, Stage II, or Stage IIA.
+SELECT DISTINCT "case_barcode", "project_short_name", "age_at_diagnosis", "pathologic_stage"
+FROM "TCGA_HG38_DATA_V0"."TCGA_BIOCLIN_V0"."CLINICAL"
+WHERE "project_short_name" = 'TCGA-BRCA' 
+  AND "age_at_diagnosis" <= 80 
+  AND "pathologic_stage" IN ('Stage I', 'Stage II', 'Stage IIA')
+LIMIT 20;
+Results:
+case_barcode,project_short_name,age_at_diagnosis,pathologic_stage
+TCGA-5L-AAT0,TCGA-BRCA,42,Stage IIA
+TCGA-5T-A9QA,TCGA-BRCA,52,Stage IIA
+TCGA-A1-A0SB,TCGA-BRCA,70,Stage I
+TCGA-A1-A0SD,TCGA-BRCA,59,Stage IIA
+TCGA-A1-A0SE,TCGA-BRCA,56,Stage I
+TCGA-A1-A0SF,TCGA-BRCA,54,Stage IIA
+TCGA-A1-A0SH,TCGA-BRCA,39,Stage IIA
+TCGA-A1-A0SK,TCGA-BRCA,54,Stage IIA
+TCGA-A1-A0SM,TCGA-BRCA,77,Stage IIA
+TCGA-A1-A0SN,TCGA-BRCA,50,Stage IIA
+TCGA-A1-A0SP,TCGA-BRCA,40,Stage IIA
+
+[Successfully executed]
+2025-07-01 04:43:39 - Thread-515 (execute) - INFO - [Try to execute]
+-- Description: Verify the available sample barcodes for the identified cases (patients) in the RNA-Seq gene expression data.
+SELECT DISTINCT "sample_barcode", "case_barcode"
+FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."RNASEQ_GENE_EXPRESSION"
+WHERE "case_barcode" IN (
+  SELECT DISTINCT "case_barcode"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_BIOCLIN_V0"."CLINICAL"
+  WHERE "project_short_name" = 'TCGA-BRCA' 
+    AND "age_at_diagnosis" <= 80 
+    AND "pathologic_stage" IN ('Stage I', 'Stage II', 'Stage IIA')
+)
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:43:40 - Thread-515 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Verify the available sample barcodes for the identified cases (patients) in the RNA-Seq gene expression data.
+SELECT DISTINCT "sample_barcode", "case_barcode"
+FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."RNASEQ_GENE_EXPRESSION"
+WHERE "case_barcode" IN (
+  SELECT DISTINCT "case_barcode"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_BIOCLIN_V0"."CLINICAL"
+  WHERE "project_short_name" = 'TCGA-BRCA' 
+    AND "age_at_diagnosis" <= 80 
+    AND "pathologic_stage" IN ('Stage I', 'Stage II', 'Stage IIA')
+)
+LIMIT 20;
+Results:
+sample_barcode,case_barcode
+TCGA-AR-A24K-01A,TCGA-AR-A24K
+TCGA-E9-A248-01A,TCGA-E9-A248
+TCGA-BH-A0W3-01A,TCGA-BH-A0W3
+TCGA-C8-A12T-01A,TCGA-C8-A12T
+TCGA-D8-A145-01A,TCGA-D8-A145
+TCGA-AR-A0TV-01A,TCGA-AR-A0TV
+TCGA-D8-A1JL-01A,TCGA-D8-A1JL
+TCGA-E2-A15G-01A,TCGA-E2-A15G
+TCGA-E2-A574-01A,TCGA-E2-A574
+TCGA-E9-A1RB-11A,TCGA-E9-A1RB
+TCGA-EW-A6S9-01A,TCGA-EW-A6S9
+TCGA-AO-A0JF-01A,TCGA-AO-A0JF
+TCGA-AC-A62X-01A,TCGA-AC-A62X
+TCGA-C8-A12O-01A,TCGA-C8-A12O
+
+[Successfully executed]
+2025-07-01 04:43:40 - Thread-515 (execute) - INFO - [Try to execute]
+-- Description: Extract RNA-Seq expression information specific to the gene SNORA31 and the cases filtered above.
+SELECT DISTINCT "sample_barcode", "case_barcode", "gene_name", "HTSeq__Counts"
+FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."RNASEQ_GENE_EXPRESSION"
+WHERE "gene_name" = 'SNORA31'
+  AND "case_barcode" IN (
+    SELECT DISTINCT "case_barcode"
+    FROM "TCGA_HG38_DATA_V0"."TCGA_BIOCLIN_V0"."CLINICAL"
+    WHERE "project_short_name" = 'TCGA-BRCA'
+      AND "age_at_diagnosis" <= 80
+      AND "pathologic_stage" IN ('Stage I', 'Stage II', 'Stage IIA')
+  )
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:43:42 - Thread-515 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Extract RNA-Seq expression information specific to the gene SNORA31 and the cases filtered above.
+SELECT DISTINCT "sample_barcode", "case_barcode", "gene_name", "HTSeq__Counts"
+FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."RNASEQ_GENE_EXPRESSION"
+WHERE "gene_name" = 'SNORA31'
+  AND "case_barcode" IN (
+    SELECT DISTINCT "case_barcode"
+    FROM "TCGA_HG38_DATA_V0"."TCGA_BIOCLIN_V0"."CLINICAL"
+    WHERE "project_short_name" = 'TCGA-BRCA'
+      AND "age_at_diagnosis" <= 80
+      AND "pathologic_stage" IN ('Stage I', 'Stage II', 'Stage IIA')
+  )
+LIMIT 20;
+Results:
+sample_barcode,case_barcode,gene_name,HTSeq__Counts
+TCGA-5L-AAT0-01A,TCGA-5L-AAT0,SNORA31,0
+TCGA-A2-A04U-01A,TCGA-A2-A04U,SNORA31,0
+TCGA-A7-A0CE-01A,TCGA-A7-A0CE,SNORA31,0
+TCGA-A7-A0CH-01A,TCGA-A7-A0CH,SNORA31,0
+TCGA-AO-A12D-01A,TCGA-AO-A12D,SNORA31,10
+TCGA-BH-A0DT-01A,TCGA-BH-A0DT,SNORA31,0
+TCGA-AN-A0FV-01A,TCGA-AN-A0FV,SNORA31,3
+TCGA-A8-A09K-01A,TCGA-A8-A09K,SNORA31,0
+TCGA-C8-A134-01A,TCGA-C8-A134,SNORA31,0
+TCGA-E2-A15E-06A,TCGA-E2-A15E,SNORA31,6
+
+[Successfully executed]
+2025-07-01 04:43:42 - Thread-515 (execute) - INFO - [Try to execute]
+-- Description: Retrieve unique microRNA (miRNA) identifiers and their expression values for the filtered cases based on their samples.
+SELECT DISTINCT "sample_barcode", "case_barcode", "mirna_id", "reads_per_million_miRNA_mapped"
+FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."MIRNASEQ_EXPRESSION"
+WHERE "case_barcode" IN (
+  SELECT DISTINCT "case_barcode"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_BIOCLIN_V0"."CLINICAL"
+  WHERE "project_short_name" = 'TCGA-BRCA' 
+    AND "age_at_diagnosis" <= 80 
+    AND "pathologic_stage" IN ('Stage I', 'Stage II', 'Stage IIA')
+)
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:43:43 - Thread-515 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Retrieve unique microRNA (miRNA) identifiers and their expression values for the filtered cases based on their samples.
+SELECT DISTINCT "sample_barcode", "case_barcode", "mirna_id", "reads_per_million_miRNA_mapped"
+FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."MIRNASEQ_EXPRESSION"
+WHERE "case_barcode" IN (
+  SELECT DISTINCT "case_barcode"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_BIOCLIN_V0"."CLINICAL"
+  WHERE "project_short_name" = 'TCGA-BRCA' 
+    AND "age_at_diagnosis" <= 80 
+    AND "pathologic_stage" IN ('Stage I', 'Stage II', 'Stage IIA')
+)
+LIMIT 20;
+Results:
+sample_barcode,case_barcode,mirna_id,reads_per_million_miRNA_mapped
+TCGA-5L-AAT0-01A,TCGA-5L-AAT0,hsa-mir-589,37.5268
+TCGA-5L-AAT0-01A,TCGA-5L-AAT0,hsa-mir-1291,0.292037
+TCGA-5L-AAT0-01A,TCGA-5L-AAT0,hsa-mir-503,4.088523
+TCGA-5L-AAT0-01A,TCGA-5L-AAT0,hsa-mir-4668,1.460187
+TCGA-5L-AAT0-01A,TCGA-5L-AAT0,hsa-mir-6852,0.292037
+TCGA-5L-AAT0-01A,TCGA-5L-AAT0,hsa-mir-1295a,0.146019
+TCGA-5L-AAT0-01A,TCGA-5L-AAT0,hsa-mir-532,402.281454
+TCGA-5L-AAT0-01A,TCGA-5L-AAT0,hsa-mir-598,9.92927
+TCGA-5L-AA
+
+[Successfully executed]
+2025-07-01 04:43:43 - Thread-515 (execute) - INFO - [Try to execute]
+-- Description: Calculate the average gene expression (HTSeq__Counts) for SNORA31 for each sample in the RNA-Seq data.
+SELECT "sample_barcode", AVG(LOG10("HTSeq__Counts" + 1)) AS "avg_log10_snora31_expression"
+FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."RNASEQ_GENE_EXPRESSION"
+WHERE "gene_name" = 'SNORA31'
+GROUP BY "sample_barcode"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:43:43 - Thread-515 (execute) - INFO - [Error occurred]
+{'status': 'error', 'error_msg': '##ERROR##002140 (42601): SQL compilation error:\nUnknown function LOG10'}
+[Error occurred]
+2025-07-01 04:44:27 - Thread-515 (execute) - INFO - [Corrected SQL]
+The error occurs because Snowflake does not support the `LOG10` function directly. Instead, the `LN` (natural logarithm) function can be used with the formula `LOG10(x) = LN(x) / LN(10)` to calculate the base-10 logarithm.  
+
+The task is to compute the average log10-transformed gene expression for the gene `SNORA31` for each sample. To do this, we use the formula `LN("HTSeq__Counts" + 1) / LN(10)` to replace `LOG10("HTSeq__Counts" + 1)`. The query groups by `sample_barcode` to aggregate the results for each sample and calculates the average expression.
+
+Below is the corrected SQL query:
+
+```sql
+-- Description: Handle the LOG10 error by using LN to compute the base-10 logarithmic transformation using LOG10(x) = LN(x) / LN(10). This query calculates the average log10-transformed gene expression for SNORA31 for each sample by grouping records by "sample_barcode".
+SELECT "sample_barcode", AVG(LN("HTSeq__Counts" + 1) / LN(10)) AS "avg_log10_snora31_expression"
+FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."RNASEQ_GENE_EXPRESSION"
+WHERE "gene_name" = 'SNORA31'
+GROUP BY "sample_barcode"
+LIMIT 20;
+```
+[Corrected SQL]
+2025-07-01 04:44:27 - Thread-515 (execute) - INFO - [Results for corrected sql]
+sample_barcode,avg_log10_snora31_expression
+TCGA-FE-A230-01A,0.0
+TCGA-A7-A0DA-01A,0.0
+TCGA-FS-A1ZR-06A,0.0
+TCGA-UT-A88G-01B,0.0
+TCGA-K4-A5RI-01A,0.0
+TCGA-A7-A26J-01A,0.0
+TCGA-BH-A0B7-11A,0.0
+TCGA-BH-A0BA-01A,0.0
+TCGA-AR-A2LK-01A,0.0
+TCGA-CG-5719-01A,0.0
+TCGA-A2-A25B-01A,0.0
+TCGA-V4-A9EK-01A,0.0
+TCGA-VD-AA8S-01B,0.0
+TCGA-A8-A083-01A,0.0
+TCGA-AA-3930-01A,0.0
+TCGA-BH-A0DP-01A,0.0
+TCGA-AB-2979-03B,0.0
+TCGA-BH-A18R-01A,0.10034333188799371
+TCGA-49-AAR4-01A,0.0
+TCGA-AO-A0J9-01A,0.0
+
+[Results for corrected sql]
+2025-07-01 04:46:35 - Thread-515 (execute) - INFO - [Corrected other sqls]
+Here are the corrected SQLs with explanations for each:
+
+```sql
+-- Description: Calculate the average miRNA-Seq expression levels for each unique miRNA grouped by sample. 
+-- This query does not involve LOG10 and remains unchanged from the original format as there is no error related to log transformation.
+SELECT "sample_barcode", "mirna_id", AVG("reads_per_million_miRNA_mapped") AS "avg_mirna_expression"
+FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."MIRNASEQ_EXPRESSION"
+GROUP BY "sample_barcode", "mirna_id"
+LIMIT 20;
+```
+
+```sql
+-- Description: Combine RNA-Seq (SNORA31) average expression and miRNA-Seq average expression for samples present in both datasets. 
+-- Corrected the subquery for RNA-Seq to use LN instead of LOG10 for the log-transformed calculation.
+SELECT r."sample_barcode", r."avg_log10_snora31_expression", m."mirna_id", m."avg_mirna_expression"
+FROM (
+  SELECT "sample_barcode", AVG(LN("HTSeq__Counts" + 1) / LN(10)) AS "avg_log10_snora31_expression"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."RNASEQ_GENE_EXPRESSION"
+  WHERE "gene_name" = 'SNORA31'
+  GROUP BY "sample_barcode"
+) r
+JOIN (
+  SELECT "sample_barcode", "mirna_id", AVG("reads_per_million_miRNA_mapped") AS "avg_mirna_expression"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."MIRNASEQ_EXPRESSION"
+  GROUP BY "sample_barcode", "mirna_id"
+) m
+ON r."sample_barcode" = m."sample_barcode"
+LIMIT 20;
+```
+
+```sql
+-- Description: Check the number of samples available in the joined RNA-Seq and miRNA-Seq expression dataset to filter pairs with sample size > 25. 
+-- Corrected the subquery for RNA-Seq to use LN instead of LOG10 for the log-transformed calculation.
+SELECT r."mirna_id", COUNT(DISTINCT r."sample_barcode") AS "sample_count"
+FROM (
+  SELECT "sample_barcode", AVG(LN("HTSeq__Counts" + 1) / LN(10)) AS "avg_log10_snora31_expression"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."RNASEQ_GENE_EXPRESSION"
+  WHERE "gene_name" = 'SNORA31'
+  GROUP BY "sample_barcode"
+) r
+JOIN (
+  SELECT "sample_barcode", "mirna_id", AVG("reads_per_million_miRNA_mapped") AS "avg_mirna_expression"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."MIRNASEQ_EXPRESSION"
+  GROUP BY "sample_barcode", "mirna_id"
+) m
+ON r."sample_barcode" = m."sample_barcode"
+GROUP BY r."mirna_id"
+HAVING COUNT(DISTINCT r."sample_barcode") > 25
+LIMIT 20;
+```
+
+```sql
+-- Description: Perform Pearson correlation calculation between SNORA31 log-transformed RNA-Seq expression and miRNA-Seq expression for valid sample pairs. 
+-- Corrected the subquery for RNA-Seq to use LN instead of LOG10 for the log-transformed calculation.
+SELECT "mirna_id", CORR(r."avg_log10_snora31_expression", m."avg_mirna_expression") AS "pearson_correlation"
+FROM (
+  SELECT "sample_barcode", AVG(LN("HTSeq__Counts" + 1) / LN(10)) AS "avg_log10_snora31_expression"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."RNASEQ_GENE_EXPRESSION"
+  WHERE "gene_name" = 'SNORA31'
+  GROUP BY "sample_barcode"
+) r
+JOIN (
+  SELECT "sample_barcode", "mirna_id", AVG("reads_per_million_miRNA_mapped") AS "avg_mirna_expression"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."MIRNASEQ_EXPRESSION"
+  GROUP BY "sample_barcode", "mirna_id"
+) m
+ON r."sample_barcode" = m."sample_barcode"
+GROUP BY "mirna_id"
+HAVING ABS(CORR(r."avg_log10_snora31_expression", m."avg_mirna_expression")) BETWEEN 0.3 AND 1.0
+LIMIT 20;
+```
+
+```sql
+-- Description: Generate the t-statistic for the filtered Pearson correlation coefficients based on valid pairs. 
+-- Corrected the subquery for RNA-Seq to use LN instead of LOG10 for the log-transformed calculation.
+SELECT "mirna_id", "pearson_correlation", 
+       ("pearson_correlation" * SQRT("sample_count" - 2)) / SQRT(1 - POWER("pearson_correlation", 2)) AS "t_statistic"
+FROM (
+  SELECT r."mirna_id", COUNT(DISTINCT r."sample_barcode") AS "sample_count", 
+         CORR(r."avg_log10_snora31_expression", m."avg_mirna_expression") AS "pearson_correlation"
+  FROM (
+    SELECT "sample_barcode", AVG(LN("HTSeq__Counts" + 1) / LN(10)) AS "avg_log10_snora31_expression"
+    FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."RNASEQ_GENE_EXPRESSION"
+    WHERE "gene_name" = 'SNORA31'
+    GROUP BY "sample_barcode"
+  ) r
+  JOIN (
+    SELECT "sample_barcode", "mirna_id", AVG("reads_per_million_miRNA_mapped") AS "avg_mirna_expression"
+    FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."MIRNASEQ_EXPRESSION"
+    GROUP BY "sample_barcode", "mirna_id"
+  ) m
+  ON r."sample_barcode" = m."sample_barcode"
+  GROUP BY r."mirna_id"
+  HAVING COUNT(DISTINCT r."sample_barcode") > 25 
+     AND ABS(CORR(r."avg_log10_snora31_expression", m."avg_mirna_expression")) BETWEEN 0.3 AND 1.0
+) filtered_data
+LIMIT 20;
+```
+[Corrected other sqls]
+2025-07-01 04:46:35 - Thread-515 (execute) - INFO - [Successfully corrected]
+Successfully executed. SQL:
+-- Description: Calculate the average gene expression (HTSeq__Counts) for SNORA31 for each sample in the RNA-Seq data.
+SELECT "sample_barcode", AVG(LOG10("HTSeq__Counts" + 1)) AS "avg_log10_snora31_expression"
+FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."RNASEQ_GENE_EXPRESSION"
+WHERE "gene_name" = 'SNORA31'
+GROUP BY "sample_barcode"
+LIMIT 20;
+Results:
+sample_barcode,avg_log10_snora31_expression
+TCGA-FE-A230-01A,0.0
+TCGA-A7-A0DA-01A,0.0
+TCGA-FS-A1ZR-06A,0.0
+TCGA-UT-A88G-01B,0.0
+TCGA-K4-A5RI-01A,0.0
+TCGA-A7-A26J-01A,0.0
+TCGA-BH-A0B7-11A,0.0
+TCGA-BH-A0BA-01A,0.0
+TCGA-AR-A2LK-01A,0.0
+TCGA-CG-5719-01A,0.0
+TCGA-A2-A25B-01A,0.0
+TCGA-V4-A9EK-01A,0.0
+TCGA-VD-AA8S-01B,0.0
+TCGA-A8-A083-01A,0.0
+TCGA-AA-3930-01A,0.0
+TCGA-BH-A0DP-01A,0.0
+TCGA-AB-2979-03B,0.0
+TCGA-BH-A18R-01A,0.10034333188799371
+TCGA-49-AAR4-01A,0.0
+TCGA-AO-A0J9-01A,0.0
+
+[Successfully corrected]
+2025-07-01 04:46:35 - Thread-515 (execute) - INFO - [Try to execute]
+-- Description: Calculate the average miRNA-Seq expression levels for each unique miRNA grouped by sample. 
+-- This query does not involve LOG10 and remains unchanged from the original format as there is no error related to log transformation.
+SELECT "sample_barcode", "mirna_id", AVG("reads_per_million_miRNA_mapped") AS "avg_mirna_expression"
+FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."MIRNASEQ_EXPRESSION"
+GROUP BY "sample_barcode", "mirna_id"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:46:36 - Thread-515 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Calculate the average miRNA-Seq expression levels for each unique miRNA grouped by sample. 
+-- This query does not involve LOG10 and remains unchanged from the original format as there is no error related to log transformation.
+SELECT "sample_barcode", "mirna_id", AVG("reads_per_million_miRNA_mapped") AS "avg_mirna_expression"
+FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."MIRNASEQ_EXPRESSION"
+GROUP BY "sample_barcode", "mirna_id"
+LIMIT 20;
+Results:
+sample_barcode,mirna_id,avg_mirna_expression
+TCGA-04-1331-01A,hsa-mir-6736,0.574955
+TCGA-04-1331-01A,hsa-mir-3157,1.149909
+TCGA-04-1331-01A,hsa-mir-370,43.984034
+TCGA-04-1331-01A,hsa-mir-4533,0.287477
+TCGA-04-1331-01A,hsa-mir-4772,2.587296
+TCGA-04-1331-01A,hsa-mir-9-3,4.31216
+TCGA-04-1331-01A,hsa-mir-3143,0.574955
+TCGA-04-1331-01A,hsa-mir-544b,0.574955
+TCGA-04-1331-01A,hsa-mir-105-2,1.437387
+TCGA-04-1331-01A,hsa-mir-210,54.908173
+TCGA-04-1331-01A,hsa-mir-4492,0.287477
+
+[Successfully executed]
+2025-07-01 04:46:36 - Thread-515 (execute) - INFO - [Try to execute]
+-- Description: Combine RNA-Seq (SNORA31) average expression and miRNA-Seq average expression for samples present in both datasets. 
+-- Corrected the subquery for RNA-Seq to use LN instead of LOG10 for the log-transformed calculation.
+SELECT r."sample_barcode", r."avg_log10_snora31_expression", m."mirna_id", m."avg_mirna_expression"
+FROM (
+  SELECT "sample_barcode", AVG(LN("HTSeq__Counts" + 1) / LN(10)) AS "avg_log10_snora31_expression"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."RNASEQ_GENE_EXPRESSION"
+  WHERE "gene_name" = 'SNORA31'
+  GROUP BY "sample_barcode"
+) r
+JOIN (
+  SELECT "sample_barcode", "mirna_id", AVG("reads_per_million_miRNA_mapped") AS "avg_mirna_expression"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."MIRNASEQ_EXPRESSION"
+  GROUP BY "sample_barcode", "mirna_id"
+) m
+ON r."sample_barcode" = m."sample_barcode"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:46:39 - Thread-515 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Combine RNA-Seq (SNORA31) average expression and miRNA-Seq average expression for samples present in both datasets. 
+-- Corrected the subquery for RNA-Seq to use LN instead of LOG10 for the log-transformed calculation.
+SELECT r."sample_barcode", r."avg_log10_snora31_expression", m."mirna_id", m."avg_mirna_expression"
+FROM (
+  SELECT "sample_barcode", AVG(LN("HTSeq__Counts" + 1) / LN(10)) AS "avg_log10_snora31_expression"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."RNASEQ_GENE_EXPRESSION"
+  WHERE "gene_name" = 'SNORA31'
+  GROUP BY "sample_barcode"
+) r
+JOIN (
+  SELECT "sample_barcode", "mirna_id", AVG("reads_per_million_miRNA_mapped") AS "avg_mirna_expression"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."MIRNASEQ_EXPRESSION"
+  GROUP BY "sample_barcode", "mirna_id"
+) m
+ON r."sample_barcode" = m."sample_barcode"
+LIMIT 20;
+Results:
+sample_barcode,avg_log10_snora31_expression,mirna_id,avg_mirna_expression
+TCGA-VQ-A8DZ-01A,1.8573324964312683,hsa-mir-1539,0.0
+TCGA-VQ-A8DZ-01A,1.8573324964312683,hsa-mir-581,0.0
+TCGA-VQ-A8E2-01A,0.9030899869919434,hsa-mir-6824,0.0
+TCGA-VQ-A8PC-01A,0.0,hsa-mir-4689,0.0
+TCGA-VQ-A8E2-01A,0.9030899869919434,hsa-mir-4700,0.0
+TCGA-VQ-A8E7-01B,0.0,hsa-mir-4527,0.0
+TCGA-VQ-A8PC-01A,0.0,hsa-mir-4744,0.0
+TCGA-VQ-A8PO-01A,0.0,hsa-mir-6769a,0.0
+TCGA-VQ-A91Y-01A,1.6627578316815739,hsa-mir-5007,0.0
+
+[Successfully executed]
+2025-07-01 04:46:39 - Thread-515 (execute) - INFO - [Try to execute]
+-- Description: Check the number of samples available in the joined RNA-Seq and miRNA-Seq expression dataset to filter pairs with sample size > 25. 
+-- Corrected the subquery for RNA-Seq to use LN instead of LOG10 for the log-transformed calculation.
+SELECT r."mirna_id", COUNT(DISTINCT r."sample_barcode") AS "sample_count"
+FROM (
+  SELECT "sample_barcode", AVG(LN("HTSeq__Counts" + 1) / LN(10)) AS "avg_log10_snora31_expression"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."RNASEQ_GENE_EXPRESSION"
+  WHERE "gene_name" = 'SNORA31'
+  GROUP BY "sample_barcode"
+) r
+JOIN (
+  SELECT "sample_barcode", "mirna_id", AVG("reads_per_million_miRNA_mapped") AS "avg_mirna_expression"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."MIRNASEQ_EXPRESSION"
+  GROUP BY "sample_barcode", "mirna_id"
+) m
+ON r."sample_barcode" = m."sample_barcode"
+GROUP BY r."mirna_id"
+HAVING COUNT(DISTINCT r."sample_barcode") > 25
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:46:39 - Thread-515 (execute) - INFO - [Error occurred]
+{'status': 'error', 'error_msg': '##ERROR##000904 (42000): SQL compilation error: error line 1 at position 7\ninvalid identifier \'R."mirna_id"\''}
+[Error occurred]
+2025-07-01 04:47:59 - Thread-515 (execute) - INFO - [Corrected SQL]
+The error in the original SQL arises because `"mirna_id"` was incorrectly referenced from the alias `R`, which represents the RNA-Seq subquery. However, `"mirna_id"` is not a column in the RNA-Seq dataset; it belongs to the miRNA-Seq subquery, aliased as `M`. Therefore, the correct alias `M` should be used when referencing `"mirna_id"`. 
+
+This corrected query calculates the number of distinct samples (`sample_barcode`) for each miRNA and ensures that only miRNAs associated with more than 25 samples are included. The corrected alias usage resolves the identifier error, and the logic remains the same to filter the dataset by the specified condition.
+
+Here’s the corrected SQL query:
+
+```sql
+-- Description: Resolve the invalid reference issue by replacing R."mirna_id" with M."mirna_id", as "mirna_id" is a column in the miRNA-Seq dataset (M). This query calculates the count of distinct samples for each miRNA, filtering those associated with more than 25 samples.
+SELECT m."mirna_id", COUNT(DISTINCT r."sample_barcode") AS "sample_count"
+FROM (
+  SELECT "sample_barcode", AVG(LN("HTSeq__Counts" + 1) / LN(10)) AS "avg_log10_snora31_expression"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."RNASEQ_GENE_EXPRESSION"
+  WHERE "gene_name" = 'SNORA31'
+  GROUP BY "sample_barcode"
+) r
+JOIN (
+  SELECT "sample_barcode", "mirna_id", AVG("reads_per_million_miRNA_mapped") AS "avg_mirna_expression"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."MIRNASEQ_EXPRESSION"
+  GROUP BY "sample_barcode", "mirna_id"
+) m
+ON r."sample_barcode" = m."sample_barcode"
+GROUP BY m."mirna_id"
+HAVING COUNT(DISTINCT r."sample_barcode") > 25
+LIMIT 20;
+```
+[Corrected SQL]
+2025-07-01 04:48:13 - Thread-515 (execute) - INFO - [Results for corrected sql]
+mirna_id,sample_count
+hsa-mir-3917,174
+hsa-mir-6757,178
+hsa-mir-502,174
+hsa-mir-3926-1,165
+hsa-mir-4795,168
+hsa-mir-499b,178
+hsa-mir-5196,157
+hsa-mir-892c,172
+hsa-mir-6510,161
+hsa-mir-378j,170
+hsa-mir-5011,166
+hsa-mir-8085,167
+hsa-mir-107,165
+hsa-mir-4327,152
+hsa-mir-6768,173
+hsa-mir-941-3,165
+hsa-mir-448,176
+hsa-mir-548ag-2,173
+hsa-mir-624,171
+hsa-mir-4499,164
+
+[Results for corrected sql]
+2025-07-01 04:48:38 - Thread-515 (execute) - INFO - [Corrected other sqls]
+```sql
+-- Description: Perform Pearson correlation calculation between SNORA31 log-transformed RNA-Seq expression and miRNA-Seq expression for valid sample pairs. 
+-- Corrected the subquery for RNA-Seq to use LN instead of LOG10 for the log-transformed calculation and replaced "mirna_id" in the GROUP BY with M."mirna_id".
+SELECT m."mirna_id", CORR(r."avg_log10_snora31_expression", m."avg_mirna_expression") AS "pearson_correlation"
+FROM (
+  SELECT "sample_barcode", AVG(LN("HTSeq__Counts" + 1) / LN(10)) AS "avg_log10_snora31_expression"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."RNASEQ_GENE_EXPRESSION"
+  WHERE "gene_name" = 'SNORA31'
+  GROUP BY "sample_barcode"
+) r
+JOIN (
+  SELECT "sample_barcode", "mirna_id", AVG("reads_per_million_miRNA_mapped") AS "avg_mirna_expression"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."MIRNASEQ_EXPRESSION"
+  GROUP BY "sample_barcode", "mirna_id"
+) m
+ON r."sample_barcode" = m."sample_barcode"
+GROUP BY m."mirna_id"
+HAVING ABS(CORR(r."avg_log10_snora31_expression", m."avg_mirna_expression")) BETWEEN 0.3 AND 1.0
+LIMIT 20;
+```
+
+```sql
+-- Description: Generate the t-statistic for the filtered Pearson correlation coefficients based on valid pairs. 
+-- Corrected the subquery for RNA-Seq to use LN instead of LOG10 for the log-transformed calculation and replaced "mirna_id" in the GROUP BY and SELECT with M."mirna_id".
+SELECT m."mirna_id", "pearson_correlation", 
+       ("pearson_correlation" * SQRT("sample_count" - 2)) / SQRT(1 - POWER("pearson_correlation", 2)) AS "t_statistic"
+FROM (
+  SELECT m."mirna_id", COUNT(DISTINCT r."sample_barcode") AS "sample_count", 
+         CORR(r."avg_log10_snora31_expression", m."avg_mirna_expression") AS "pearson_correlation"
+  FROM (
+    SELECT "sample_barcode", AVG(LN("HTSeq__Counts" + 1) / LN(10)) AS "avg_log10_snora31_expression"
+    FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."RNASEQ_GENE_EXPRESSION"
+    WHERE "gene_name" = 'SNORA31'
+    GROUP BY "sample_barcode"
+  ) r
+  JOIN (
+    SELECT "sample_barcode", "mirna_id", AVG("reads_per_million_miRNA_mapped") AS "avg_mirna_expression"
+    FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."MIRNASEQ_EXPRESSION"
+    GROUP BY "sample_barcode", "mirna_id"
+  ) m
+  ON r."sample_barcode" = m."sample_barcode"
+  GROUP BY m."mirna_id"
+  HAVING COUNT(DISTINCT r."sample_barcode") > 25 
+     AND ABS(CORR(r."avg_log10_snora31_expression", m."avg_mirna_expression")) BETWEEN 0.3 AND 1.0
+) filtered_data
+LIMIT 20;
+```
+[Corrected other sqls]
+2025-07-01 04:48:38 - Thread-515 (execute) - INFO - [Successfully corrected]
+Successfully executed. SQL:
+-- Description: Check the number of samples available in the joined RNA-Seq and miRNA-Seq expression dataset to filter pairs with sample size > 25. 
+-- Corrected the subquery for RNA-Seq to use LN instead of LOG10 for the log-transformed calculation.
+SELECT r."mirna_id", COUNT(DISTINCT r."sample_barcode") AS "sample_count"
+FROM (
+  SELECT "sample_barcode", AVG(LN("HTSeq__Counts" + 1) / LN(10)) AS "avg_log10_snora31_expression"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."RNASEQ_GENE_EXPRESSION"
+  WHERE "gene_name" = 'SNORA31'
+  GROUP BY "sample_barcode"
+) r
+JOIN (
+  SELECT "sample_barcode", "mirna_id", AVG("reads_per_million_miRNA_mapped") AS "avg_mirna_expression"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."MIRNASEQ_EXPRESSION"
+  GROUP BY "sample_barcode", "mirna_id"
+) m
+ON r."sample_barcode" = m."sample_barcode"
+GROUP BY r."mirna_id"
+HAVING COUNT(DISTINCT r."sample_barcode") > 25
+LIMIT 20;
+Results:
+mirna_id,sample_count
+hsa-mir-3917,174
+hsa-mir-6757,178
+hsa-mir-502,174
+hsa-mir-3926-1,165
+hsa-mir-4795,168
+hsa-mir-499b,178
+hsa-mir-5196,157
+hsa-mir-892c,172
+hsa-mir-6510,161
+hsa-mir-378j,170
+hsa-mir-5011,166
+hsa-mir-8085,167
+hsa-mir-107,165
+hsa-mir-4327,152
+hsa-mir-6768,173
+hsa-mir-941-3,165
+hsa-mir-448,176
+hsa-mir-548ag-2,173
+hsa-mir-624,171
+hsa-mir-4499,164
+
+[Successfully corrected]
+2025-07-01 04:48:38 - Thread-515 (execute) - INFO - itercount: 0
+2025-07-01 04:48:38 - Thread-515 (execute) - INFO - [Self-refine]
+Table full name: TCGA_HG38_DATA_V0.TCGA_HG38_DATA_V0.MIRNASEQ_EXPRESSION
+Column name: project_short_name Type: TEXT Description: Project name abbreviation; the program name appended with a project name abbreviation; eg. TCGA-OV, etc.
+Column name: case_barcode Type: TEXT Description: Original TCGA case barcode, eg TCGA-12-1089  --  note that each case typically has a primary-tumor sample and a matched-normal (blood or adjacent tissue) sample; please refer to the TCGA Biospecimen table for more details
+Column name: reads_per_million_miRNA_mapped Type: FLOAT Description: Read count normalized by total reads mapped divided by 1 million
+Column name: read_count Type: NUMBER Description: Number of reads that were mapped to this mirna_id
+Column name: mirna_id Type: TEXT Description: One of 1870 unique miRNA ids (aka symbols) contained in this table, eg hsa-mir-21  --  relevant reference information can be found in the isb-cgc:genome_reference dataset in the tables miRBase_v20 and miRBase_v20_hsa_gff3
+Column name: sample_barcode Type: TEXT Description: Original TCGA sample barcode, eg TCGA-12-1089-01A  --  note that one sample may have multiple aliquots and therefore multiple sets of CN segmentations; so be sure to use GROUP BY appropriately in your queries
+Sample rows:
+[{'project_short_name': 'TCGA-OV', 'case_barcode': 'TCGA-04-1331', 'sample_barcode': 'TCGA-04-1331-01A', 'mirna_id': 'hsa-mir-9-3', 'read_count': 15, 'reads_per_million_miRNA_mapped': 4.31216}, {'project_short_name': 'TCGA-OV', 'case_barcode': 'TCGA-04-1331', 'sample_barcode': 'TCGA-04-1331-01A', 'mirna_id': 'hsa-mir-3143', 'read_count': 2, 'reads_per_million_miRNA_mapped': 0.574955}, {'project_short_name': 'TCGA-OV', 'case_barcode': 'TCGA-04-1331', 'sample_barcode': 'TCGA-04-1331-01A', 'mirna_id': 'hsa-mir-544b', 'read_count': 2, 'reads_per_million_miRNA_mapped': 0.574955}, {'project_short_name': 'TCGA-OV', 'case_barcode': 'TCGA-04-1331', 'sample_barcode': 'TCGA-04-1331-01A', 'mirna_id': 'hsa-mir-105-2', 'read_count': 5, 'reads_per_million_miRNA_mapped': 1.437387}, {'project_short_name': 'TCGA-OV', 'case_barcode': 'TCGA-04-1331', 'sample_barcode': 'TCGA-04-1331-01A', 'mirna_id': 'hsa-mir-210', 'read_count': 191, 'reads_per_million_miRNA_mapped': 54.908173}]
+--------------------------------------------------
+Table full name: TCGA_HG38_DATA_V0.TCGA_HG38_DATA_V0.RNASEQ_GENE_EXPRESSION
+Column name: sample_barcode Type: TEXT Description: TCGA sample barcode, eg TCGA-12-1089-01A. One sample may have multiple sets of CN segmentations corresponding to multiple aliquots; use GROUP BY appropriately in queries
+Column name: case_barcode Type: TEXT Description: Original TCGA case barcode, eg TCGA-DX-A8BN
+Column name: project_short_name Type: TEXT Description: Project name abbreviation; the program name appended with a project name abbreviation; eg. TCGA-OV, etc.
+Column name: gene_name Type: TEXT Description: Gene name e.g. TTN, DDR1, etc.
+Column name: HTSeq__Counts Type: NUMBER Description: Number of mapped reads to each gene as calculated by the Python package HTSeq. https://docs.gdc.cancer.gov/Encyclopedia/pages/HTSeq-Counts/
+Sample rows:
+[{'project_short_name': 'TCGA-OV', 'case_barcode': 'TCGA-04-1331', 'sample_barcode': 'TCGA-04-1331-01A', 'gene_name': 'BMS1', 'HTSeq__Counts': 3372}, {'project_short_name': 'TCGA-OV', 'case_barcode': 'TCGA-04-1331', 'sample_barcode': 'TCGA-04-1331-01A', 'gene_name': 'RFWD2', 'HTSeq__Counts': 4398}, {'project_short_name': 'TCGA-OV', 'case_barcode': 'TCGA-04-1331', 'sample_barcode': 'TCGA-04-1331-01A', 'gene_name': 'ZNF20', 'HTSeq__Counts': 135}, {'project_short_name': 'TCGA-OV', 'case_barcode': 'TCGA-04-1332', 'sample_barcode': 'TCGA-04-1332-01A', 'gene_name': 'AC008753.3', 'HTSeq__Counts': 23}, {'project_short_name': 'TCGA-OV', 'case_barcode': 'TCGA-04-1338', 'sample_barcode': 'TCGA-04-1338-01A', 'gene_name': 'FAM95B1', 'HTSeq__Counts': 2}]
+--------------------------------------------------
+Table full name: TCGA_HG38_DATA_V0.TCGA_BIOCLIN_V0.CLINICAL
+Column name: vital_status Type: TEXT Description: Survival state of the participant; e.g. dead, alive
+Column name: pathologic_stage Type: TEXT Description: The stage of the cancer, based on surgery or biopsy; e.g. Stage I, Stage II, Stage III, Stage IV
+Column name: age_at_diagnosis Type: NUMBER Description: Age, in years, at which a condition or disease was first diagnosed
+Column name: case_barcode Type: TEXT Description: TCGA patient/case barcode; e.g. TCGA-06-0119
+Column name: project_short_name Type: TEXT Description: Project name abbreviation; the program name appended with a project name abbreviation; e.g. TCGA-OV, etc.
+Sample rows:
+[{'case_barcode': 'TCGA-01-0630', 'project_short_name': 'TCGA-OV', 'vital_status': None, 'age_at_diagnosis': nan, 'pathologic_stage': None}, {'case_barcode': 'TCGA-01-0633', 'project_short_name': 'TCGA-OV', 'vital_status': None, 'age_at_diagnosis': nan, 'pathologic_stage': None}, {'case_barcode': 'TCGA-01-0636', 'project_short_name': 'TCGA-OV', 'vital_status': None, 'age_at_diagnosis': nan, 'pathologic_stage': None}, {'case_barcode': 'TCGA-01-0637', 'project_short_name': 'TCGA-OV', 'vital_status': None, 'age_at_diagnosis': nan, 'pathologic_stage': None}, {'case_barcode': 'TCGA-02-0003', 'project_short_name': 'TCGA-GBM', 'vital_status': 'Dead', 'age_at_diagnosis': 50.0, 'pathologic_stage': None}]
+--------------------------------------------------
+Table full name: TCGA_HG38_DATA_V0.TCGA_BIOCLIN_V0.CLINICAL_V1
+Column name: pathologic_stage Type: TEXT Description: The stage of the cancer, based on surgery or biopsy; e.g. Stage I, Stage II, Stage III, Stage IV
+Column name: case_barcode Type: TEXT Description: TCGA patient/case barcode; e.g. TCGA-06-0119
+Column name: vital_status Type: TEXT Description: Survival state of the participant; e.g. dead, alive
+Column name: project_short_name Type: TEXT Description: Project name abbreviation; the program name appended with a project name abbreviation; e.g. TCGA-OV, etc.
+Column name: age_at_diagnosis Type: NUMBER Description: Age, in years, at which a condition or disease was first diagnosed
+Sample rows:
+[{'case_barcode': 'TCGA-2G-AALX', 'project_short_name': 'TCGA-TGCT', 'age_at_diagnosis': None, 'pathologic_stage': None, 'vital_status': None}, {'case_barcode': 'TCGA-2G-AALF', 'project_short_name': 'TCGA-TGCT', 'age_at_diagnosis': None, 'pathologic_stage': None, 'vital_status': None}, {'case_barcode': 'TCGA-2G-AALY', 'project_short_name': 'TCGA-TGCT', 'age_at_diagnosis': None, 'pathologic_stage': None, 'vital_status': None}, {'case_barcode': 'TCGA-2G-AALG', 'project_short_name': 'TCGA-TGCT', 'age_at_diagnosis': None, 'pathologic_stage': None, 'vital_status': None}, {'case_barcode': 'TCGA-2G-AAKO', 'project_short_name': 'TCGA-TGCT', 'age_at_diagnosis': None, 'pathologic_stage': None, 'vital_status': None}]
+--------------------------------------------------
+Table full name: TCGA_HG38_DATA_V0.TCGA_BIOCLIN_V0.CLINICAL_V1_1
+Column name: case_barcode Type: TEXT
+Column name: age_at_diagnosis Type: NUMBER
+Column name: pathologic_stage Type: TEXT
+Column name: vital_status Type: TEXT
+Column name: project_short_name Type: TEXT
+Sample rows:
+[{'case_barcode': 'TCGA-GS-6634', 'project_short_name': 'TCGA-DLBC', 'age_at_diagnosis': None, 'pathologic_stage': None, 'vital_status': None}, {'case_barcode': 'TCGA-BR-4264', 'project_short_name': 'TCGA-STAD', 'age_at_diagnosis': None, 'pathologic_stage': None, 'vital_status': None}, {'case_barcode': 'TCGA-17-Z021', 'project_short_name': 'TCGA-LUAD', 'age_at_diagnosis': None, 'pathologic_stage': None, 'vital_status': None}, {'case_barcode': 'TCGA-17-Z024', 'project_short_name': 'TCGA-LUAD', 'age_at_diagnosis': None, 'pathologic_stage': None, 'vital_status': None}, {'case_barcode': 'TCGA-17-Z060', 'project_short_name': 'TCGA-LUAD', 'age_at_diagnosis': None, 'pathologic_stage': None, 'vital_status': None}]
+--------------------------------------------------
+External knowledge that might be helpful: 
+None
+The table structure information is ({database name: {schema name: [table name]}}): 
+{'TCGA_HG38_DATA_V0': {'TCGA_HG38_DATA_V0': ['MIRNASEQ_EXPRESSION', 'RNASEQ_GENE_EXPRESSION'], 'TCGA_BIOCLIN_V0': ['CLINICAL', 'CLINICAL_V1', 'CLINICAL_V1_1']}}
+
+Some few-shot examples after column exploration may be helpful:
+Query:
+-- Description: Identify all patients in the "CLINICAL" table who belong to the TCGA-BRCA project, are 80 years old or younger at diagnosis, and have a pathological stage of Stage I, Stage II, or Stage IIA.
+SELECT DISTINCT "case_barcode", "project_short_name", "age_at_diagnosis", "pathologic_stage"
+FROM "TCGA_HG38_DATA_V0"."TCGA_BIOCLIN_V0"."CLINICAL"
+WHERE "project_short_name" = 'TCGA-BRCA' 
+  AND "age_at_diagnosis" <= 80 
+  AND "pathologic_stage" IN ('Stage I', 'Stage II', 'Stage IIA')
+LIMIT 20;
+Answer:
+case_barcode,project_short_name,age_at_diagnosis,pathologic_stage
+TCGA-5L-AAT0,TCGA-BRCA,42,Stage IIA
+TCGA-5T-A9QA,TCGA-BRCA,52,Stage IIA
+TCGA-A1-A0SB,TCGA-BRCA,70,Stage I
+TCGA-A1-A0SD,TCGA-BRCA,59,Stage IIA
+TCGA-A1-A0SE,TCGA-BRCA,56,Stage I
+TCGA-A1-A0SF,TCGA-BRCA,54,Stage IIA
+TCGA-A1-A0SH,TCGA-BRCA,39,Stage IIA
+TCGA-A1-A0SK,TCGA-BRCA,54,Stage IIA
+TCGA-A1-A0SM,TCGA-BRCA,77,Stage IIA
+TCGA-A1-A0SN,TCGA-BRCA,50,Stage IIA
+TCGA-A1-A0SP,TCGA-BRCA,40,Stage IIA
+Query:
+-- Description: Verify the available sample barcodes for the identified cases (patients) in the RNA-Seq gene expression data.
+SELECT DISTINCT "sample_barcode", "case_barcode"
+FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."RNASEQ_GENE_EXPRESSION"
+WHERE "case_barcode" IN (
+  SELECT DISTINCT "case_barcode"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_BIOCLIN_V0"."CLINICAL"
+  WHERE "project_short_name" = 'TCGA-BRCA' 
+    AND "age_at_diagnosis" <= 80 
+    AND "pathologic_stage" IN ('Stage I', 'Stage II', 'Stage IIA')
+)
+LIMIT 20;
+Answer:
+sample_barcode,case_barcode
+TCGA-AR-A24K-01A,TCGA-AR-A24K
+TCGA-E9-A248-01A,TCGA-E9-A248
+TCGA-BH-A0W3-01A,TCGA-BH-A0W3
+TCGA-C8-A12T-01A,TCGA-C8-A12T
+TCGA-D8-A145-01A,TCGA-D8-A145
+TCGA-AR-A0TV-01A,TCGA-AR-A0TV
+TCGA-D8-A1JL-01A,TCGA-D8-A1JL
+TCGA-E2-A15G-01A,TCGA-E2-A15G
+TCGA-E2-A574-01A,TCGA-E2-A574
+TCGA-E9-A1RB-11A,TCGA-E9-A1RB
+TCGA-EW-A6S9-01A,TCGA-EW-A6S9
+TCGA-AO-A0JF-01A,TCGA-AO-A0JF
+TCGA-AC-A62X-01A,TCGA-AC-A62X
+TCGA-C8-A12O-01A,TCGA-C8-A12O
+Query:
+-- Description: Extract RNA-Seq expression information specific to the gene SNORA31 and the cases filtered above.
+SELECT DISTINCT "sample_barcode", "case_barcode", "gene_name", "HTSeq__Counts"
+FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."RNASEQ_GENE_EXPRESSION"
+WHERE "gene_name" = 'SNORA31'
+  AND "case_barcode" IN (
+    SELECT DISTINCT "case_barcode"
+    FROM "TCGA_HG38_DATA_V0"."TCGA_BIOCLIN_V0"."CLINICAL"
+    WHERE "project_short_name" = 'TCGA-BRCA'
+      AND "age_at_diagnosis" <= 80
+      AND "pathologic_stage" IN ('Stage I', 'Stage II', 'Stage IIA')
+  )
+LIMIT 20;
+Answer:
+sample_barcode,case_barcode,gene_name,HTSeq__Counts
+TCGA-5L-AAT0-01A,TCGA-5L-AAT0,SNORA31,0
+TCGA-A2-A04U-01A,TCGA-A2-A04U,SNORA31,0
+TCGA-A7-A0CE-01A,TCGA-A7-A0CE,SNORA31,0
+TCGA-A7-A0CH-01A,TCGA-A7-A0CH,SNORA31,0
+TCGA-AO-A12D-01A,TCGA-AO-A12D,SNORA31,10
+TCGA-BH-A0DT-01A,TCGA-BH-A0DT,SNORA31,0
+TCGA-AN-A0FV-01A,TCGA-AN-A0FV,SNORA31,3
+TCGA-A8-A09K-01A,TCGA-A8-A09K,SNORA31,0
+TCGA-C8-A134-01A,TCGA-C8-A134,SNORA31,0
+TCGA-E2-A15E-06A,TCGA-E2-A15E,SNORA31,6
+Query:
+-- Description: Retrieve unique microRNA (miRNA) identifiers and their expression values for the filtered cases based on their samples.
+SELECT DISTINCT "sample_barcode", "case_barcode", "mirna_id", "reads_per_million_miRNA_mapped"
+FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."MIRNASEQ_EXPRESSION"
+WHERE "case_barcode" IN (
+  SELECT DISTINCT "case_barcode"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_BIOCLIN_V0"."CLINICAL"
+  WHERE "project_short_name" = 'TCGA-BRCA' 
+    AND "age_at_diagnosis" <= 80 
+    AND "pathologic_stage" IN ('Stage I', 'Stage II', 'Stage IIA')
+)
+LIMIT 20;
+Answer:
+sample_barcode,case_barcode,mirna_id,reads_per_million_miRNA_mapped
+TCGA-5L-AAT0-01A,TCGA-5L-AAT0,hsa-mir-589,37.5268
+TCGA-5L-AAT0-01A,TCGA-5L-AAT0,hsa-mir-1291,0.292037
+TCGA-5L-AAT0-01A,TCGA-5L-AAT0,hsa-mir-503,4.088523
+TCGA-5L-AAT0-01A,TCGA-5L-AAT0,hsa-mir-4668,1.460187
+TCGA-5L-AAT0-01A,TCGA-5L-AAT0,hsa-mir-6852,0.292037
+TCGA-5L-AAT0-01A,TCGA-5L-AAT0,hsa-mir-1295a,0.146019
+TCGA-5L-AAT0-01A,TCGA-5L-AAT0,hsa-mir-532,402.281454
+TCGA-5L-AAT0-01A,TCGA-5L-AAT0,hsa-mir-598,9.92927
+TCGA-5L-AA
+Query:
+-- Description: Calculate the average miRNA-Seq expression levels for each unique miRNA grouped by sample. 
+-- This query does not involve LOG10 and remains unchanged from the original format as there is no error related to log transformation.
+SELECT "sample_barcode", "mirna_id", AVG("reads_per_million_miRNA_mapped") AS "avg_mirna_expression"
+FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."MIRNASEQ_EXPRESSION"
+GROUP BY "sample_barcode", "mirna_id"
+LIMIT 20;
+Answer:
+sample_barcode,mirna_id,avg_mirna_expression
+TCGA-04-1331-01A,hsa-mir-6736,0.574955
+TCGA-04-1331-01A,hsa-mir-3157,1.149909
+TCGA-04-1331-01A,hsa-mir-370,43.984034
+TCGA-04-1331-01A,hsa-mir-4533,0.287477
+TCGA-04-1331-01A,hsa-mir-4772,2.587296
+TCGA-04-1331-01A,hsa-mir-9-3,4.31216
+TCGA-04-1331-01A,hsa-mir-3143,0.574955
+TCGA-04-1331-01A,hsa-mir-544b,0.574955
+TCGA-04-1331-01A,hsa-mir-105-2,1.437387
+TCGA-04-1331-01A,hsa-mir-210,54.908173
+TCGA-04-1331-01A,hsa-mir-4492,0.287477
+Query:
+-- Description: Combine RNA-Seq (SNORA31) average expression and miRNA-Seq average expression for samples present in both datasets. 
+-- Corrected the subquery for RNA-Seq to use LN instead of LOG10 for the log-transformed calculation.
+SELECT r."sample_barcode", r."avg_log10_snora31_expression", m."mirna_id", m."avg_mirna_expression"
+FROM (
+  SELECT "sample_barcode", AVG(LN("HTSeq__Counts" + 1) / LN(10)) AS "avg_log10_snora31_expression"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."RNASEQ_GENE_EXPRESSION"
+  WHERE "gene_name" = 'SNORA31'
+  GROUP BY "sample_barcode"
+) r
+JOIN (
+  SELECT "sample_barcode", "mirna_id", AVG("reads_per_million_miRNA_mapped") AS "avg_mirna_expression"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."MIRNASEQ_EXPRESSION"
+  GROUP BY "sample_barcode", "mirna_id"
+) m
+ON r."sample_barcode" = m."sample_barcode"
+LIMIT 20;
+Answer:
+sample_barcode,avg_log10_snora31_expression,mirna_id,avg_mirna_expression
+TCGA-VQ-A8DZ-01A,1.8573324964312683,hsa-mir-1539,0.0
+TCGA-VQ-A8DZ-01A,1.8573324964312683,hsa-mir-581,0.0
+TCGA-VQ-A8E2-01A,0.9030899869919434,hsa-mir-6824,0.0
+TCGA-VQ-A8PC-01A,0.0,hsa-mir-4689,0.0
+TCGA-VQ-A8E2-01A,0.9030899869919434,hsa-mir-4700,0.0
+TCGA-VQ-A8E7-01B,0.0,hsa-mir-4527,0.0
+TCGA-VQ-A8PC-01A,0.0,hsa-mir-4744,0.0
+TCGA-VQ-A8PO-01A,0.0,hsa-mir-6769a,0.0
+TCGA-VQ-A91Y-01A,1.6627578316815739,hsa-mir-5007,0.0
+Task: In the TCGA-BRCA cohort of patients who are 80 years old or younger at diagnosis and have a pathological stage of Stage I, Stage II, or Stage IIA, calculate the t-statistic derived from the Pearson correlation between the log10-transformed average RNA-Seq expression levels (using HTSeq__Counts + 1) of the gene SNORA31 and the average microRNA-Seq expression levels of all unique microRNAs, only considering pairs with more than 25 samples and where the absolute Pearson correlation coefficient is between 0.3 and 1.0
+Another way to say it: Help me calculate the t-statistic based on the Pearson correlation coefficient between all possible pairs of gene `SNORA31` in the RNAseq data (Log10 transformation) and unique identifiers in the microRNA data available in TCGA. The cohort for this analysis consists of BRCA patients that are 80 years old or younger at the time of diagnosis and Stage I,II,IIA as pathological state. And only consider samples of size more than 25 and with absolute Pearson correlation at least 0.3, and less than 1.0.
+
+Please think step by step and answer only one complete SQL in snowflake dialect in ```sql``` format.
+SQL usage example: ```sql
+SELECT "COLUMN_NAME" FROM DATABASE.SCHEMA.TABLE WHERE ... ``` (Adjust "DATABASE", "SCHEMA", and "TABLE" to match actual names, ensure all column names are enclosed in double quotations)
+Here are some useful tips for answering:
+When performing a UNION operation on many tables, ensure that all table names are explicitly listed. Union first and then add condition and selection. e.g. SELECT "col1", "col2" FROM (TABLE1 UNION ALL TABLE2) WHERE ...; Don't write sqls as (SELECT col1, col2 FROM TABLE1 WHERE ...) UNION ALL (SELECT col1, col2 FROM TABLE2 WHERE ...); Don't use ['-- Include all', '-- Omit', '-- Continue', '-- Union all', '-- ...', '-- List all', '-- Replace this', '-- Each table', '-- Add other'] to omit any table. Table names here: The table structure information is ({database name: {schema name: [table name]}}): 
+{'TCGA_HG38_DATA_V0': {'TCGA_HG38_DATA_V0': ['MIRNASEQ_EXPRESSION', 'RNASEQ_GENE_EXPRESSION'], 'TCGA_BIOCLIN_V0': ['CLINICAL', 'CLINICAL_V1', 'CLINICAL_V1_1']}}
+
+When using ORDER BY xxx DESC, add NULLS LAST to exclude null records: ORDER BY xxx DESC NULLS LAST.
+When asked something without stating name or id, return both of them. e.g. Which products ...? The answer should include product_name and product_id.
+When asked percentage decrease, you should return a positive value. e.g. How many percentage points in 2021 decrease compared to ...? The answer should be a positive value indicating the decresed number. Try to use ABS().
+If asked two tables, you should reply with the last one instead of combining two tables. e.g. Identifying the top five states ... examine the state that ranks fourth overall and identify its top five counties. You should only answer top five counties.
+Use ST_DISTANCE to calculate distance between two geographic points for more accurate answer.
+If the task description does not specify the number of decimal places, retain all decimals to four places.
+
+[Self-refine]
+2025-07-01 04:49:04 - Thread-515 (execute) - INFO - [Try to run SQL in self-refine]
+Here’s the SQL query to calculate the t-statistic based on the Pearson correlation coefficient for the given task:
+
+```sql
+WITH Filtered_Cases AS (
+  SELECT DISTINCT "case_barcode"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_BIOCLIN_V0"."CLINICAL"
+  WHERE "project_short_name" = 'TCGA-BRCA' 
+    AND "age_at_diagnosis" <= 80 
+    AND "pathologic_stage" IN ('Stage I', 'Stage II', 'Stage IIA')
+),
+SNORA31_Expression AS (
+  SELECT r."sample_barcode", AVG(LN(r."HTSeq__Counts" + 1) / LN(10)) AS "log10_avg_snora31_expression"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."RNASEQ_GENE_EXPRESSION" r
+  JOIN Filtered_Cases c ON r."case_barcode" = c."case_barcode"
+  WHERE r."gene_name" = 'SNORA31'
+  GROUP BY r."sample_barcode"
+),
+miRNA_Expression AS (
+  SELECT m."sample_barcode", m."mirna_id", AVG(m."reads_per_million_miRNA_mapped") AS "avg_mirna_expression"
+  FROM "TCGA_HG38_DATA_V0"."TCGA_HG38_DATA_V0"."MIRNASEQ_EXPRESSION" m
+  JOIN Filtered_Cases c ON m."case_barcode" = c."case_barcode"
+  GROUP BY m."sample_barcode", m."mirna_id"
+),
+Expression_Pairs AS (
+  SELECT s."log10_avg_snora31_expression", m."avg_mirna_expression", m."mirna_id"
+  FROM SNORA31_Expression s
+  JOIN miRNA_Expression m ON s."sample_barcode" = m."sample_barcode"
+),
+Pearson_Correlation AS (
+  SELECT 
+    "mirna_id",
+    CORR("log10_avg_snora31_expression", "avg_mirna_expression") AS "pearson_corr",
+    COUNT(*) AS "sample_size"
+  FROM Expression_Pairs
+  GROUP BY "mirna_id"
+  HAVING COUNT(*) > 25
+    AND ABS(CORR("log10_avg_snora31_expression", "avg_mirna_expression")) BETWEEN 0.3 AND 1.0
+),
+T_Statistic AS (
+  SELECT 
+    "mirna_id",
+    "pearson_corr",
+    "sample_size",
+    ("pearson_corr" * SQRT("sample_size" - 2)) / SQRT(1 - POWER("pearson_corr", 2)) AS "t_statistic"
+  FROM Pearson_Correlation
+)
+SELECT * 
+FROM T_Statistic
+ORDER BY "t_statistic" DESC NULLS LAST;
+```
+
+### Explanation of the Query:
+1. **Filtered_Cases**: Filters BRCA patients 80 or younger at diagnosis and in pathological stages I, II, or IIA, based on the clinical data table.
+
+2. **SNORA31_Expression**: Computes the log10-transformed average expression levels of the SNORA31 gene for each sample barcode.
+
+3. **miRNA_Expression**: Computes the average microRNA-Seq expression levels for each unique miRNA and sample barcode.
+
+4. **Expression_Pairs**: Joins the RNA-Seq data for SNORA31 and the miRNA-Seq expression data on sample barcodes.
+
+5. **Pearson_Correlation**: Calculates the Pearson correlation coefficient (CORR function) between the log10-transformed SNORA31 RNA-Seq expression and miRNA expression levels for each miRNA_id. Filters correlations with more than 25 samples and absolute correlation coefficients between 0.3 and 1.0.
+
+6. **T_Statistic**: Uses the Pearson correlation and sample size to compute the t-statistic using the formula `t = (r * sqrt(n-2)) / sqrt(1 - r^2)`.
+
+7. **Final Query**: Selects the results and orders them by the t-statistic (descending).
+
+Let me know if further clarification is needed!
+[Try to run SQL in self-refine]
+2025-07-01 04:49:07 - Thread-515 (execute) - INFO - Total iteration counts: 0

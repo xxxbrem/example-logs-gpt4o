@@ -1,0 +1,1590 @@
+2025-07-01 04:48:02 - Thread-644 (execute) - INFO - [Exploration]
+```sql
+-- Description: Retrieve all unique pairs of departure and arrival city codes along with their coordinates for mapping city pairs based on flight routes.
+SELECT 
+    f."departure_airport", 
+    f."arrival_airport", 
+    a1."coordinates" AS "departure_coordinates", 
+    a2."coordinates" AS "arrival_coordinates"
+FROM 
+    AIRLINES.AIRLINES.FLIGHTS f
+JOIN 
+    AIRLINES.AIRLINES.AIRPORTS_DATA a1
+ON 
+    f."departure_airport" = a1."airport_code"
+JOIN 
+    AIRLINES.AIRLINES.AIRPORTS_DATA a2
+ON 
+    f."arrival_airport" = a2."airport_code"
+LIMIT 20;
+```
+
+```sql
+-- Description: Extract flattened longitude and latitude for the coordinates of departure and arrival airports.
+SELECT 
+    a1."airport_code" AS "departure_airport", 
+    SPLIT_PART(a1."coordinates", ',', 1)::FLOAT AS "departure_longitude",
+    SPLIT_PART(a1."coordinates", ',', 2)::FLOAT AS "departure_latitude",
+    a2."airport_code" AS "arrival_airport",
+    SPLIT_PART(a2."coordinates", ',', 1)::FLOAT AS "arrival_longitude",
+    SPLIT_PART(a2."coordinates", ',', 2)::FLOAT AS "arrival_latitude"
+FROM 
+    AIRLINES.AIRLINES.AIRPORTS_DATA a1
+JOIN 
+    AIRLINES.AIRLINES.AIRPORTS_DATA a2 
+ON 
+    a1."airport_code" <> a2."airport_code"
+LIMIT 20;
+```
+
+```sql
+-- Description: Create a distinct list of flights with associated aircraft range based on aircraft codes for filtering by flight route distance feasibility.
+SELECT DISTINCT 
+    f."flight_no", 
+    f."aircraft_code", 
+    ad."range"
+FROM 
+    AIRLINES.AIRLINES.FLIGHTS f
+JOIN 
+    AIRLINES.AIRLINES.AIRCRAFTS_DATA ad 
+ON 
+    f."aircraft_code" = ad."aircraft_code"
+LIMIT 20;
+```
+
+```sql
+-- Description: Retrieve distinct flight routes between departure and arrival cities for standardizing unique city pairs.
+SELECT DISTINCT 
+    LEAST(a1."city", a2."city") AS "city1", 
+    GREATEST(a1."city", a2."city") AS "city2"
+FROM 
+    AIRLINES.AIRLINES.FLIGHTS f
+JOIN 
+    AIRLINES.AIRLINES.AIRPORTS_DATA a1 
+ON 
+    f."departure_airport" = a1."airport_code"
+JOIN 
+    AIRLINES.AIRLINES.AIRPORTS_DATA a2 
+ON 
+    f."arrival_airport" = a2."airport_code"
+LIMIT 20;
+```
+
+```sql
+-- Description: Calculate the Haversine formula for each unique city pair based on the departure and arrival coordinates.
+SELECT 
+    "city1", 
+    "city2", 
+    2 * 6371 * ASIN(SQRT(POWER(SIN((RADIANS(a2."departure_latitude") - RADIANS(a1."departure_latitude")) / 2), 2) + 
+    COS(RADIANS(a1."departure_latitude")) * COS(RADIANS(a1."arrival_latitude")) * 
+    POWER(SIN((RADIANS(a1."departure_longitude") - RADIANS(a2."departure_longitude")) / 2), 2))) AS "distance_km"
+FROM ( 
+    SELECT 
+        LEAST(a1."city", a2."city") AS "city1", 
+        GREATEST(a1."city", a2."city") AS "city2",
+        SPLIT_PART(a1."coordinates", ',', 2)::FLOAT AS "departure_latitude",
+        SPLIT_PART(a1."coordinates", ',', 1)::FLOAT AS "departure_longitude",
+        SPLIT_PART(a2."coordinates", ',', 2)::FLOAT AS "arrival_latitude",
+        SPLIT_PART(a2."coordinates", ',', 1)::FLOAT AS "arrival_longitude"
+    FROM 
+        AIRLINES.AIRLINES.FLIGHTS f
+    JOIN 
+        AIRLINES.AIRLINES.AIRPORTS_DATA a1 
+    ON 
+        f."departure_airport" = a1."airport_code"
+    JOIN 
+        AIRLINES.AIRLINES.AIRPORTS_DATA a2 
+    ON 
+        f."arrival_airport" = a2."airport_code"
+) AS city_coordinates
+LIMIT 20;
+```
+
+```sql
+-- Description: Calculate average distance between unique city pairs using Haversine distances summed over all flights between them.
+WITH distance_calculations AS (
+    SELECT 
+        LEAST(a1."city", a2."city") AS "city1", 
+        GREATEST(a1."city", a2."city") AS "city2",
+        2 * 6371 * ASIN(SQRT(POWER(SIN((RADIANS(a2."departure_latitude") - RADIANS(a1."departure_latitude")) / 2), 2) + 
+        COS(RADIANS(a1."departure_latitude")) * COS(RADIANS(a2."departure_latitude")) * 
+        POWER(SIN((RADIANS(a1."departure_longitude") - RADIANS(a2."departure_longitude")) / 2), 2))) AS "distance_km"
+    FROM ( 
+        SELECT 
+            SPLIT_PART(a1."coordinates", ',', 1)::FLOAT AS "departure_longitude",
+            SPLIT_PART(a1."coordinates", ',', 2)::FLOAT AS "departure_latitude",
+            SPLIT_PART(a2."coordinates", ',', 1)::FLOAT AS "arrival_longitude",
+            SPLIT_PART(a2."coordinates", ',', 2)::FLOAT AS "arrival_latitude"
+        FROM 
+            AIRLINES.AIRLINES.FLIGHTS f
+        JOIN 
+            AIRLINES.AIRLINES.AIRPORTS_DATA a1
+        ON 
+            f."departure_airport" = a1."airport_code"
+        JOIN 
+            AIRLINES.AIRLINES.AIRPORTS_DATA a2
+        ON 
+            f."arrival_airport" = a2."airport_code"
+    ) AS coordinates
+)
+SELECT 
+    "city1", 
+    "city2", 
+    AVG("distance_km") AS "average_distance"
+FROM 
+    distance_calculations
+GROUP BY 
+    "city1", 
+    "city2"
+ORDER BY 
+    "average_distance" DESC
+LIMIT 20;
+```
+
+```sql
+-- Description: Distribute unique city pairs into the specified distance ranges (bins) based on their average route distance.
+WITH average_distances AS (
+    SELECT 
+        "city1", 
+        "city2", 
+        AVG("distance_km") AS "average_distance"
+    FROM distance_calculations
+    GROUP BY "city1", "city2"
+)
+SELECT 
+    CASE 
+        WHEN "average_distance" BETWEEN 0 AND 1000 THEN '0-1000'
+        WHEN "average_distance" BETWEEN 1000 AND 2000 THEN '1000-2000'
+        WHEN "average_distance" BETWEEN 2000 AND 3000 THEN '2000-3000'
+        WHEN "average_distance" BETWEEN 3000 AND 4000 THEN '3000-4000'
+        WHEN "average_distance" BETWEEN 4000 AND 5000 THEN '4000-5000'
+        ELSE '6000+'
+    END AS "distance_range",
+    COUNT(*) AS "pair_count"
+FROM 
+    average_distances
+GROUP BY 
+    "distance_range"
+ORDER BY 
+    "pair_count" ASC
+LIMIT 20;
+```
+
+```sql
+-- Description: Identify the distance range with the fewest unique city pairs based on the previous query.
+WITH range_counts AS (
+    SELECT 
+        CASE 
+            WHEN "average_distance" BETWEEN 0 AND 1000 THEN '0-1000'
+            WHEN "average_distance" BETWEEN 1000 AND 2000 THEN '1000-2000'
+            WHEN "average_distance" BETWEEN 2000 AND 3000 THEN '2000-3000'
+            WHEN "average_distance" BETWEEN 3000 AND 4000 THEN '3000-4000'
+            WHEN "average_distance" BETWEEN 4000 AND 5000 THEN '4000-5000'
+            ELSE '6000+'
+        END AS "distance_range",
+        COUNT(*) AS "pair_count"
+    FROM 
+        average_distances
+    GROUP BY 
+        "distance_range"
+)
+SELECT 
+    "distance_range", 
+    "pair_count"
+FROM 
+    range_counts
+ORDER BY 
+    "pair_count" ASC
+LIMIT 1;
+```
+
+These queries incrementally retrieve relevant data and calculate the required values to determine the range with the fewest unique city pairs.
+[Exploration]
+2025-07-01 04:48:02 - Thread-644 (execute) - INFO - [Try to execute]
+-- Description: Retrieve all unique pairs of departure and arrival city codes along with their coordinates for mapping city pairs based on flight routes.
+SELECT 
+    f."departure_airport", 
+    f."arrival_airport", 
+    a1."coordinates" AS "departure_coordinates", 
+    a2."coordinates" AS "arrival_coordinates"
+FROM 
+    AIRLINES.AIRLINES.FLIGHTS f
+JOIN 
+    AIRLINES.AIRLINES.AIRPORTS_DATA a1
+ON 
+    f."departure_airport" = a1."airport_code"
+JOIN 
+    AIRLINES.AIRLINES.AIRPORTS_DATA a2
+ON 
+    f."arrival_airport" = a2."airport_code"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:48:03 - Thread-644 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Retrieve all unique pairs of departure and arrival city codes along with their coordinates for mapping city pairs based on flight routes.
+SELECT 
+    f."departure_airport", 
+    f."arrival_airport", 
+    a1."coordinates" AS "departure_coordinates", 
+    a2."coordinates" AS "arrival_coordinates"
+FROM 
+    AIRLINES.AIRLINES.FLIGHTS f
+JOIN 
+    AIRLINES.AIRLINES.AIRPORTS_DATA a1
+ON 
+    f."departure_airport" = a1."airport_code"
+JOIN 
+    AIRLINES.AIRLINES.AIRPORTS_DATA a2
+ON 
+    f."arrival_airport" = a2."airport_code"
+LIMIT 20;
+Results:
+departure_airport,arrival_airport,departure_coordinates,arrival_coordinates
+DME,BTK,"(37.9062995910644531,55.4087982177734375)","(101.697998046875,56.3706016540527344)"
+VKO,HMA,"(37.2615013122999983,55.5914993286000012)","(69.0860977172851562,61.0284996032714844)"
+VKO,AER,"(37.2615013122999983,55.5914993286000012)","(39.9566001892089986,43.4499015808110016)"
+SVO,UFA,"(37.4146000000000001,55.9725990000000024)","(55.8744010925289984,54.5574989318850001)"
+SVO,ULV,"(37.4146000000000001,55.97259
+
+[Successfully executed]
+2025-07-01 04:48:03 - Thread-644 (execute) - INFO - [Try to execute]
+-- Description: Extract flattened longitude and latitude for the coordinates of departure and arrival airports.
+SELECT 
+    a1."airport_code" AS "departure_airport", 
+    SPLIT_PART(a1."coordinates", ',', 1)::FLOAT AS "departure_longitude",
+    SPLIT_PART(a1."coordinates", ',', 2)::FLOAT AS "departure_latitude",
+    a2."airport_code" AS "arrival_airport",
+    SPLIT_PART(a2."coordinates", ',', 1)::FLOAT AS "arrival_longitude",
+    SPLIT_PART(a2."coordinates", ',', 2)::FLOAT AS "arrival_latitude"
+FROM 
+    AIRLINES.AIRLINES.AIRPORTS_DATA a1
+JOIN 
+    AIRLINES.AIRLINES.AIRPORTS_DATA a2 
+ON 
+    a1."airport_code" <> a2."airport_code"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:48:04 - Thread-644 (execute) - INFO - [Error occurred]
+{'status': 'error', 'error_msg': "##ERROR##100038 (22018): Numeric value '(129.77099609375' is not recognized"}
+[Error occurred]
+2025-07-01 04:48:52 - Thread-644 (execute) - INFO - [Corrected SQL]
+The issue reported occurs because the `coordinates` column in the `AIRLINES.AIRLINES.AIRPORTS_DATA` table contains values in the format `'(longitude,latitude)'`. These values include parentheses, which prevent numeric conversion when trying to extract and cast the individual components (longitude and latitude) using the `SPLIT_PART` function.
+
+### Thinking Process:
+1. **Problem Identification**:
+   - Parentheses in the `coordinates` string are invalid for numeric conversion.
+   - These characters must be stripped before splitting the string into longitude and latitude values.
+
+2. **Proposed Solution**:
+   - Use the `REPLACE` function to remove unwanted characters (`(` and `)`).
+   - Use the `SPLIT_PART` function to split the cleaned string into two parts: longitude and latitude, based on the comma `,`.
+   - Convert each part into a numeric format (`FLOAT`) for subsequent use in calculations.
+
+3. **Execution Strategy**:
+   - Apply `REPLACE` twice: once to remove `(`, and again to remove `)`.
+   - Extract the first part (longitude) and second part (latitude) of the now-cleaned string using `SPLIT_PART`.
+   - Convert the extracted values to `FLOAT`.
+   - Join the table with itself to create combinations of departure and arrival airports for further analysis.
+   - Implement the above logic within a single SQL query.
+
+4. **Implementation**:
+   - The corrected SQL will ensure that all invalid characters are removed, and valid longitude and latitude values are extracted and converted properly to `FLOAT`.
+
+Here is the corrected SQL:
+
+```sql
+-- Description: Extract longitude and latitude for departure and arrival airports by cleaning parentheses and splitting the coordinates into numeric values.
+SELECT 
+    a1."airport_code" AS "departure_airport", 
+    SPLIT_PART(REPLACE(REPLACE(a1."coordinates", '(', ''), ')', ''), ',', 1)::FLOAT AS "departure_longitude",
+    SPLIT_PART(REPLACE(REPLACE(a1."coordinates", '(', ''), ')', ''), ',', 2)::FLOAT AS "departure_latitude",
+    a2."airport_code" AS "arrival_airport",
+    SPLIT_PART(REPLACE(REPLACE(a2."coordinates", '(', ''), ')', ''), ',', 1)::FLOAT AS "arrival_longitude",
+    SPLIT_PART(REPLACE(REPLACE(a2."coordinates", '(', ''), ')', ''), ',', 2)::FLOAT AS "arrival_latitude"
+FROM 
+    AIRLINES.AIRLINES.AIRPORTS_DATA a1
+JOIN 
+    AIRLINES.AIRLINES.AIRPORTS_DATA a2 
+ON 
+    a1."airport_code" <> a2."airport_code"
+LIMIT 20;
+```
+
+### Why This Works:
+- `REPLACE(REPLACE("coordinates", '(', ''), ')', '')` removes both `(` and `)` from the string.
+- `SPLIT_PART(..., ',', 1)` extracts the longitude, and `SPLIT_PART(..., ',', 2)` extracts the latitude.
+- Casting these extracted components to `FLOAT` ensures they are ready for numeric operations.
+- Joining the table with itself ensures combinations of departure and arrival airports are generated for pairwise analysis.
+
+This query should now run without errors, correctly extracting and formatting the longitude and latitude values.
+[Corrected SQL]
+2025-07-01 04:48:53 - Thread-644 (execute) - INFO - [Results for corrected sql]
+departure_airport,departure_longitude,departure_latitude,arrival_airport,arrival_longitude,arrival_latitude
+YKS,129.77099609375,62.093299865722656,URJ,64.82669830322266,60.10329818725586
+YKS,129.77099609375,62.093299865722656,USK,57.3671989440918,66.00469970703125
+YKS,129.77099609375,62.093299865722656,MMK,32.75080108642578,68.78170013427734
+YKS,129.77099609375,62.093299865722656,NNM,53.12189865112305,67.63999938964844
+YKS,129.77099609375,62.093299865722656,ABA,91.38500213623047,53.74000167
+
+[Results for corrected sql]
+2025-07-01 04:50:30 - Thread-644 (execute) - INFO - [Corrected other sqls]
+```sql
+-- Description: Create a distinct list of flights with associated aircraft range based on aircraft codes for filtering by flight route distance feasibility.
+-- No corrections are needed for this query because it does not involve geographical coordinates, so parentheses are not an issue.
+SELECT DISTINCT 
+    f."flight_no", 
+    f."aircraft_code", 
+    ad."range"
+FROM 
+    AIRLINES.AIRLINES.FLIGHTS f
+JOIN 
+    AIRLINES.AIRLINES.AIRCRAFTS_DATA ad 
+ON 
+    f."aircraft_code" = ad."aircraft_code"
+LIMIT 20;
+```
+
+```sql
+-- Description: Retrieve distinct flight routes between departure and arrival cities for standardizing unique city pairs.
+-- No changes are necessary for this query as it works with the "city" column and does not involve the "coordinates" column or numeric parsing.
+SELECT DISTINCT 
+    LEAST(a1."city", a2."city") AS "city1", 
+    GREATEST(a1."city", a2."city") AS "city2"
+FROM 
+    AIRLINES.AIRLINES.FLIGHTS f
+JOIN 
+    AIRLINES.AIRLINES.AIRPORTS_DATA a1 
+ON 
+    f."departure_airport" = a1."airport_code"
+JOIN 
+    AIRLINES.AIRLINES.AIRPORTS_DATA a2 
+ON 
+    f."arrival_airport" = a2."airport_code"
+LIMIT 20;
+```
+
+```sql
+-- Description: Calculate the Haversine formula for each unique city pair based on the departure and arrival coordinates.
+-- Corrected to clean parentheses from the "coordinates" field for longitude and latitude extraction.
+SELECT 
+    "city1", 
+    "city2", 
+    2 * 6371 * ASIN(SQRT(POWER(SIN((RADIANS(a2."departure_latitude") - RADIANS(a1."departure_latitude")) / 2), 2) + 
+    COS(RADIANS(a1."departure_latitude")) * COS(RADIANS(a2."departure_latitude")) * 
+    POWER(SIN((RADIANS(a1."departure_longitude") - RADIANS(a2."departure_longitude")) / 2), 2))) AS "distance_km"
+FROM ( 
+    SELECT 
+        LEAST(a1."city", a2."city") AS "city1", 
+        GREATEST(a1."city", a2."city") AS "city2",
+        SPLIT_PART(REPLACE(REPLACE(a1."coordinates", '(', ''), ')', ''), ',', 2)::FLOAT AS "departure_latitude",
+        SPLIT_PART(REPLACE(REPLACE(a1."coordinates", '(', ''), ')', ''), ',', 1)::FLOAT AS "departure_longitude",
+        SPLIT_PART(REPLACE(REPLACE(a2."coordinates", '(', ''), ')', ''), ',', 2)::FLOAT AS "arrival_latitude",
+        SPLIT_PART(REPLACE(REPLACE(a2."coordinates", '(', ''), ')', ''), ',', 1)::FLOAT AS "arrival_longitude"
+    FROM 
+        AIRLINES.AIRLINES.FLIGHTS f
+    JOIN 
+        AIRLINES.AIRLINES.AIRPORTS_DATA a1 
+    ON 
+        f."departure_airport" = a1."airport_code"
+    JOIN 
+        AIRLINES.AIRLINES.AIRPORTS_DATA a2 
+    ON 
+        f."arrival_airport" = a2."airport_code"
+) AS city_coordinates
+LIMIT 20;
+```
+
+```sql
+-- Description: Calculate average distance between unique city pairs using Haversine distances summed over all flights between them.
+-- Corrected to clean parentheses from the "coordinates" field for proper longitude and latitude extraction.
+WITH distance_calculations AS (
+    SELECT 
+        LEAST(a1."city", a2."city") AS "city1", 
+        GREATEST(a1."city", a2."city") AS "city2",
+        2 * 6371 * ASIN(SQRT(POWER(SIN((RADIANS(a2."departure_latitude") - RADIANS(a1."departure_latitude")) / 2), 2) + 
+        COS(RADIANS(a1."departure_latitude")) * COS(RADIANS(a2."departure_latitude")) * 
+        POWER(SIN((RADIANS(a1."departure_longitude") - RADIANS(a2."departure_longitude")) / 2), 2))) AS "distance_km"
+    FROM ( 
+        SELECT 
+            SPLIT_PART(REPLACE(REPLACE(a1."coordinates", '(', ''), ')', ''), ',', 1)::FLOAT AS "departure_longitude",
+            SPLIT_PART(REPLACE(REPLACE(a1."coordinates", '(', ''), ')', ''), ',', 2)::FLOAT AS "departure_latitude",
+            SPLIT_PART(REPLACE(REPLACE(a2."coordinates", '(', ''), ')', ''), ',', 1)::FLOAT AS "arrival_longitude",
+            SPLIT_PART(REPLACE(REPLACE(a2."coordinates", '(', ''), ')', ''), ',', 2)::FLOAT AS "arrival_latitude"
+        FROM 
+            AIRLINES.AIRLINES.FLIGHTS f
+        JOIN 
+            AIRLINES.AIRLINES.AIRPORTS_DATA a1
+        ON 
+            f."departure_airport" = a1."airport_code"
+        JOIN 
+            AIRLINES.AIRLINES.AIRPORTS_DATA a2
+        ON 
+            f."arrival_airport" = a2."airport_code"
+    ) AS coordinates
+)
+SELECT 
+    "city1", 
+    "city2", 
+    AVG("distance_km") AS "average_distance"
+FROM 
+    distance_calculations
+GROUP BY 
+    "city1", 
+    "city2"
+ORDER BY 
+    "average_distance" DESC
+LIMIT 20;
+```
+
+```sql
+-- Description: Distribute unique city pairs into the specified distance ranges (bins) based on their average route distance.
+-- No corrections are needed here since this query operates on already-calculated data and does not directly access the "coordinates" column.
+WITH average_distances AS (
+    SELECT 
+        "city1", 
+        "city2", 
+        AVG("distance_km") AS "average_distance"
+    FROM distance_calculations
+    GROUP BY "city1", "city2"
+)
+SELECT 
+    CASE 
+        WHEN "average_distance" BETWEEN 0 AND 1000 THEN '0-1000'
+        WHEN "average_distance" BETWEEN 1000 AND 2000 THEN '1000-2000'
+        WHEN "average_distance" BETWEEN 2000 AND 3000 THEN '2000-3000'
+        WHEN "average_distance" BETWEEN 3000 AND 4000 THEN '3000-4000'
+        WHEN "average_distance" BETWEEN 4000 AND 5000 THEN '4000-5000'
+        ELSE '6000+'
+    END AS "distance_range",
+    COUNT(*) AS "pair_count"
+FROM 
+    average_distances
+GROUP BY 
+    "distance_range"
+ORDER BY 
+    "pair_count" ASC
+LIMIT 20;
+```
+
+```sql
+-- Description: Identify the distance range with the fewest unique city pairs based on the previous query.
+-- No corrections are needed since this query uses aggregated data that does not involve direct coordinate processing.
+WITH range_counts AS (
+    SELECT 
+        CASE 
+            WHEN "average_distance" BETWEEN 0 AND 1000 THEN '0-1000'
+            WHEN "average_distance" BETWEEN 1000 AND 2000 THEN '1000-2000'
+            WHEN "average_distance" BETWEEN 2000 AND 3000 THEN '2000-3000'
+            WHEN "average_distance" BETWEEN 3000 AND 4000 THEN '3000-4000'
+            WHEN "average_distance" BETWEEN 4000 AND 5000 THEN '4000-5000'
+            ELSE '6000+'
+        END AS "distance_range",
+        COUNT(*) AS "pair_count"
+    FROM 
+        average_distances
+    GROUP BY 
+        "distance_range"
+)
+SELECT 
+    "distance_range", 
+    "pair_count"
+FROM 
+    range_counts
+ORDER BY 
+    "pair_count" ASC
+LIMIT 1;
+``` 
+[Corrected other sqls]
+2025-07-01 04:50:30 - Thread-644 (execute) - INFO - [Successfully corrected]
+Successfully executed. SQL:
+-- Description: Extract flattened longitude and latitude for the coordinates of departure and arrival airports.
+SELECT 
+    a1."airport_code" AS "departure_airport", 
+    SPLIT_PART(a1."coordinates", ',', 1)::FLOAT AS "departure_longitude",
+    SPLIT_PART(a1."coordinates", ',', 2)::FLOAT AS "departure_latitude",
+    a2."airport_code" AS "arrival_airport",
+    SPLIT_PART(a2."coordinates", ',', 1)::FLOAT AS "arrival_longitude",
+    SPLIT_PART(a2."coordinates", ',', 2)::FLOAT AS "arrival_latitude"
+FROM 
+    AIRLINES.AIRLINES.AIRPORTS_DATA a1
+JOIN 
+    AIRLINES.AIRLINES.AIRPORTS_DATA a2 
+ON 
+    a1."airport_code" <> a2."airport_code"
+LIMIT 20;
+Results:
+departure_airport,departure_longitude,departure_latitude,arrival_airport,arrival_longitude,arrival_latitude
+YKS,129.77099609375,62.093299865722656,URJ,64.82669830322266,60.10329818725586
+YKS,129.77099609375,62.093299865722656,USK,57.3671989440918,66.00469970703125
+YKS,129.77099609375,62.093299865722656,MMK,32.75080108642578,68.78170013427734
+YKS,129.77099609375,62.093299865722656,NNM,53.12189865112305,67.63999938964844
+YKS,129.77099609375,62.093299865722656,ABA,91.38500213623047,53.74000167
+
+[Successfully corrected]
+2025-07-01 04:50:30 - Thread-644 (execute) - INFO - [Try to execute]
+-- Description: Create a distinct list of flights with associated aircraft range based on aircraft codes for filtering by flight route distance feasibility.
+-- No corrections are needed for this query because it does not involve geographical coordinates, so parentheses are not an issue.
+SELECT DISTINCT 
+    f."flight_no", 
+    f."aircraft_code", 
+    ad."range"
+FROM 
+    AIRLINES.AIRLINES.FLIGHTS f
+JOIN 
+    AIRLINES.AIRLINES.AIRCRAFTS_DATA ad 
+ON 
+    f."aircraft_code" = ad."aircraft_code"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:50:30 - Thread-644 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Create a distinct list of flights with associated aircraft range based on aircraft codes for filtering by flight route distance feasibility.
+-- No corrections are needed for this query because it does not involve geographical coordinates, so parentheses are not an issue.
+SELECT DISTINCT 
+    f."flight_no", 
+    f."aircraft_code", 
+    ad."range"
+FROM 
+    AIRLINES.AIRLINES.FLIGHTS f
+JOIN 
+    AIRLINES.AIRLINES.AIRCRAFTS_DATA ad 
+ON 
+    f."aircraft_code" = ad."aircraft_code"
+LIMIT 20;
+Results:
+flight_no,aircraft_code,range
+PG0134,319,6700
+PG0561,763,7900
+PG0461,SU9,3000
+PG0569,733,4200
+PG0612,CN1,1200
+PG0010,CN1,1200
+PG0035,CN1,1200
+PG0076,CR2,2700
+PG0632,CR2,2700
+PG0674,CR2,2700
+PG0216,763,7900
+PG0517,763,7900
+PG0168,319,6700
+PG0144,763,7900
+PG0519,319,6700
+PG0542,SU9,3000
+PG0249,CR2,2700
+PG0645,CR2,2700
+PG0118,SU9,3000
+PG0229,321,5600
+
+[Successfully executed]
+2025-07-01 04:50:30 - Thread-644 (execute) - INFO - [Try to execute]
+-- Description: Retrieve distinct flight routes between departure and arrival cities for standardizing unique city pairs.
+-- No changes are necessary for this query as it works with the "city" column and does not involve the "coordinates" column or numeric parsing.
+SELECT DISTINCT 
+    LEAST(a1."city", a2."city") AS "city1", 
+    GREATEST(a1."city", a2."city") AS "city2"
+FROM 
+    AIRLINES.AIRLINES.FLIGHTS f
+JOIN 
+    AIRLINES.AIRLINES.AIRPORTS_DATA a1 
+ON 
+    f."departure_airport" = a1."airport_code"
+JOIN 
+    AIRLINES.AIRLINES.AIRPORTS_DATA a2 
+ON 
+    f."arrival_airport" = a2."airport_code"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:50:31 - Thread-644 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Retrieve distinct flight routes between departure and arrival cities for standardizing unique city pairs.
+-- No changes are necessary for this query as it works with the "city" column and does not involve the "coordinates" column or numeric parsing.
+SELECT DISTINCT 
+    LEAST(a1."city", a2."city") AS "city1", 
+    GREATEST(a1."city", a2."city") AS "city2"
+FROM 
+    AIRLINES.AIRLINES.FLIGHTS f
+JOIN 
+    AIRLINES.AIRLINES.AIRPORTS_DATA a1 
+ON 
+    f."departure_airport" = a1."airport_code"
+JOIN 
+    AIRLINES.AIRLINES.AIRPORTS_DATA a2 
+ON 
+    f."arrival_airport" = a2."airport_code"
+LIMIT 20;
+Results:
+city1,city2
+"{""en"": ""Moscow"", ""ru"": ""Москва""}","{""en"": ""Ufa"", ""ru"": ""Уфа""}"
+"{""en"": ""Moscow"", ""ru"": ""Москва""}","{""en"": ""Ulyanovsk"", ""ru"": ""Ульяновск""}"
+"{""en"": ""Kurgan"", ""ru"": ""Курган""}","{""en"": ""Moscow"", ""ru"": ""Москва""}"
+"{""en"": ""Orenburg"", ""ru"": ""Оренбург""}","{""en"": ""St. Petersburg"", ""ru"": ""Санкт-Петербург""}"
+"{""en"": ""Syktyvkar"", ""ru"": ""Сыктывкар""}","{""en"": ""Yekaterinburg"", ""ru"": ""Екатеринбург""}"
+"{""en"": ""
+
+[Successfully executed]
+2025-07-01 04:50:31 - Thread-644 (execute) - INFO - [Try to execute]
+-- Description: Calculate the Haversine formula for each unique city pair based on the departure and arrival coordinates.
+-- Corrected to clean parentheses from the "coordinates" field for longitude and latitude extraction.
+SELECT 
+    "city1", 
+    "city2", 
+    2 * 6371 * ASIN(SQRT(POWER(SIN((RADIANS(a2."departure_latitude") - RADIANS(a1."departure_latitude")) / 2), 2) + 
+    COS(RADIANS(a1."departure_latitude")) * COS(RADIANS(a2."departure_latitude")) * 
+    POWER(SIN((RADIANS(a1."departure_longitude") - RADIANS(a2."departure_longitude")) / 2), 2))) AS "distance_km"
+FROM ( 
+    SELECT 
+        LEAST(a1."city", a2."city") AS "city1", 
+        GREATEST(a1."city", a2."city") AS "city2",
+        SPLIT_PART(REPLACE(REPLACE(a1."coordinates", '(', ''), ')', ''), ',', 2)::FLOAT AS "departure_latitude",
+        SPLIT_PART(REPLACE(REPLACE(a1."coordinates", '(', ''), ')', ''), ',', 1)::FLOAT AS "departure_longitude",
+        SPLIT_PART(REPLACE(REPLACE(a2."coordinates", '(', ''), ')', ''), ',', 2)::FLOAT AS "arrival_latitude",
+        SPLIT_PART(REPLACE(REPLACE(a2."coordinates", '(', ''), ')', ''), ',', 1)::FLOAT AS "arrival_longitude"
+    FROM 
+        AIRLINES.AIRLINES.FLIGHTS f
+    JOIN 
+        AIRLINES.AIRLINES.AIRPORTS_DATA a1 
+    ON 
+        f."departure_airport" = a1."airport_code"
+    JOIN 
+        AIRLINES.AIRLINES.AIRPORTS_DATA a2 
+    ON 
+        f."arrival_airport" = a2."airport_code"
+) AS city_coordinates
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:50:31 - Thread-644 (execute) - INFO - [Error occurred]
+{'status': 'error', 'error_msg': '##ERROR##000904 (42000): SQL compilation error: error line 4 at position 44\ninvalid identifier \'A2."departure_latitude"\''}
+[Error occurred]
+2025-07-01 04:51:51 - Thread-644 (execute) - INFO - [Corrected SQL]
+The error is due to the outer query referencing `a2."departure_latitude"`, which is not defined in its scope. The inner subquery (`city_coordinates`) calculates `departure_latitude`, `departure_longitude`, `arrival_latitude`, and `arrival_longitude` as column outputs, without any references to the original table aliases (`a1` or `a2`). Therefore, the outer query must reference the columns exposed by the subquery (`city_coordinates`) instead of invalid table aliases.
+
+### Thinking Process:
+1. **Understand the Error Scope**:
+   - The outer query mistakenly tries to access `a1` and `a2` table aliases, but these are only valid inside the subquery.
+   - The subquery exposes specific calculated columns: `city1`, `city2`, `departure_latitude`, `departure_longitude`, `arrival_latitude`, and `arrival_longitude`.
+
+2. **Plan the Fix**:
+   - Replace the invalid table alias references (`a1` and `a2`) in the outer query with the correct subquery column names (`departure_latitude`, `departure_longitude`, `arrival_latitude`, `arrival_longitude`).
+   - Ensure that the logic of the query, including the Haversine formula, remains intact.
+
+3. **Implement the Fix**:
+   - Modify the outer query to use the defined columns from the subquery instead of undefined table aliases.
+
+Here is the corrected SQL:
+
+```sql
+-- Description: Calculate the Haversine formula for each unique city pair based on the departure and arrival coordinates using subquery output.
+SELECT 
+    "city1", 
+    "city2", 
+    2 * 6371 * ASIN(SQRT(POWER(SIN((RADIANS("arrival_latitude") - RADIANS("departure_latitude")) / 2), 2) + 
+    COS(RADIANS("departure_latitude")) * COS(RADIANS("arrival_latitude")) * 
+    POWER(SIN((RADIANS("arrival_longitude") - RADIANS("departure_longitude")) / 2), 2))) AS "distance_km"
+FROM ( 
+    SELECT 
+        LEAST(a1."city", a2."city") AS "city1", 
+        GREATEST(a1."city", a2."city") AS "city2",
+        SPLIT_PART(REPLACE(REPLACE(a1."coordinates", '(', ''), ')', ''), ',', 2)::FLOAT AS "departure_latitude",
+        SPLIT_PART(REPLACE(REPLACE(a1."coordinates", '(', ''), ')', ''), ',', 1)::FLOAT AS "departure_longitude",
+        SPLIT_PART(REPLACE(REPLACE(a2."coordinates", '(', ''), ')', ''), ',', 2)::FLOAT AS "arrival_latitude",
+        SPLIT_PART(REPLACE(REPLACE(a2."coordinates", '(', ''), ')', ''), ',', 1)::FLOAT AS "arrival_longitude"
+    FROM 
+        AIRLINES.AIRLINES.FLIGHTS f
+    JOIN 
+        AIRLINES.AIRLINES.AIRPORTS_DATA a1 
+    ON 
+        f."departure_airport" = a1."airport_code"
+    JOIN 
+        AIRLINES.AIRLINES.AIRPORTS_DATA a2 
+    ON 
+        f."arrival_airport" = a2."airport_code"
+) AS city_coordinates
+LIMIT 20;
+```
+
+### Explanation:
+1. **The Subquery (`city_coordinates`)**:
+   - It exposes cleaned and calculated columns: `departure_latitude`, `departure_longitude`, `arrival_latitude`, `arrival_longitude`, `city1`, and `city2`.
+   - The `REPLACE` function cleans parentheses from the `coordinates` column, and `SPLIT_PART` extracts longitude and latitude values as numeric (`FLOAT`).
+
+2. **The Outer Query**:
+   - Properly references the subquery’s output columns (`departure_latitude`, `departure_longitude`, `arrival_latitude`, and `arrival_longitude`) for the Haversine formula.
+   - Makes no reference to invalid table aliases (`a1`, `a2`) that are not available outside the subquery.
+
+3. **Haversine Formula**:
+   - The formula calculates the great-circle distance in kilometers between two points on the Earth's surface using latitude and longitude.
+
+This query now properly references the subquery output and avoids scope issues, resolving the error while computing the desired distances.
+[Corrected SQL]
+2025-07-01 04:51:51 - Thread-644 (execute) - INFO - [Results for corrected sql]
+city1,city2,distance_km
+"{""en"": ""Bratsk"", ""ru"": ""Братск""}","{""en"": ""Moscow"", ""ru"": ""Москва""}",3834.2424169652813
+"{""en"": ""Khanty-Mansiysk"", ""ru"": ""Ханты-Мансийск""}","{""en"": ""Moscow"", ""ru"": ""Москва""}",1932.4018710835153
+"{""en"": ""Moscow"", ""ru"": ""Москва""}","{""en"": ""Sochi"", ""ru"": ""Сочи""}",1363.7607977025932
+"{""en"": ""Moscow"", ""ru"": ""Москва""}","{""en"": ""Ufa"", ""ru"": ""Уфа""}",1176.4833028002195
+"{""en"": ""Moscow"", ""ru"": ""Москва""}",
+
+[Results for corrected sql]
+2025-07-01 04:52:11 - Thread-644 (execute) - INFO - [Corrected other sqls]
+```sql
+-- Description: Calculate average distance between unique city pairs using Haversine distances summed over all flights between them.
+-- Corrected to clean parentheses from the "coordinates" field for proper longitude and latitude extraction.
+WITH distance_calculations AS (
+    SELECT 
+        LEAST(a1."city", a2."city") AS "city1", 
+        GREATEST(a1."city", a2."city") AS "city2",
+        2 * 6371 * ASIN(SQRT(POWER(SIN((RADIANS("arrival_latitude") - RADIANS("departure_latitude")) / 2), 2) + 
+        COS(RADIANS("departure_latitude")) * COS(RADIANS("arrival_latitude")) * 
+        POWER(SIN((RADIANS("arrival_longitude") - RADIANS("departure_longitude")) / 2), 2))) AS "distance_km"
+    FROM ( 
+        SELECT 
+            SPLIT_PART(REPLACE(REPLACE(a1."coordinates", '(', ''), ')', ''), ',', 2)::FLOAT AS "departure_latitude",
+            SPLIT_PART(REPLACE(REPLACE(a1."coordinates", '(', ''), ')', ''), ',', 1)::FLOAT AS "departure_longitude",
+            SPLIT_PART(REPLACE(REPLACE(a2."coordinates", '(', ''), ')', ''), ',', 2)::FLOAT AS "arrival_latitude",
+            SPLIT_PART(REPLACE(REPLACE(a2."coordinates", '(', ''), ')', ''), ',', 1)::FLOAT AS "arrival_longitude",
+            LEAST(a1."city", a2."city") AS "city1",
+            GREATEST(a1."city", a2."city") AS "city2"
+        FROM 
+            AIRLINES.AIRLINES.FLIGHTS f
+        JOIN 
+            AIRLINES.AIRLINES.AIRPORTS_DATA a1
+        ON 
+            f."departure_airport" = a1."airport_code"
+        JOIN 
+            AIRLINES.AIRLINES.AIRPORTS_DATA a2
+        ON 
+            f."arrival_airport" = a2."airport_code"
+    ) AS coordinates
+)
+SELECT 
+    "city1", 
+    "city2", 
+    AVG("distance_km") AS "average_distance"
+FROM 
+    distance_calculations
+GROUP BY 
+    "city1", 
+    "city2"
+ORDER BY 
+    "average_distance" DESC
+LIMIT 20;
+```
+
+```sql
+-- Description: Distribute unique city pairs into the specified distance ranges (bins) based on their average route distance.
+-- No corrections are needed here since this query operates on already-calculated data and does not directly access the "coordinates" column.
+WITH average_distances AS (
+    SELECT 
+        "city1", 
+        "city2", 
+        AVG("distance_km") AS "average_distance"
+    FROM distance_calculations
+    GROUP BY "city1", "city2"
+)
+SELECT 
+    CASE 
+        WHEN "average_distance" BETWEEN 0 AND 1000 THEN '0-1000'
+        WHEN "average_distance" BETWEEN 1000 AND 2000 THEN '1000-2000'
+        WHEN "average_distance" BETWEEN 2000 AND 3000 THEN '2000-3000'
+        WHEN "average_distance" BETWEEN 3000 AND 4000 THEN '3000-4000'
+        WHEN "average_distance" BETWEEN 4000 AND 5000 THEN '4000-5000'
+        ELSE '6000+'
+    END AS "distance_range",
+    COUNT(*) AS "pair_count"
+FROM 
+    average_distances
+GROUP BY 
+    "distance_range"
+ORDER BY 
+    "pair_count" ASC
+LIMIT 20;
+```
+
+```sql
+-- Description: Identify the distance range with the fewest unique city pairs based on the previous query.
+-- No corrections are needed since this query uses aggregated data that does not involve direct coordinate processing.
+WITH range_counts AS (
+    SELECT 
+        CASE 
+            WHEN "average_distance" BETWEEN 0 AND 1000 THEN '0-1000'
+            WHEN "average_distance" BETWEEN 1000 AND 2000 THEN '1000-2000'
+            WHEN "average_distance" BETWEEN 2000 AND 3000 THEN '2000-3000'
+            WHEN "average_distance" BETWEEN 3000 AND 4000 THEN '3000-4000'
+            WHEN "average_distance" BETWEEN 4000 AND 5000 THEN '4000-5000'
+            ELSE '6000+'
+        END AS "distance_range",
+        COUNT(*) AS "pair_count"
+    FROM 
+        average_distances
+    GROUP BY 
+        "distance_range"
+)
+SELECT 
+    "distance_range", 
+    "pair_count"
+FROM 
+    range_counts
+ORDER BY 
+    "pair_count" ASC
+LIMIT 1;
+```
+[Corrected other sqls]
+2025-07-01 04:52:11 - Thread-644 (execute) - INFO - [Successfully corrected]
+Successfully executed. SQL:
+-- Description: Calculate the Haversine formula for each unique city pair based on the departure and arrival coordinates.
+-- Corrected to clean parentheses from the "coordinates" field for longitude and latitude extraction.
+SELECT 
+    "city1", 
+    "city2", 
+    2 * 6371 * ASIN(SQRT(POWER(SIN((RADIANS(a2."departure_latitude") - RADIANS(a1."departure_latitude")) / 2), 2) + 
+    COS(RADIANS(a1."departure_latitude")) * COS(RADIANS(a2."departure_latitude")) * 
+    POWER(SIN((RADIANS(a1."departure_longitude") - RADIANS(a2."departure_longitude")) / 2), 2))) AS "distance_km"
+FROM ( 
+    SELECT 
+        LEAST(a1."city", a2."city") AS "city1", 
+        GREATEST(a1."city", a2."city") AS "city2",
+        SPLIT_PART(REPLACE(REPLACE(a1."coordinates", '(', ''), ')', ''), ',', 2)::FLOAT AS "departure_latitude",
+        SPLIT_PART(REPLACE(REPLACE(a1."coordinates", '(', ''), ')', ''), ',', 1)::FLOAT AS "departure_longitude",
+        SPLIT_PART(REPLACE(REPLACE(a2."coordinates", '(', ''), ')', ''), ',', 2)::FLOAT AS "arrival_latitude",
+        SPLIT_PART(REPLACE(REPLACE(a2."coordinates", '(', ''), ')', ''), ',', 1)::FLOAT AS "arrival_longitude"
+    FROM 
+        AIRLINES.AIRLINES.FLIGHTS f
+    JOIN 
+        AIRLINES.AIRLINES.AIRPORTS_DATA a1 
+    ON 
+        f."departure_airport" = a1."airport_code"
+    JOIN 
+        AIRLINES.AIRLINES.AIRPORTS_DATA a2 
+    ON 
+        f."arrival_airport" = a2."airport_code"
+) AS city_coordinates
+LIMIT 20;
+Results:
+city1,city2,distance_km
+"{""en"": ""Bratsk"", ""ru"": ""Братск""}","{""en"": ""Moscow"", ""ru"": ""Москва""}",3834.2424169652813
+"{""en"": ""Khanty-Mansiysk"", ""ru"": ""Ханты-Мансийск""}","{""en"": ""Moscow"", ""ru"": ""Москва""}",1932.4018710835153
+"{""en"": ""Moscow"", ""ru"": ""Москва""}","{""en"": ""Sochi"", ""ru"": ""Сочи""}",1363.7607977025932
+"{""en"": ""Moscow"", ""ru"": ""Москва""}","{""en"": ""Ufa"", ""ru"": ""Уфа""}",1176.4833028002195
+"{""en"": ""Moscow"", ""ru"": ""Москва""}",
+
+[Successfully corrected]
+2025-07-01 04:52:11 - Thread-644 (execute) - INFO - itercount: 0
+2025-07-01 04:52:11 - Thread-644 (execute) - INFO - [Self-refine]
+Table full name: AIRLINES.AIRLINES.FLIGHTS
+Column name: aircraft_code Type: TEXT
+Column name: departure_airport Type: TEXT
+Column name: scheduled_departure Type: TEXT
+Column name: flight_id Type: NUMBER
+Column name: arrival_airport Type: TEXT
+Column name: flight_no Type: TEXT
+Sample rows:
+[{'flight_id': 5502, 'flight_no': 'PG0529', 'scheduled_departure': '2017-09-12 09:50:00+03', 'departure_airport': 'SVO', 'arrival_airport': 'UFA', 'aircraft_code': '763'}, {'flight_id': 7784, 'flight_no': 'PG0667', 'scheduled_departure': '2017-09-10 15:00:00+03', 'departure_airport': 'SVO', 'arrival_airport': 'KRO', 'aircraft_code': 'CR2'}, {'flight_id': 9478, 'flight_no': 'PG0360', 'scheduled_departure': '2017-08-28 09:00:00+03', 'departure_airport': 'LED', 'arrival_airport': 'REN', 'aircraft_code': 'CR2'}, {'flight_id': 11085, 'flight_no': 'PG0569', 'scheduled_departure': '2017-08-24 15:05:00+03', 'departure_airport': 'SVX', 'arrival_airport': 'SCW', 'aircraft_code': '733'}, {'flight_id': 11847, 'flight_no': 'PG0498', 'scheduled_departure': '2017-09-12 10:15:00+03', 'departure_airport': 'KZN', 'arrival_airport': 'IKT', 'aircraft_code': '319'}]
+--------------------------------------------------
+Table full name: AIRLINES.AIRLINES.AIRCRAFTS_DATA
+Column name: range Type: NUMBER
+Column name: aircraft_code Type: TEXT
+Sample rows:
+[{'aircraft_code': '773', 'range': 11100}, {'aircraft_code': 'SU9', 'range': 3000}, {'aircraft_code': '320', 'range': 5700}, {'aircraft_code': '321', 'range': 5600}, {'aircraft_code': '319', 'range': 6700}]
+--------------------------------------------------
+Table full name: AIRLINES.AIRLINES.AIRPORTS_DATA
+Column name: airport_code Type: TEXT
+Column name: coordinates Type: TEXT
+Column name: airport_name Type: TEXT
+Column name: timezone Type: TEXT
+Column name: city Type: TEXT
+Sample rows:
+[{'airport_code': 'YKS', 'airport_name': '{"en": "Yakutsk Airport", "ru": "Якутск"}', 'city': '{"en": "Yakutsk", "ru": "Якутск"}', 'coordinates': '(129.77099609375,62.0932998657226562)', 'timezone': 'Asia/Yakutsk'}, {'airport_code': 'VVO', 'airport_name': '{"en": "Vladivostok International Airport", "ru": "Владивосток"}', 'city': '{"en": "Vladivostok", "ru": "Владивосток"}', 'coordinates': '(132.147994995117188,43.3989982604980469)', 'timezone': 'Asia/Vladivostok'}, {'airport_code': 'SGC', 'airport_name': '{"en": "Surgut Airport", "ru": "Сургут"}', 'city': '{"en": "Surgut", "ru": "Сургут"}', 'coordinates': '(73.4018020629882812,61.3437004089355469)', 'timezone': 'Asia/Yekaterinburg'}, {'airport_code': 'MRV', 'airport_name': '{"en": "Mineralnyye Vody Airport", "ru": "Минеральные Воды"}', 'city': '{"en": "Mineralnye Vody", "ru": "Минеральные Воды"}', 'coordinates': '(43.0819015502929688,44.2251014709472656)', 'timezone': 'Europe/Moscow'}, {'airport_code': 'STW', 'airport_name': '{"en": "Stavropol Shpakovskoye Airport", "ru": "Ставрополь"}', 'city': '{"en": "Stavropol", "ru": "Ставрополь"}', 'coordinates': '(42.1128005981445312,45.1091995239257812)', 'timezone': 'Europe/Moscow'}]
+--------------------------------------------------
+External knowledge that might be helpful: 
+
+# Flight Route Distance Calculation
+
+## Introduction
+
+This document describes the method used to calculate the distance between two cities for flight routes. The calculation is based on the Haversine formula, which is commonly used to find the shortest distance between two points on a sphere given their latitude and longitude. This method is especially useful for determining flight distances between airports located in different cities around the world.
+
+## City and Coordinate Extraction
+
+For each flight, the following data is obtained:
+
+- **Departure city** (referred to as `from_city`) and its geographical coordinates (longitude and latitude).
+- **Arrival city** (referred to as `to_city`) and its geographical coordinates (longitude and latitude).
+
+The coordinates are extracted as decimal values, with longitude and latitude represented in degrees. This ensures that trigonometric operations can be applied during the distance calculation.
+
+## Haversine Formula
+
+The Haversine formula is used to calculate the great-circle distance between two points on a sphere using their latitude and longitude. The formula is given as:
+
+\[
+d = 2r \cdot \arcsin\left(\sqrt{\sin^2\left(\frac{\Delta \phi}{2}\right) + \cos(\phi_1) \cdot \cos(\phi_2) \cdot \sin^2\left(\frac{\Delta \lambda}{2}\right)}\right)
+\]
+
+Where:
+
+- \( d \) is the distance between the two points (in kilometers).
+- \( r \) is the radius of the Earth (approximately 6371 km).
+- \( \phi_1 \) and \( \phi_2 \) are the latitudes of the departure and arrival points, respectively, in radians.
+- \( \Delta \phi = \phi_2 - \phi_1 \) is the difference in latitudes.
+- \( \lambda_1 \) and \( \lambda_2 \) are the longitudes of the departure and arrival points, respectively, in radians.
+- \( \Delta \lambda = \lambda_2 - \lambda_1 \) is the difference in longitudes.
+
+### Conversion to Radians
+
+Since the input coordinates are in degrees, they must be converted to radians before applying the Haversine formula. This conversion is done using the formula:
+
+\[
+\text{radians} = \text{degrees} \times \frac{\pi}{180}
+\]
+
+## Symmetry of Routes
+
+To identify unique flight routes between two cities, we standardize the order of cities in each route. Specifically, we ensure that the lexicographically smaller city name is always listed as the first city (`city1`), and the larger city is listed as the second city (`city2`). This ensures that a flight from City A to City B is treated the same as a flight from City B to City A.
+
+## Average Route Distance
+
+Once the distances for all flights between two cities are computed, the average distance for each city pair is calculated by summing the distances and dividing by the total number of flights between those cities:
+
+\[
+\text{Average Distance} = \frac{\sum \text{Flight Distances}}{\text{Number of Flights}}
+\]
+
+## Conclusion
+
+This method of flight route distance calculation provides a reliable way to determine the great-circle distance between cities based on the coordinates of their respective airports. The use of the Haversine formula ensures accurate results for distances on the Earth's surface, making it ideal for aviation and travel analysis.
+
+The table structure information is ({database name: {schema name: [table name]}}): 
+{'AIRLINES': {'AIRLINES': ['FLIGHTS', 'AIRCRAFTS_DATA', 'AIRPORTS_DATA']}}
+
+Some few-shot examples after column exploration may be helpful:
+Query:
+-- Description: Retrieve all unique pairs of departure and arrival city codes along with their coordinates for mapping city pairs based on flight routes.
+SELECT 
+    f."departure_airport", 
+    f."arrival_airport", 
+    a1."coordinates" AS "departure_coordinates", 
+    a2."coordinates" AS "arrival_coordinates"
+FROM 
+    AIRLINES.AIRLINES.FLIGHTS f
+JOIN 
+    AIRLINES.AIRLINES.AIRPORTS_DATA a1
+ON 
+    f."departure_airport" = a1."airport_code"
+JOIN 
+    AIRLINES.AIRLINES.AIRPORTS_DATA a2
+ON 
+    f."arrival_airport" = a2."airport_code"
+LIMIT 20;
+Answer:
+departure_airport,arrival_airport,departure_coordinates,arrival_coordinates
+DME,BTK,"(37.9062995910644531,55.4087982177734375)","(101.697998046875,56.3706016540527344)"
+VKO,HMA,"(37.2615013122999983,55.5914993286000012)","(69.0860977172851562,61.0284996032714844)"
+VKO,AER,"(37.2615013122999983,55.5914993286000012)","(39.9566001892089986,43.4499015808110016)"
+SVO,UFA,"(37.4146000000000001,55.9725990000000024)","(55.8744010925289984,54.5574989318850001)"
+SVO,ULV,"(37.4146000000000001,55.97259
+Query:
+-- Description: Create a distinct list of flights with associated aircraft range based on aircraft codes for filtering by flight route distance feasibility.
+-- No corrections are needed for this query because it does not involve geographical coordinates, so parentheses are not an issue.
+SELECT DISTINCT 
+    f."flight_no", 
+    f."aircraft_code", 
+    ad."range"
+FROM 
+    AIRLINES.AIRLINES.FLIGHTS f
+JOIN 
+    AIRLINES.AIRLINES.AIRCRAFTS_DATA ad 
+ON 
+    f."aircraft_code" = ad."aircraft_code"
+LIMIT 20;
+Answer:
+flight_no,aircraft_code,range
+PG0134,319,6700
+PG0561,763,7900
+PG0461,SU9,3000
+PG0569,733,4200
+PG0612,CN1,1200
+PG0010,CN1,1200
+PG0035,CN1,1200
+PG0076,CR2,2700
+PG0632,CR2,2700
+PG0674,CR2,2700
+PG0216,763,7900
+PG0517,763,7900
+PG0168,319,6700
+PG0144,763,7900
+PG0519,319,6700
+PG0542,SU9,3000
+PG0249,CR2,2700
+PG0645,CR2,2700
+PG0118,SU9,3000
+PG0229,321,5600
+Query:
+-- Description: Retrieve distinct flight routes between departure and arrival cities for standardizing unique city pairs.
+-- No changes are necessary for this query as it works with the "city" column and does not involve the "coordinates" column or numeric parsing.
+SELECT DISTINCT 
+    LEAST(a1."city", a2."city") AS "city1", 
+    GREATEST(a1."city", a2."city") AS "city2"
+FROM 
+    AIRLINES.AIRLINES.FLIGHTS f
+JOIN 
+    AIRLINES.AIRLINES.AIRPORTS_DATA a1 
+ON 
+    f."departure_airport" = a1."airport_code"
+JOIN 
+    AIRLINES.AIRLINES.AIRPORTS_DATA a2 
+ON 
+    f."arrival_airport" = a2."airport_code"
+LIMIT 20;
+Answer:
+city1,city2
+"{""en"": ""Moscow"", ""ru"": ""Москва""}","{""en"": ""Ufa"", ""ru"": ""Уфа""}"
+"{""en"": ""Moscow"", ""ru"": ""Москва""}","{""en"": ""Ulyanovsk"", ""ru"": ""Ульяновск""}"
+"{""en"": ""Kurgan"", ""ru"": ""Курган""}","{""en"": ""Moscow"", ""ru"": ""Москва""}"
+"{""en"": ""Orenburg"", ""ru"": ""Оренбург""}","{""en"": ""St. Petersburg"", ""ru"": ""Санкт-Петербург""}"
+"{""en"": ""Syktyvkar"", ""ru"": ""Сыктывкар""}","{""en"": ""Yekaterinburg"", ""ru"": ""Екатеринбург""}"
+"{""en"": ""
+Task: Distribute all the unique city pairs into the distance ranges 0, 1000, 2000, 3000, 4000, 5000, and 6000+, based on their average distance of all routes between them. Then how many pairs are there in the distance range with the fewest unique city paires?
+Another way to say it: Distribute all the unique city pairs into the distance ranges 0, 1000, 2000, 3000, 4000, 5000, and 6000+, based on their average distance of all routes between them. Then how many pairs are there in the distance range with the fewest unique city paires?
+
+Please think step by step and answer only one complete SQL in snowflake dialect in ```sql``` format.
+SQL usage example: ```sql
+SELECT "COLUMN_NAME" FROM DATABASE.SCHEMA.TABLE WHERE ... ``` (Adjust "DATABASE", "SCHEMA", and "TABLE" to match actual names, ensure all column names are enclosed in double quotations)
+Here are some useful tips for answering:
+When performing a UNION operation on many tables, ensure that all table names are explicitly listed. Union first and then add condition and selection. e.g. SELECT "col1", "col2" FROM (TABLE1 UNION ALL TABLE2) WHERE ...; Don't write sqls as (SELECT col1, col2 FROM TABLE1 WHERE ...) UNION ALL (SELECT col1, col2 FROM TABLE2 WHERE ...); Don't use ['-- Include all', '-- Omit', '-- Continue', '-- Union all', '-- ...', '-- List all', '-- Replace this', '-- Each table', '-- Add other'] to omit any table. Table names here: The table structure information is ({database name: {schema name: [table name]}}): 
+{'AIRLINES': {'AIRLINES': ['FLIGHTS', 'AIRCRAFTS_DATA', 'AIRPORTS_DATA']}}
+
+When using ORDER BY xxx DESC, add NULLS LAST to exclude null records: ORDER BY xxx DESC NULLS LAST.
+When asked something without stating name or id, return both of them. e.g. Which products ...? The answer should include product_name and product_id.
+When asked percentage decrease, you should return a positive value. e.g. How many percentage points in 2021 decrease compared to ...? The answer should be a positive value indicating the decresed number. Try to use ABS().
+If asked two tables, you should reply with the last one instead of combining two tables. e.g. Identifying the top five states ... examine the state that ranks fourth overall and identify its top five counties. You should only answer top five counties.
+Use ST_DISTANCE to calculate distance between two geographic points for more accurate answer.
+If the task description does not specify the number of decimal places, retain all decimals to four places.
+
+[Self-refine]
+2025-07-01 04:52:42 - Thread-644 (execute) - INFO - [Try to run SQL in self-refine]
+```sql
+WITH CityPairs AS (
+    SELECT 
+        LEAST(a1."city", a2."city") AS "city1", 
+        GREATEST(a1."city", a2."city") AS "city2",
+        CAST(SPLIT_PART(a1."coordinates", ',', 1) AS FLOAT) AS "departure_longitude",
+        CAST(SPLIT_PART(a1."coordinates", ',', 2) AS FLOAT) AS "departure_latitude",
+        CAST(SPLIT_PART(a2."coordinates", ',', 1) AS FLOAT) AS "arrival_longitude",
+        CAST(SPLIT_PART(a2."coordinates", ',', 2) AS FLOAT) AS "arrival_latitude"
+    FROM 
+        AIRLINES.AIRLINES.FLIGHTS f
+    JOIN 
+        AIRLINES.AIRLINES.AIRPORTS_DATA a1 
+    ON 
+        f."departure_airport" = a1."airport_code"
+    JOIN 
+        AIRLINES.AIRLINES.AIRPORTS_DATA a2 
+    ON 
+        f."arrival_airport" = a2."airport_code"
+), 
+Distances AS (
+    SELECT 
+        "city1",
+        "city2",
+        AVG(
+            2 * 6371 * ASIN(SQRT(
+                POWER(SIN(RADIANS("arrival_latitude" - "departure_latitude") / 2), 2)
+                + COS(RADIANS("departure_latitude")) * COS(RADIANS("arrival_latitude")) 
+                * POWER(SIN(RADIANS("arrival_longitude" - "departure_longitude") / 2), 2)
+            ))
+        ) AS "avg_distance"
+    FROM 
+        CityPairs
+    GROUP BY 
+        "city1", "city2"
+), 
+DistanceRanges AS (
+    SELECT 
+        "city1",
+        "city2",
+        "avg_distance",
+        CASE 
+            WHEN "avg_distance" BETWEEN 0 AND 999 THEN '0-1000'
+            WHEN "avg_distance" BETWEEN 1000 AND 1999 THEN '1000-2000'
+            WHEN "avg_distance" BETWEEN 2000 AND 2999 THEN '2000-3000'
+            WHEN "avg_distance" BETWEEN 3000 AND 3999 THEN '3000-4000'
+            WHEN "avg_distance" BETWEEN 4000 AND 4999 THEN '4000-5000'
+            WHEN "avg_distance" BETWEEN 5000 AND 5999 THEN '5000-6000'
+            ELSE '6000+'
+        END AS "distance_range"
+    FROM 
+        Distances
+), 
+RangeCounts AS (
+    SELECT 
+        "distance_range",
+        COUNT(DISTINCT "city1" || '-' || "city2") AS "pair_count"
+    FROM 
+        DistanceRanges
+    GROUP BY 
+        "distance_range"
+)
+SELECT 
+    "distance_range",
+    "pair_count"
+FROM 
+    RangeCounts
+WHERE 
+    "pair_count" = (
+        SELECT MIN("pair_count") FROM RangeCounts
+    );
+```
+[Try to run SQL in self-refine]
+2025-07-01 04:52:48 - Thread-644 (execute) - INFO - itercount: 1
+2025-07-01 04:52:48 - Thread-644 (execute) - INFO - [Self-refine]
+Input sql:
+WITH CityPairs AS (
+    SELECT 
+        LEAST(a1."city", a2."city") AS "city1", 
+        GREATEST(a1."city", a2."city") AS "city2",
+        CAST(SPLIT_PART(a1."coordinates", ',', 1) AS FLOAT) AS "departure_longitude",
+        CAST(SPLIT_PART(a1."coordinates", ',', 2) AS FLOAT) AS "departure_latitude",
+        CAST(SPLIT_PART(a2."coordinates", ',', 1) AS FLOAT) AS "arrival_longitude",
+        CAST(SPLIT_PART(a2."coordinates", ',', 2) AS FLOAT) AS "arrival_latitude"
+    FROM 
+        AIRLINES.AIRLINES.FLIGHTS f
+    JOIN 
+        AIRLINES.AIRLINES.AIRPORTS_DATA a1 
+    ON 
+        f."departure_airport" = a1."airport_code"
+    JOIN 
+        AIRLINES.AIRLINES.AIRPORTS_DATA a2 
+    ON 
+        f."arrival_airport" = a2."airport_code"
+), 
+Distances AS (
+    SELECT 
+        "city1",
+        "city2",
+        AVG(
+            2 * 6371 * ASIN(SQRT(
+                POWER(SIN(RADIANS("arrival_latitude" - "departure_latitude") / 2), 2)
+                + COS(RADIANS("departure_latitude")) * COS(RADIANS("arrival_latitude")) 
+                * POWER(SIN(RADIANS("arrival_longitude" - "departure_longitude") / 2), 2)
+            ))
+        ) AS "avg_distance"
+    FROM 
+        CityPairs
+    GROUP BY 
+        "city1", "city2"
+), 
+DistanceRanges AS (
+    SELECT 
+        "city1",
+        "city2",
+        "avg_distance",
+        CASE 
+            WHEN "avg_distance" BETWEEN 0 AND 999 THEN '0-1000'
+            WHEN "avg_distance" BETWEEN 1000 AND 1999 THEN '1000-2000'
+            WHEN "avg_distance" BETWEEN 2000 AND 2999 THEN '2000-3000'
+            WHEN "avg_distance" BETWEEN 3000 AND 3999 THEN '3000-4000'
+            WHEN "avg_distance" BETWEEN 4000 AND 4999 THEN '4000-5000'
+            WHEN "avg_distance" BETWEEN 5000 AND 5999 THEN '5000-6000'
+            ELSE '6000+'
+        END AS "distance_range"
+    FROM 
+        Distances
+), 
+RangeCounts AS (
+    SELECT 
+        "distance_range",
+        COUNT(DISTINCT "city1" || '-' || "city2") AS "pair_count"
+    FROM 
+        DistanceRanges
+    GROUP BY 
+        "distance_range"
+)
+SELECT 
+    "distance_range",
+    "pair_count"
+FROM 
+    RangeCounts
+WHERE 
+    "pair_count" = (
+        SELECT MIN("pair_count") FROM RangeCounts
+    );
+The error information is:
+{'status': 'error', 'error_msg': "##ERROR##100038 (22018): Numeric value '56.3706016540527344)' is not recognized"}
+Please correct it and output only 1 complete SQL query.
+[Self-refine]
+2025-07-01 04:53:05 - Thread-644 (execute) - INFO - [Try to run SQL in self-refine]
+```sql
+WITH CityPairs AS (
+    SELECT 
+        LEAST(a1."city", a2."city") AS "city1", 
+        GREATEST(a1."city", a2."city") AS "city2",
+        CAST(SPLIT_PART(TRIM(')' FROM a1."coordinates"), ',', 1) AS FLOAT) AS "departure_longitude",
+        CAST(SPLIT_PART(TRIM(')' FROM a1."coordinates"), ',', 2) AS FLOAT) AS "departure_latitude",
+        CAST(SPLIT_PART(TRIM(')' FROM a2."coordinates"), ',', 1) AS FLOAT) AS "arrival_longitude",
+        CAST(SPLIT_PART(TRIM(')' FROM a2."coordinates"), ',', 2) AS FLOAT) AS "arrival_latitude"
+    FROM 
+        AIRLINES.AIRLINES.FLIGHTS f
+    JOIN 
+        AIRLINES.AIRLINES.AIRPORTS_DATA a1 
+    ON 
+        f."departure_airport" = a1."airport_code"
+    JOIN 
+        AIRLINES.AIRLINES.AIRPORTS_DATA a2 
+    ON 
+        f."arrival_airport" = a2."airport_code"
+), 
+Distances AS (
+    SELECT 
+        "city1",
+        "city2",
+        AVG(
+            2 * 6371 * ASIN(SQRT(
+                POWER(SIN(RADIANS("arrival_latitude" - "departure_latitude") / 2), 2)
+                + COS(RADIANS("departure_latitude")) * COS(RADIANS("arrival_latitude")) 
+                * POWER(SIN(RADIANS("arrival_longitude" - "departure_longitude") / 2), 2)
+            ))
+        ) AS "avg_distance"
+    FROM 
+        CityPairs
+    GROUP BY 
+        "city1", "city2"
+), 
+DistanceRanges AS (
+    SELECT 
+        "city1",
+        "city2",
+        "avg_distance",
+        CASE 
+            WHEN "avg_distance" BETWEEN 0 AND 999 THEN '0-1000'
+            WHEN "avg_distance" BETWEEN 1000 AND 1999 THEN '1000-2000'
+            WHEN "avg_distance" BETWEEN 2000 AND 2999 THEN '2000-3000'
+            WHEN "avg_distance" BETWEEN 3000 AND 3999 THEN '3000-4000'
+            WHEN "avg_distance" BETWEEN 4000 AND 4999 THEN '4000-5000'
+            WHEN "avg_distance" BETWEEN 5000 AND 5999 THEN '5000-6000'
+            ELSE '6000+'
+        END AS "distance_range"
+    FROM 
+        Distances
+), 
+RangeCounts AS (
+    SELECT 
+        "distance_range",
+        COUNT(DISTINCT "city1" || '-' || "city2") AS "pair_count"
+    FROM 
+        DistanceRanges
+    GROUP BY 
+        "distance_range"
+)
+SELECT 
+    "distance_range",
+    "pair_count"
+FROM 
+    RangeCounts
+WHERE 
+    "pair_count" = (
+        SELECT MIN("pair_count") FROM RangeCounts
+    );
+```
+[Try to run SQL in self-refine]
+2025-07-01 04:53:05 - Thread-644 (execute) - INFO - itercount: 2
+2025-07-01 04:53:05 - Thread-644 (execute) - INFO - [Self-refine]
+Input sql:
+WITH CityPairs AS (
+    SELECT 
+        LEAST(a1."city", a2."city") AS "city1", 
+        GREATEST(a1."city", a2."city") AS "city2",
+        CAST(SPLIT_PART(TRIM(')' FROM a1."coordinates"), ',', 1) AS FLOAT) AS "departure_longitude",
+        CAST(SPLIT_PART(TRIM(')' FROM a1."coordinates"), ',', 2) AS FLOAT) AS "departure_latitude",
+        CAST(SPLIT_PART(TRIM(')' FROM a2."coordinates"), ',', 1) AS FLOAT) AS "arrival_longitude",
+        CAST(SPLIT_PART(TRIM(')' FROM a2."coordinates"), ',', 2) AS FLOAT) AS "arrival_latitude"
+    FROM 
+        AIRLINES.AIRLINES.FLIGHTS f
+    JOIN 
+        AIRLINES.AIRLINES.AIRPORTS_DATA a1 
+    ON 
+        f."departure_airport" = a1."airport_code"
+    JOIN 
+        AIRLINES.AIRLINES.AIRPORTS_DATA a2 
+    ON 
+        f."arrival_airport" = a2."airport_code"
+), 
+Distances AS (
+    SELECT 
+        "city1",
+        "city2",
+        AVG(
+            2 * 6371 * ASIN(SQRT(
+                POWER(SIN(RADIANS("arrival_latitude" - "departure_latitude") / 2), 2)
+                + COS(RADIANS("departure_latitude")) * COS(RADIANS("arrival_latitude")) 
+                * POWER(SIN(RADIANS("arrival_longitude" - "departure_longitude") / 2), 2)
+            ))
+        ) AS "avg_distance"
+    FROM 
+        CityPairs
+    GROUP BY 
+        "city1", "city2"
+), 
+DistanceRanges AS (
+    SELECT 
+        "city1",
+        "city2",
+        "avg_distance",
+        CASE 
+            WHEN "avg_distance" BETWEEN 0 AND 999 THEN '0-1000'
+            WHEN "avg_distance" BETWEEN 1000 AND 1999 THEN '1000-2000'
+            WHEN "avg_distance" BETWEEN 2000 AND 2999 THEN '2000-3000'
+            WHEN "avg_distance" BETWEEN 3000 AND 3999 THEN '3000-4000'
+            WHEN "avg_distance" BETWEEN 4000 AND 4999 THEN '4000-5000'
+            WHEN "avg_distance" BETWEEN 5000 AND 5999 THEN '5000-6000'
+            ELSE '6000+'
+        END AS "distance_range"
+    FROM 
+        Distances
+), 
+RangeCounts AS (
+    SELECT 
+        "distance_range",
+        COUNT(DISTINCT "city1" || '-' || "city2") AS "pair_count"
+    FROM 
+        DistanceRanges
+    GROUP BY 
+        "distance_range"
+)
+SELECT 
+    "distance_range",
+    "pair_count"
+FROM 
+    RangeCounts
+WHERE 
+    "pair_count" = (
+        SELECT MIN("pair_count") FROM RangeCounts
+    );
+The error information is:
+{'status': 'error', 'error_msg': "##ERROR##001003 (42000): SQL compilation error:\nsyntax error line 5 at position 33 unexpected 'FROM'.\nsyntax error line 5 at position 40 unexpected '.'.\nsyntax error line 5 at position 57 unexpected '',''.\nsyntax error line 5 at position 62 unexpected '1'.\nsyntax error line 5 at position 68 unexpected 'FLOAT'.\nsyntax error line 5 at position 73 unexpected ')'."}
+Please correct it and output only 1 complete SQL query.
+[Self-refine]
+2025-07-01 04:53:16 - Thread-644 (execute) - INFO - [Try to run SQL in self-refine]
+```sql
+WITH CityPairs AS (
+    SELECT 
+        LEAST(a1."city", a2."city") AS "city1", 
+        GREATEST(a1."city", a2."city") AS "city2",
+        CAST(SPLIT_PART(TRIM(')' FROM TRIM('(' FROM a1."coordinates")), ',', 1) AS FLOAT) AS "departure_longitude",
+        CAST(SPLIT_PART(TRIM(')' FROM TRIM('(' FROM a1."coordinates")), ',', 2) AS FLOAT) AS "departure_latitude",
+        CAST(SPLIT_PART(TRIM(')' FROM TRIM('(' FROM a2."coordinates")), ',', 1) AS FLOAT) AS "arrival_longitude",
+        CAST(SPLIT_PART(TRIM(')' FROM TRIM('(' FROM a2."coordinates")), ',', 2) AS FLOAT) AS "arrival_latitude"
+    FROM 
+        AIRLINES.AIRLINES.FLIGHTS f
+    JOIN 
+        AIRLINES.AIRLINES.AIRPORTS_DATA a1 
+    ON 
+        f."departure_airport" = a1."airport_code"
+    JOIN 
+        AIRLINES.AIRLINES.AIRPORTS_DATA a2 
+    ON 
+        f."arrival_airport" = a2."airport_code"
+), 
+Distances AS (
+    SELECT 
+        "city1",
+        "city2",
+        AVG(
+            2 * 6371 * ASIN(SQRT(
+                POWER(SIN(RADIANS(("arrival_latitude" - "departure_latitude") / 2)), 2)
+                + COS(RADIANS("departure_latitude")) * COS(RADIANS("arrival_latitude")) 
+                * POWER(SIN(RADIANS(("arrival_longitude" - "departure_longitude") / 2)), 2)
+            ))
+        ) AS "avg_distance"
+    FROM 
+        CityPairs
+    GROUP BY 
+        "city1", "city2"
+), 
+DistanceRanges AS (
+    SELECT 
+        "city1",
+        "city2",
+        "avg_distance",
+        CASE 
+            WHEN "avg_distance" BETWEEN 0 AND 999 THEN '0-1000'
+            WHEN "avg_distance" BETWEEN 1000 AND 1999 THEN '1000-2000'
+            WHEN "avg_distance" BETWEEN 2000 AND 2999 THEN '2000-3000'
+            WHEN "avg_distance" BETWEEN 3000 AND 3999 THEN '3000-4000'
+            WHEN "avg_distance" BETWEEN 4000 AND 4999 THEN '4000-5000'
+            WHEN "avg_distance" BETWEEN 5000 AND 5999 THEN '5000-6000'
+            ELSE '6000+'
+        END AS "distance_range"
+    FROM 
+        Distances
+), 
+RangeCounts AS (
+    SELECT 
+        "distance_range",
+        COUNT(DISTINCT "city1" || '-' || "city2") AS "pair_count"
+    FROM 
+        DistanceRanges
+    GROUP BY 
+        "distance_range"
+)
+SELECT 
+    "distance_range",
+    "pair_count"
+FROM 
+    RangeCounts
+WHERE 
+    "pair_count" = (
+        SELECT MIN("pair_count") FROM RangeCounts
+    );
+```
+[Try to run SQL in self-refine]
+2025-07-01 04:53:16 - Thread-644 (execute) - INFO - itercount: 3
+2025-07-01 04:53:16 - Thread-644 (execute) - INFO - [Self-refine]
+Input sql:
+WITH CityPairs AS (
+    SELECT 
+        LEAST(a1."city", a2."city") AS "city1", 
+        GREATEST(a1."city", a2."city") AS "city2",
+        CAST(SPLIT_PART(TRIM(')' FROM TRIM('(' FROM a1."coordinates")), ',', 1) AS FLOAT) AS "departure_longitude",
+        CAST(SPLIT_PART(TRIM(')' FROM TRIM('(' FROM a1."coordinates")), ',', 2) AS FLOAT) AS "departure_latitude",
+        CAST(SPLIT_PART(TRIM(')' FROM TRIM('(' FROM a2."coordinates")), ',', 1) AS FLOAT) AS "arrival_longitude",
+        CAST(SPLIT_PART(TRIM(')' FROM TRIM('(' FROM a2."coordinates")), ',', 2) AS FLOAT) AS "arrival_latitude"
+    FROM 
+        AIRLINES.AIRLINES.FLIGHTS f
+    JOIN 
+        AIRLINES.AIRLINES.AIRPORTS_DATA a1 
+    ON 
+        f."departure_airport" = a1."airport_code"
+    JOIN 
+        AIRLINES.AIRLINES.AIRPORTS_DATA a2 
+    ON 
+        f."arrival_airport" = a2."airport_code"
+), 
+Distances AS (
+    SELECT 
+        "city1",
+        "city2",
+        AVG(
+            2 * 6371 * ASIN(SQRT(
+                POWER(SIN(RADIANS(("arrival_latitude" - "departure_latitude") / 2)), 2)
+                + COS(RADIANS("departure_latitude")) * COS(RADIANS("arrival_latitude")) 
+                * POWER(SIN(RADIANS(("arrival_longitude" - "departure_longitude") / 2)), 2)
+            ))
+        ) AS "avg_distance"
+    FROM 
+        CityPairs
+    GROUP BY 
+        "city1", "city2"
+), 
+DistanceRanges AS (
+    SELECT 
+        "city1",
+        "city2",
+        "avg_distance",
+        CASE 
+            WHEN "avg_distance" BETWEEN 0 AND 999 THEN '0-1000'
+            WHEN "avg_distance" BETWEEN 1000 AND 1999 THEN '1000-2000'
+            WHEN "avg_distance" BETWEEN 2000 AND 2999 THEN '2000-3000'
+            WHEN "avg_distance" BETWEEN 3000 AND 3999 THEN '3000-4000'
+            WHEN "avg_distance" BETWEEN 4000 AND 4999 THEN '4000-5000'
+            WHEN "avg_distance" BETWEEN 5000 AND 5999 THEN '5000-6000'
+            ELSE '6000+'
+        END AS "distance_range"
+    FROM 
+        Distances
+), 
+RangeCounts AS (
+    SELECT 
+        "distance_range",
+        COUNT(DISTINCT "city1" || '-' || "city2") AS "pair_count"
+    FROM 
+        DistanceRanges
+    GROUP BY 
+        "distance_range"
+)
+SELECT 
+    "distance_range",
+    "pair_count"
+FROM 
+    RangeCounts
+WHERE 
+    "pair_count" = (
+        SELECT MIN("pair_count") FROM RangeCounts
+    );
+The error information is:
+{'status': 'error', 'error_msg': "##ERROR##001003 (42000): SQL compilation error:\nsyntax error line 5 at position 33 unexpected 'FROM'.\nsyntax error line 5 at position 42 unexpected '('.\nsyntax error line 5 at position 43 unexpected ''(''.\nsyntax error line 5 at position 69 unexpected ')'."}
+Please correct it and output only 1 complete SQL query.
+[Self-refine]
+2025-07-01 04:53:28 - Thread-644 (execute) - INFO - [Try to run SQL in self-refine]
+```sql
+WITH CityPairs AS (
+    SELECT 
+        LEAST(a1."city", a2."city") AS "city1", 
+        GREATEST(a1."city", a2."city") AS "city2",
+        CAST(SPLIT_PART(REPLACE(a1."coordinates", '(', ''), ',', 1) AS FLOAT) AS "departure_longitude",
+        CAST(SPLIT_PART(REPLACE(REPLACE(a1."coordinates", '(', ''), ')', ''), ',', 2) AS FLOAT) AS "departure_latitude",
+        CAST(SPLIT_PART(REPLACE(a2."coordinates", '(', ''), ',', 1) AS FLOAT) AS "arrival_longitude",
+        CAST(SPLIT_PART(REPLACE(REPLACE(a2."coordinates", '(', ''), ')', ''), ',', 2) AS FLOAT) AS "arrival_latitude"
+    FROM 
+        AIRLINES.AIRLINES.FLIGHTS f
+    JOIN 
+        AIRLINES.AIRLINES.AIRPORTS_DATA a1 
+    ON 
+        f."departure_airport" = a1."airport_code"
+    JOIN 
+        AIRLINES.AIRLINES.AIRPORTS_DATA a2 
+    ON 
+        f."arrival_airport" = a2."airport_code"
+), 
+Distances AS (
+    SELECT 
+        "city1",
+        "city2",
+        AVG(
+            2 * 6371 * ASIN(SQRT(
+                POWER(SIN(RADIANS(("arrival_latitude" - "departure_latitude") / 2)), 2)
+                + COS(RADIANS("departure_latitude")) * COS(RADIANS("arrival_latitude")) 
+                * POWER(SIN(RADIANS(("arrival_longitude" - "departure_longitude") / 2)), 2)
+            ))
+        ) AS "avg_distance"
+    FROM 
+        CityPairs
+    GROUP BY 
+        "city1", "city2"
+), 
+DistanceRanges AS (
+    SELECT 
+        "city1",
+        "city2",
+        "avg_distance",
+        CASE 
+            WHEN "avg_distance" BETWEEN 0 AND 999 THEN '0-1000'
+            WHEN "avg_distance" BETWEEN 1000 AND 1999 THEN '1000-2000'
+            WHEN "avg_distance" BETWEEN 2000 AND 2999 THEN '2000-3000'
+            WHEN "avg_distance" BETWEEN 3000 AND 3999 THEN '3000-4000'
+            WHEN "avg_distance" BETWEEN 4000 AND 4999 THEN '4000-5000'
+            WHEN "avg_distance" BETWEEN 5000 AND 5999 THEN '5000-6000'
+            ELSE '6000+'
+        END AS "distance_range"
+    FROM 
+        Distances
+), 
+RangeCounts AS (
+    SELECT 
+        "distance_range",
+        COUNT(DISTINCT "city1" || '-' || "city2") AS "pair_count"
+    FROM 
+        DistanceRanges
+    GROUP BY 
+        "distance_range"
+)
+SELECT 
+    "distance_range",
+    "pair_count"
+FROM 
+    RangeCounts
+WHERE 
+    "pair_count" = (
+        SELECT MIN("pair_count") FROM RangeCounts
+    );
+```
+[Try to run SQL in self-refine]
+2025-07-01 04:53:29 - Thread-644 (execute) - INFO - Total iteration counts: 3

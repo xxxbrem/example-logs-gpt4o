@@ -1,0 +1,1297 @@
+2025-07-01 04:52:32 - Thread-744 (execute) - INFO - [Exploration]
+```sql
+-- Step 1: Identify each customer's earliest and latest transaction dates from CUSTOMER_TRANSACTIONS.
+SELECT 
+    "customer_id",
+    MIN("txn_date") AS "earliest_txn_date",
+    MAX("txn_date") AS "latest_txn_date"
+FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+GROUP BY "customer_id"
+LIMIT 20;
+```
+
+```sql
+-- Step 2: Retrieve all transactions along with their respective amounts and types for each customer.
+SELECT 
+    "customer_id",
+    "txn_date",
+    "txn_amount",
+    "txn_type"
+FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+ORDER BY "customer_id", "txn_date"
+LIMIT 20;
+```
+
+```sql
+-- Step 3: Check the distinct regions involved with customers from CUSTOMER_NODES and CUSTOMER_REGIONS.
+SELECT DISTINCT 
+    n."region_id", 
+    r."region_name"
+FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_NODES n
+JOIN BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_REGIONS r
+ON n."region_id" = r."region_id"
+LIMIT 20;
+```
+
+```sql
+-- Step 4: Retrieve all customers and their nodes, along with date ranges from CUSTOMER_NODES.
+SELECT 
+    "customer_id",
+    "node_id",
+    "region_id",
+    "start_date",
+    "end_date"
+FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_NODES
+LIMIT 20;
+```
+
+```sql
+-- Step 5: Calculate daily balances for each customer by aggregating transactions.
+-- Assuming txn_amount represents the change to the balance (deposits add to balance).
+SELECT 
+    "customer_id",
+    "txn_date",
+    SUM(CASE 
+        WHEN "txn_type" = 'deposit' THEN "txn_amount"
+        WHEN "txn_type" = 'withdrawal' THEN -1 * "txn_amount"
+        ELSE 0
+    END) AS "daily_balance"
+FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+GROUP BY "customer_id", "txn_date"
+ORDER BY "customer_id", "txn_date"
+LIMIT 20;
+```
+
+```sql
+-- Step 6: Calculate rolling daily balances including carrying forward the previous day's balance.
+-- Uses a window function to sum balances day by day. (Specific implementation depends on the database).
+SELECT 
+    "customer_id",
+    "txn_date",
+    SUM("daily_balance") OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "rolling_balance"
+FROM (
+    SELECT 
+        "customer_id",
+        "txn_date",
+        SUM(CASE 
+            WHEN "txn_type" = 'deposit' THEN "txn_amount"
+            WHEN "txn_type" = 'withdrawal' THEN -1 * "txn_amount"
+            ELSE 0
+        END) AS "daily_balance"
+    FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+    GROUP BY "customer_id", "txn_date"
+)
+ORDER BY "customer_id", "txn_date"
+LIMIT 20;
+```
+
+```sql
+-- Step 7: Replace negative balances with zero to satisfy the condition.
+SELECT 
+    "customer_id",
+    "txn_date",
+    GREATEST(0, "rolling_balance") AS "non_negative_balance"
+FROM (
+    SELECT 
+        "customer_id",
+        "txn_date",
+        SUM("daily_balance") OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "rolling_balance"
+    FROM (
+        SELECT 
+            "customer_id",
+            "txn_date",
+            SUM(CASE 
+                WHEN "txn_type" = 'deposit' THEN "txn_amount"
+                WHEN "txn_type" = 'withdrawal' THEN -1 * "txn_amount"
+                ELSE 0
+            END) AS "daily_balance"
+        FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+        GROUP BY "customer_id", "txn_date"
+    )
+)
+ORDER BY "customer_id", "txn_date"
+LIMIT 20;
+```
+
+```sql
+-- Step 8: Identify the maximum daily balance for each customer in each month.
+SELECT 
+    "customer_id",
+    DATE_TRUNC('MONTH', TO_DATE("txn_date")) AS "month",
+    MAX("non_negative_balance") AS "max_monthly_balance"
+FROM (
+    SELECT 
+        "customer_id",
+        "txn_date",
+        GREATEST(0, "rolling_balance") AS "non_negative_balance"
+    FROM (
+        SELECT 
+            "customer_id",
+            "txn_date",
+            SUM("daily_balance") OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "rolling_balance"
+        FROM (
+            SELECT 
+                "customer_id",
+                "txn_date",
+                SUM(CASE 
+                    WHEN "txn_type" = 'deposit' THEN "txn_amount"
+                    WHEN "txn_type" = 'withdrawal' THEN -1 * "txn_amount"
+                    ELSE 0
+                END) AS "daily_balance"
+            FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+            GROUP BY "customer_id", "txn_date"
+        )
+    )
+)
+GROUP BY "customer_id", DATE_TRUNC('MONTH', TO_DATE("txn_date"))
+ORDER BY "customer_id", "month"
+LIMIT 20;
+```
+
+```sql
+-- Step 9: Aggregate these monthly maximums across all customers for each month.
+SELECT 
+    DATE_TRUNC('MONTH', "month") AS "month",
+    SUM("max_monthly_balance") AS "total_max_monthly_balance"
+FROM (
+    SELECT 
+        "customer_id",
+        DATE_TRUNC('MONTH', TO_DATE("txn_date")) AS "month",
+        MAX("non_negative_balance") AS "max_monthly_balance"
+    FROM (
+        SELECT 
+            "customer_id",
+            "txn_date",
+            GREATEST(0, "rolling_balance") AS "non_negative_balance"
+        FROM (
+            SELECT 
+                "customer_id",
+                "txn_date",
+                SUM("daily_balance") OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "rolling_balance"
+            FROM (
+                SELECT 
+                    "customer_id",
+                    "txn_date",
+                    SUM(CASE 
+                        WHEN "txn_type" = 'deposit' THEN "txn_amount"
+                        WHEN "txn_type" = 'withdrawal' THEN -1 * "txn_amount"
+                        ELSE 0
+                    END) AS "daily_balance"
+                FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+                GROUP BY "customer_id", "txn_date"
+            )
+        )
+    )
+    GROUP BY "customer_id", DATE_TRUNC('MONTH', TO_DATE("txn_date"))
+)
+GROUP BY DATE_TRUNC('MONTH', "month")
+ORDER BY "month"
+LIMIT 20;
+```
+
+
+[Exploration]
+2025-07-01 04:52:32 - Thread-744 (execute) - INFO - [Try to execute]
+-- Step 1: Identify each customer's earliest and latest transaction dates from CUSTOMER_TRANSACTIONS.
+SELECT 
+    "customer_id",
+    MIN("txn_date") AS "earliest_txn_date",
+    MAX("txn_date") AS "latest_txn_date"
+FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+GROUP BY "customer_id"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:52:33 - Thread-744 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Step 1: Identify each customer's earliest and latest transaction dates from CUSTOMER_TRANSACTIONS.
+SELECT 
+    "customer_id",
+    MIN("txn_date") AS "earliest_txn_date",
+    MAX("txn_date") AS "latest_txn_date"
+FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+GROUP BY "customer_id"
+LIMIT 20;
+Results:
+customer_id,earliest_txn_date,latest_txn_date
+309,2020-01-13,2020-04-09
+205,2020-01-02,2020-03-15
+287,2020-01-22,2020-04-11
+412,2020-01-01,2020-02-19
+257,2020-01-20,2020-04-13
+378,2020-01-07,2020-03-21
+63,2020-01-06,2020-03-31
+1,2020-01-02,2020-03-19
+46,2020-01-23,2020-04-20
+406,2020-01-26,2020-04-10
+142,2020-01-16,2020-04-01
+236,2020-01-27,2020-04-14
+162,2020-01-10,2020-02-08
+172,2020-01-12,2020-03-16
+160,2020-01-17,2020-04-15
+156,2020-01-24,2020-04-08
+
+[Successfully executed]
+2025-07-01 04:52:33 - Thread-744 (execute) - INFO - [Try to execute]
+-- Step 2: Retrieve all transactions along with their respective amounts and types for each customer.
+SELECT 
+    "customer_id",
+    "txn_date",
+    "txn_amount",
+    "txn_type"
+FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+ORDER BY "customer_id", "txn_date"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:52:33 - Thread-744 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Step 2: Retrieve all transactions along with their respective amounts and types for each customer.
+SELECT 
+    "customer_id",
+    "txn_date",
+    "txn_amount",
+    "txn_type"
+FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+ORDER BY "customer_id", "txn_date"
+LIMIT 20;
+Results:
+customer_id,txn_date,txn_amount,txn_type
+1,2020-01-02,312,deposit
+1,2020-03-05,612,purchase
+1,2020-03-17,324,deposit
+1,2020-03-19,664,purchase
+2,2020-01-03,549,deposit
+2,2020-03-24,61,deposit
+3,2020-01-27,144,deposit
+3,2020-02-22,965,purchase
+3,2020-03-05,213,withdrawal
+3,2020-03-19,188,withdrawal
+3,2020-04-12,493,deposit
+4,2020-01-07,458,deposit
+4,2020-01-21,390,deposit
+4,2020-03-25,193,purchase
+5,2020-01-15,974,deposit
+
+[Successfully executed]
+2025-07-01 04:52:33 - Thread-744 (execute) - INFO - [Try to execute]
+-- Step 3: Check the distinct regions involved with customers from CUSTOMER_NODES and CUSTOMER_REGIONS.
+SELECT DISTINCT 
+    n."region_id", 
+    r."region_name"
+FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_NODES n
+JOIN BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_REGIONS r
+ON n."region_id" = r."region_id"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:52:33 - Thread-744 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Step 3: Check the distinct regions involved with customers from CUSTOMER_NODES and CUSTOMER_REGIONS.
+SELECT DISTINCT 
+    n."region_id", 
+    r."region_name"
+FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_NODES n
+JOIN BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_REGIONS r
+ON n."region_id" = r."region_id"
+LIMIT 20;
+Results:
+region_id,region_name
+2,America
+3,Africa
+4,Asia
+5,Europe
+1,Australia
+
+[Successfully executed]
+2025-07-01 04:52:33 - Thread-744 (execute) - INFO - [Try to execute]
+-- Step 4: Retrieve all customers and their nodes, along with date ranges from CUSTOMER_NODES.
+SELECT 
+    "customer_id",
+    "node_id",
+    "region_id",
+    "start_date",
+    "end_date"
+FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_NODES
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:52:34 - Thread-744 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Step 4: Retrieve all customers and their nodes, along with date ranges from CUSTOMER_NODES.
+SELECT 
+    "customer_id",
+    "node_id",
+    "region_id",
+    "start_date",
+    "end_date"
+FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_NODES
+LIMIT 20;
+Results:
+customer_id,node_id,region_id,start_date,end_date
+1,4,3,2020-01-02,2020-01-03
+2,5,3,2020-01-03,2020-01-17
+3,4,5,2020-01-27,2020-02-18
+4,4,5,2020-01-07,2020-01-19
+5,3,3,2020-01-15,2020-01-23
+6,1,1,2020-01-11,2020-02-06
+7,5,2,2020-01-20,2020-02-04
+8,2,1,2020-01-15,2020-01-28
+9,5,4,2020-01-21,2020-01-25
+10,4,3,2020-01-13,2020-01-14
+11,5,2,2020-01-19,2020-01-25
+12,2,1,2020-01-13,2020-01-14
+13,3,2,2020-01-02,2020-01-14
+14,2,1,2020-01-25,2020-01-25
+
+[Successfully executed]
+2025-07-01 04:52:34 - Thread-744 (execute) - INFO - [Try to execute]
+-- Step 5: Calculate daily balances for each customer by aggregating transactions.
+-- Assuming txn_amount represents the change to the balance (deposits add to balance).
+SELECT 
+    "customer_id",
+    "txn_date",
+    SUM(CASE 
+        WHEN "txn_type" = 'deposit' THEN "txn_amount"
+        WHEN "txn_type" = 'withdrawal' THEN -1 * "txn_amount"
+        ELSE 0
+    END) AS "daily_balance"
+FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+GROUP BY "customer_id", "txn_date"
+ORDER BY "customer_id", "txn_date"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:52:34 - Thread-744 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Step 5: Calculate daily balances for each customer by aggregating transactions.
+-- Assuming txn_amount represents the change to the balance (deposits add to balance).
+SELECT 
+    "customer_id",
+    "txn_date",
+    SUM(CASE 
+        WHEN "txn_type" = 'deposit' THEN "txn_amount"
+        WHEN "txn_type" = 'withdrawal' THEN -1 * "txn_amount"
+        ELSE 0
+    END) AS "daily_balance"
+FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+GROUP BY "customer_id", "txn_date"
+ORDER BY "customer_id", "txn_date"
+LIMIT 20;
+Results:
+customer_id,txn_date,daily_balance
+1,2020-01-02,312
+1,2020-03-05,0
+1,2020-03-17,324
+1,2020-03-19,0
+2,2020-01-03,549
+2,2020-03-24,61
+3,2020-01-27,144
+3,2020-02-22,0
+3,2020-03-05,-213
+3,2020-03-19,-188
+3,2020-04-12,493
+4,2020-01-07,458
+4,2020-01-21,390
+4,2020-03-25,0
+5,2020-01-15,974
+5,2020-01-25,806
+5,2020-01-31,-826
+5,2020-03-02,0
+5,2020-03-19,718
+5,2020-03-26,-786
+
+[Successfully executed]
+2025-07-01 04:52:34 - Thread-744 (execute) - INFO - [Try to execute]
+-- Step 6: Calculate rolling daily balances including carrying forward the previous day's balance.
+-- Uses a window function to sum balances day by day. (Specific implementation depends on the database).
+SELECT 
+    "customer_id",
+    "txn_date",
+    SUM("daily_balance") OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "rolling_balance"
+FROM (
+    SELECT 
+        "customer_id",
+        "txn_date",
+        SUM(CASE 
+            WHEN "txn_type" = 'deposit' THEN "txn_amount"
+            WHEN "txn_type" = 'withdrawal' THEN -1 * "txn_amount"
+            ELSE 0
+        END) AS "daily_balance"
+    FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+    GROUP BY "customer_id", "txn_date"
+)
+ORDER BY "customer_id", "txn_date"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:52:34 - Thread-744 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Step 6: Calculate rolling daily balances including carrying forward the previous day's balance.
+-- Uses a window function to sum balances day by day. (Specific implementation depends on the database).
+SELECT 
+    "customer_id",
+    "txn_date",
+    SUM("daily_balance") OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "rolling_balance"
+FROM (
+    SELECT 
+        "customer_id",
+        "txn_date",
+        SUM(CASE 
+            WHEN "txn_type" = 'deposit' THEN "txn_amount"
+            WHEN "txn_type" = 'withdrawal' THEN -1 * "txn_amount"
+            ELSE 0
+        END) AS "daily_balance"
+    FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+    GROUP BY "customer_id", "txn_date"
+)
+ORDER BY "customer_id", "txn_date"
+LIMIT 20;
+Results:
+customer_id,txn_date,rolling_balance
+1,2020-01-02,312
+1,2020-03-05,312
+1,2020-03-17,636
+1,2020-03-19,636
+2,2020-01-03,549
+2,2020-03-24,610
+3,2020-01-27,144
+3,2020-02-22,144
+3,2020-03-05,-69
+3,2020-03-19,-257
+3,2020-04-12,236
+4,2020-01-07,458
+4,2020-01-21,848
+4,2020-03-25,848
+5,2020-01-15,974
+5,2020-01-25,1780
+5,2020-01-31,954
+5,2020-03-02,954
+5,2020-03-19,1672
+5,2020-03-26,886
+
+[Successfully executed]
+2025-07-01 04:52:34 - Thread-744 (execute) - INFO - [Try to execute]
+-- Step 7: Replace negative balances with zero to satisfy the condition.
+SELECT 
+    "customer_id",
+    "txn_date",
+    GREATEST(0, "rolling_balance") AS "non_negative_balance"
+FROM (
+    SELECT 
+        "customer_id",
+        "txn_date",
+        SUM("daily_balance") OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "rolling_balance"
+    FROM (
+        SELECT 
+            "customer_id",
+            "txn_date",
+            SUM(CASE 
+                WHEN "txn_type" = 'deposit' THEN "txn_amount"
+                WHEN "txn_type" = 'withdrawal' THEN -1 * "txn_amount"
+                ELSE 0
+            END) AS "daily_balance"
+        FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+        GROUP BY "customer_id", "txn_date"
+    )
+)
+ORDER BY "customer_id", "txn_date"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:52:35 - Thread-744 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Step 7: Replace negative balances with zero to satisfy the condition.
+SELECT 
+    "customer_id",
+    "txn_date",
+    GREATEST(0, "rolling_balance") AS "non_negative_balance"
+FROM (
+    SELECT 
+        "customer_id",
+        "txn_date",
+        SUM("daily_balance") OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "rolling_balance"
+    FROM (
+        SELECT 
+            "customer_id",
+            "txn_date",
+            SUM(CASE 
+                WHEN "txn_type" = 'deposit' THEN "txn_amount"
+                WHEN "txn_type" = 'withdrawal' THEN -1 * "txn_amount"
+                ELSE 0
+            END) AS "daily_balance"
+        FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+        GROUP BY "customer_id", "txn_date"
+    )
+)
+ORDER BY "customer_id", "txn_date"
+LIMIT 20;
+Results:
+customer_id,txn_date,non_negative_balance
+1,2020-01-02,312
+1,2020-03-05,312
+1,2020-03-17,636
+1,2020-03-19,636
+2,2020-01-03,549
+2,2020-03-24,610
+3,2020-01-27,144
+3,2020-02-22,144
+3,2020-03-05,0
+3,2020-03-19,0
+3,2020-04-12,236
+4,2020-01-07,458
+4,2020-01-21,848
+4,2020-03-25,848
+5,2020-01-15,974
+5,2020-01-25,1780
+5,2020-01-31,954
+5,2020-03-02,954
+5,2020-03-19,1672
+5,2020-03-26,886
+
+[Successfully executed]
+2025-07-01 04:52:35 - Thread-744 (execute) - INFO - [Try to execute]
+-- Step 8: Identify the maximum daily balance for each customer in each month.
+SELECT 
+    "customer_id",
+    DATE_TRUNC('MONTH', TO_DATE("txn_date")) AS "month",
+    MAX("non_negative_balance") AS "max_monthly_balance"
+FROM (
+    SELECT 
+        "customer_id",
+        "txn_date",
+        GREATEST(0, "rolling_balance") AS "non_negative_balance"
+    FROM (
+        SELECT 
+            "customer_id",
+            "txn_date",
+            SUM("daily_balance") OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "rolling_balance"
+        FROM (
+            SELECT 
+                "customer_id",
+                "txn_date",
+                SUM(CASE 
+                    WHEN "txn_type" = 'deposit' THEN "txn_amount"
+                    WHEN "txn_type" = 'withdrawal' THEN -1 * "txn_amount"
+                    ELSE 0
+                END) AS "daily_balance"
+            FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+            GROUP BY "customer_id", "txn_date"
+        )
+    )
+)
+GROUP BY "customer_id", DATE_TRUNC('MONTH', TO_DATE("txn_date"))
+ORDER BY "customer_id", "month"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:52:35 - Thread-744 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Step 8: Identify the maximum daily balance for each customer in each month.
+SELECT 
+    "customer_id",
+    DATE_TRUNC('MONTH', TO_DATE("txn_date")) AS "month",
+    MAX("non_negative_balance") AS "max_monthly_balance"
+FROM (
+    SELECT 
+        "customer_id",
+        "txn_date",
+        GREATEST(0, "rolling_balance") AS "non_negative_balance"
+    FROM (
+        SELECT 
+            "customer_id",
+            "txn_date",
+            SUM("daily_balance") OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "rolling_balance"
+        FROM (
+            SELECT 
+                "customer_id",
+                "txn_date",
+                SUM(CASE 
+                    WHEN "txn_type" = 'deposit' THEN "txn_amount"
+                    WHEN "txn_type" = 'withdrawal' THEN -1 * "txn_amount"
+                    ELSE 0
+                END) AS "daily_balance"
+            FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+            GROUP BY "customer_id", "txn_date"
+        )
+    )
+)
+GROUP BY "customer_id", DATE_TRUNC('MONTH', TO_DATE("txn_date"))
+ORDER BY "customer_id", "month"
+LIMIT 20;
+Results:
+customer_id,month,max_monthly_balance
+1,2020-01-01,312
+1,2020-03-01,636
+2,2020-01-01,549
+2,2020-03-01,610
+3,2020-01-01,144
+3,2020-02-01,144
+3,2020-03-01,0
+3,2020-04-01,236
+4,2020-01-01,848
+4,2020-03-01,848
+5,2020-01-01,1780
+5,2020-03-01,1672
+5,2020-04-01,108
+6,2020-01-01,1627
+6,2020-02-01,1867
+
+[Successfully executed]
+2025-07-01 04:52:35 - Thread-744 (execute) - INFO - [Try to execute]
+-- Step 9: Aggregate these monthly maximums across all customers for each month.
+SELECT 
+    DATE_TRUNC('MONTH', "month") AS "month",
+    SUM("max_monthly_balance") AS "total_max_monthly_balance"
+FROM (
+    SELECT 
+        "customer_id",
+        DATE_TRUNC('MONTH', TO_DATE("txn_date")) AS "month",
+        MAX("non_negative_balance") AS "max_monthly_balance"
+    FROM (
+        SELECT 
+            "customer_id",
+            "txn_date",
+            GREATEST(0, "rolling_balance") AS "non_negative_balance"
+        FROM (
+            SELECT 
+                "customer_id",
+                "txn_date",
+                SUM("daily_balance") OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "rolling_balance"
+            FROM (
+                SELECT 
+                    "customer_id",
+                    "txn_date",
+                    SUM(CASE 
+                        WHEN "txn_type" = 'deposit' THEN "txn_amount"
+                        WHEN "txn_type" = 'withdrawal' THEN -1 * "txn_amount"
+                        ELSE 0
+                    END) AS "daily_balance"
+                FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+                GROUP BY "customer_id", "txn_date"
+            )
+        )
+    )
+    GROUP BY "customer_id", DATE_TRUNC('MONTH', TO_DATE("txn_date"))
+)
+GROUP BY DATE_TRUNC('MONTH', "month")
+ORDER BY "month"
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:52:35 - Thread-744 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Step 9: Aggregate these monthly maximums across all customers for each month.
+SELECT 
+    DATE_TRUNC('MONTH', "month") AS "month",
+    SUM("max_monthly_balance") AS "total_max_monthly_balance"
+FROM (
+    SELECT 
+        "customer_id",
+        DATE_TRUNC('MONTH', TO_DATE("txn_date")) AS "month",
+        MAX("non_negative_balance") AS "max_monthly_balance"
+    FROM (
+        SELECT 
+            "customer_id",
+            "txn_date",
+            GREATEST(0, "rolling_balance") AS "non_negative_balance"
+        FROM (
+            SELECT 
+                "customer_id",
+                "txn_date",
+                SUM("daily_balance") OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "rolling_balance"
+            FROM (
+                SELECT 
+                    "customer_id",
+                    "txn_date",
+                    SUM(CASE 
+                        WHEN "txn_type" = 'deposit' THEN "txn_amount"
+                        WHEN "txn_type" = 'withdrawal' THEN -1 * "txn_amount"
+                        ELSE 0
+                    END) AS "daily_balance"
+                FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+                GROUP BY "customer_id", "txn_date"
+            )
+        )
+    )
+    GROUP BY "customer_id", DATE_TRUNC('MONTH', TO_DATE("txn_date"))
+)
+GROUP BY DATE_TRUNC('MONTH', "month")
+ORDER BY "month"
+LIMIT 20;
+Results:
+month,total_max_monthly_balance
+2020-01-01,389803
+2020-02-01,527449
+2020-03-01,672592
+2020-04-01,461545
+
+[Successfully executed]
+2025-07-01 04:52:35 - Thread-744 (execute) - INFO - itercount: 0
+2025-07-01 04:52:35 - Thread-744 (execute) - INFO - [Self-refine]
+Table full name: BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_NODES
+Column name: region_id Type: NUMBER
+Column name: start_date Type: TEXT
+Column name: end_date Type: TEXT
+Column name: customer_id Type: NUMBER
+Column name: node_id Type: NUMBER
+Sample rows:
+[{'customer_id': 1, 'region_id': 3, 'node_id': 4, 'start_date': '2020-01-02', 'end_date': '2020-01-03'}, {'customer_id': 2, 'region_id': 3, 'node_id': 5, 'start_date': '2020-01-03', 'end_date': '2020-01-17'}, {'customer_id': 3, 'region_id': 5, 'node_id': 4, 'start_date': '2020-01-27', 'end_date': '2020-02-18'}, {'customer_id': 4, 'region_id': 5, 'node_id': 4, 'start_date': '2020-01-07', 'end_date': '2020-01-19'}, {'customer_id': 7, 'region_id': 2, 'node_id': 5, 'start_date': '2020-01-20', 'end_date': '2020-02-04'}]
+--------------------------------------------------
+Table full name: BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_REGIONS
+Column name: region_id Type: NUMBER
+Column name: region_name Type: TEXT
+Sample rows:
+[{'region_id': 3, 'region_name': 'Africa'}, {'region_id': 4, 'region_name': 'Asia'}, {'region_id': 5, 'region_name': 'Europe'}]
+--------------------------------------------------
+Table full name: BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+Column name: customer_id Type: NUMBER
+Column name: txn_date Type: TEXT
+Column name: txn_amount Type: NUMBER
+Column name: txn_type Type: TEXT
+Sample rows:
+[{'customer_id': 429, 'txn_date': '2020-01-21', 'txn_type': 'deposit', 'txn_amount': 82}, {'customer_id': 155, 'txn_date': '2020-01-10', 'txn_type': 'deposit', 'txn_amount': 712}, {'customer_id': 398, 'txn_date': '2020-01-01', 'txn_type': 'deposit', 'txn_amount': 196}, {'customer_id': 255, 'txn_date': '2020-01-14', 'txn_type': 'deposit', 'txn_amount': 563}, {'customer_id': 373, 'txn_date': '2020-01-18', 'txn_type': 'deposit', 'txn_amount': 596}]
+--------------------------------------------------
+External knowledge that might be helpful: 
+None
+The table structure information is ({database name: {schema name: [table name]}}): 
+{'BANK_SALES_TRADING': {'BANK_SALES_TRADING': ['CUSTOMER_NODES', 'CUSTOMER_REGIONS', 'CUSTOMER_TRANSACTIONS']}}
+
+Some few-shot examples after column exploration may be helpful:
+Query:
+-- Step 1: Identify each customer's earliest and latest transaction dates from CUSTOMER_TRANSACTIONS.
+SELECT 
+    "customer_id",
+    MIN("txn_date") AS "earliest_txn_date",
+    MAX("txn_date") AS "latest_txn_date"
+FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+GROUP BY "customer_id"
+LIMIT 20;
+Answer:
+customer_id,earliest_txn_date,latest_txn_date
+309,2020-01-13,2020-04-09
+205,2020-01-02,2020-03-15
+287,2020-01-22,2020-04-11
+412,2020-01-01,2020-02-19
+257,2020-01-20,2020-04-13
+378,2020-01-07,2020-03-21
+63,2020-01-06,2020-03-31
+1,2020-01-02,2020-03-19
+46,2020-01-23,2020-04-20
+406,2020-01-26,2020-04-10
+142,2020-01-16,2020-04-01
+236,2020-01-27,2020-04-14
+162,2020-01-10,2020-02-08
+172,2020-01-12,2020-03-16
+160,2020-01-17,2020-04-15
+156,2020-01-24,2020-04-08
+Query:
+-- Step 2: Retrieve all transactions along with their respective amounts and types for each customer.
+SELECT 
+    "customer_id",
+    "txn_date",
+    "txn_amount",
+    "txn_type"
+FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+ORDER BY "customer_id", "txn_date"
+LIMIT 20;
+Answer:
+customer_id,txn_date,txn_amount,txn_type
+1,2020-01-02,312,deposit
+1,2020-03-05,612,purchase
+1,2020-03-17,324,deposit
+1,2020-03-19,664,purchase
+2,2020-01-03,549,deposit
+2,2020-03-24,61,deposit
+3,2020-01-27,144,deposit
+3,2020-02-22,965,purchase
+3,2020-03-05,213,withdrawal
+3,2020-03-19,188,withdrawal
+3,2020-04-12,493,deposit
+4,2020-01-07,458,deposit
+4,2020-01-21,390,deposit
+4,2020-03-25,193,purchase
+5,2020-01-15,974,deposit
+Query:
+-- Step 3: Check the distinct regions involved with customers from CUSTOMER_NODES and CUSTOMER_REGIONS.
+SELECT DISTINCT 
+    n."region_id", 
+    r."region_name"
+FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_NODES n
+JOIN BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_REGIONS r
+ON n."region_id" = r."region_id"
+LIMIT 20;
+Answer:
+region_id,region_name
+2,America
+3,Africa
+4,Asia
+5,Europe
+1,Australia
+Query:
+-- Step 4: Retrieve all customers and their nodes, along with date ranges from CUSTOMER_NODES.
+SELECT 
+    "customer_id",
+    "node_id",
+    "region_id",
+    "start_date",
+    "end_date"
+FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_NODES
+LIMIT 20;
+Answer:
+customer_id,node_id,region_id,start_date,end_date
+1,4,3,2020-01-02,2020-01-03
+2,5,3,2020-01-03,2020-01-17
+3,4,5,2020-01-27,2020-02-18
+4,4,5,2020-01-07,2020-01-19
+5,3,3,2020-01-15,2020-01-23
+6,1,1,2020-01-11,2020-02-06
+7,5,2,2020-01-20,2020-02-04
+8,2,1,2020-01-15,2020-01-28
+9,5,4,2020-01-21,2020-01-25
+10,4,3,2020-01-13,2020-01-14
+11,5,2,2020-01-19,2020-01-25
+12,2,1,2020-01-13,2020-01-14
+13,3,2,2020-01-02,2020-01-14
+14,2,1,2020-01-25,2020-01-25
+Query:
+-- Step 5: Calculate daily balances for each customer by aggregating transactions.
+-- Assuming txn_amount represents the change to the balance (deposits add to balance).
+SELECT 
+    "customer_id",
+    "txn_date",
+    SUM(CASE 
+        WHEN "txn_type" = 'deposit' THEN "txn_amount"
+        WHEN "txn_type" = 'withdrawal' THEN -1 * "txn_amount"
+        ELSE 0
+    END) AS "daily_balance"
+FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+GROUP BY "customer_id", "txn_date"
+ORDER BY "customer_id", "txn_date"
+LIMIT 20;
+Answer:
+customer_id,txn_date,daily_balance
+1,2020-01-02,312
+1,2020-03-05,0
+1,2020-03-17,324
+1,2020-03-19,0
+2,2020-01-03,549
+2,2020-03-24,61
+3,2020-01-27,144
+3,2020-02-22,0
+3,2020-03-05,-213
+3,2020-03-19,-188
+3,2020-04-12,493
+4,2020-01-07,458
+4,2020-01-21,390
+4,2020-03-25,0
+5,2020-01-15,974
+5,2020-01-25,806
+5,2020-01-31,-826
+5,2020-03-02,0
+5,2020-03-19,718
+5,2020-03-26,-786
+Query:
+-- Step 6: Calculate rolling daily balances including carrying forward the previous day's balance.
+-- Uses a window function to sum balances day by day. (Specific implementation depends on the database).
+SELECT 
+    "customer_id",
+    "txn_date",
+    SUM("daily_balance") OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "rolling_balance"
+FROM (
+    SELECT 
+        "customer_id",
+        "txn_date",
+        SUM(CASE 
+            WHEN "txn_type" = 'deposit' THEN "txn_amount"
+            WHEN "txn_type" = 'withdrawal' THEN -1 * "txn_amount"
+            ELSE 0
+        END) AS "daily_balance"
+    FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+    GROUP BY "customer_id", "txn_date"
+)
+ORDER BY "customer_id", "txn_date"
+LIMIT 20;
+Answer:
+customer_id,txn_date,rolling_balance
+1,2020-01-02,312
+1,2020-03-05,312
+1,2020-03-17,636
+1,2020-03-19,636
+2,2020-01-03,549
+2,2020-03-24,610
+3,2020-01-27,144
+3,2020-02-22,144
+3,2020-03-05,-69
+3,2020-03-19,-257
+3,2020-04-12,236
+4,2020-01-07,458
+4,2020-01-21,848
+4,2020-03-25,848
+5,2020-01-15,974
+5,2020-01-25,1780
+5,2020-01-31,954
+5,2020-03-02,954
+5,2020-03-19,1672
+5,2020-03-26,886
+Query:
+-- Step 7: Replace negative balances with zero to satisfy the condition.
+SELECT 
+    "customer_id",
+    "txn_date",
+    GREATEST(0, "rolling_balance") AS "non_negative_balance"
+FROM (
+    SELECT 
+        "customer_id",
+        "txn_date",
+        SUM("daily_balance") OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "rolling_balance"
+    FROM (
+        SELECT 
+            "customer_id",
+            "txn_date",
+            SUM(CASE 
+                WHEN "txn_type" = 'deposit' THEN "txn_amount"
+                WHEN "txn_type" = 'withdrawal' THEN -1 * "txn_amount"
+                ELSE 0
+            END) AS "daily_balance"
+        FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+        GROUP BY "customer_id", "txn_date"
+    )
+)
+ORDER BY "customer_id", "txn_date"
+LIMIT 20;
+Answer:
+customer_id,txn_date,non_negative_balance
+1,2020-01-02,312
+1,2020-03-05,312
+1,2020-03-17,636
+1,2020-03-19,636
+2,2020-01-03,549
+2,2020-03-24,610
+3,2020-01-27,144
+3,2020-02-22,144
+3,2020-03-05,0
+3,2020-03-19,0
+3,2020-04-12,236
+4,2020-01-07,458
+4,2020-01-21,848
+4,2020-03-25,848
+5,2020-01-15,974
+5,2020-01-25,1780
+5,2020-01-31,954
+5,2020-03-02,954
+5,2020-03-19,1672
+5,2020-03-26,886
+Query:
+-- Step 8: Identify the maximum daily balance for each customer in each month.
+SELECT 
+    "customer_id",
+    DATE_TRUNC('MONTH', TO_DATE("txn_date")) AS "month",
+    MAX("non_negative_balance") AS "max_monthly_balance"
+FROM (
+    SELECT 
+        "customer_id",
+        "txn_date",
+        GREATEST(0, "rolling_balance") AS "non_negative_balance"
+    FROM (
+        SELECT 
+            "customer_id",
+            "txn_date",
+            SUM("daily_balance") OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "rolling_balance"
+        FROM (
+            SELECT 
+                "customer_id",
+                "txn_date",
+                SUM(CASE 
+                    WHEN "txn_type" = 'deposit' THEN "txn_amount"
+                    WHEN "txn_type" = 'withdrawal' THEN -1 * "txn_amount"
+                    ELSE 0
+                END) AS "daily_balance"
+            FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+            GROUP BY "customer_id", "txn_date"
+        )
+    )
+)
+GROUP BY "customer_id", DATE_TRUNC('MONTH', TO_DATE("txn_date"))
+ORDER BY "customer_id", "month"
+LIMIT 20;
+Answer:
+customer_id,month,max_monthly_balance
+1,2020-01-01,312
+1,2020-03-01,636
+2,2020-01-01,549
+2,2020-03-01,610
+3,2020-01-01,144
+3,2020-02-01,144
+3,2020-03-01,0
+3,2020-04-01,236
+4,2020-01-01,848
+4,2020-03-01,848
+5,2020-01-01,1780
+5,2020-03-01,1672
+5,2020-04-01,108
+6,2020-01-01,1627
+6,2020-02-01,1867
+Query:
+-- Step 9: Aggregate these monthly maximums across all customers for each month.
+SELECT 
+    DATE_TRUNC('MONTH', "month") AS "month",
+    SUM("max_monthly_balance") AS "total_max_monthly_balance"
+FROM (
+    SELECT 
+        "customer_id",
+        DATE_TRUNC('MONTH', TO_DATE("txn_date")) AS "month",
+        MAX("non_negative_balance") AS "max_monthly_balance"
+    FROM (
+        SELECT 
+            "customer_id",
+            "txn_date",
+            GREATEST(0, "rolling_balance") AS "non_negative_balance"
+        FROM (
+            SELECT 
+                "customer_id",
+                "txn_date",
+                SUM("daily_balance") OVER (PARTITION BY "customer_id" ORDER BY "txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "rolling_balance"
+            FROM (
+                SELECT 
+                    "customer_id",
+                    "txn_date",
+                    SUM(CASE 
+                        WHEN "txn_type" = 'deposit' THEN "txn_amount"
+                        WHEN "txn_type" = 'withdrawal' THEN -1 * "txn_amount"
+                        ELSE 0
+                    END) AS "daily_balance"
+                FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+                GROUP BY "customer_id", "txn_date"
+            )
+        )
+    )
+    GROUP BY "customer_id", DATE_TRUNC('MONTH', TO_DATE("txn_date"))
+)
+GROUP BY DATE_TRUNC('MONTH', "month")
+ORDER BY "month"
+LIMIT 20;
+Answer:
+month,total_max_monthly_balance
+2020-01-01,389803
+2020-02-01,527449
+2020-03-01,672592
+2020-04-01,461545
+Task: For each customer, calculate their daily balances for every day between their earliest and latest transaction dates, including days without transactions by carrying forward the previous day's balance. Treat any negative daily balances as zero. Then, for each month, determine the highest daily balance each customer had during that month. Finally, for each month, sum these maximum daily balances across all customers to obtain a monthly total.
+Another way to say it: Could you calculate the highest daily balance each customer had within each month? Treat any negative daily balances as zero. Then, for each month, add up these maximum daily balances across all customers to get a monthly total.
+
+Please think step by step and answer only one complete SQL in snowflake dialect in ```sql``` format.
+SQL usage example: ```sql
+SELECT "COLUMN_NAME" FROM DATABASE.SCHEMA.TABLE WHERE ... ``` (Adjust "DATABASE", "SCHEMA", and "TABLE" to match actual names, ensure all column names are enclosed in double quotations)
+Here are some useful tips for answering:
+When performing a UNION operation on many tables, ensure that all table names are explicitly listed. Union first and then add condition and selection. e.g. SELECT "col1", "col2" FROM (TABLE1 UNION ALL TABLE2) WHERE ...; Don't write sqls as (SELECT col1, col2 FROM TABLE1 WHERE ...) UNION ALL (SELECT col1, col2 FROM TABLE2 WHERE ...); Don't use ['-- Include all', '-- Omit', '-- Continue', '-- Union all', '-- ...', '-- List all', '-- Replace this', '-- Each table', '-- Add other'] to omit any table. Table names here: The table structure information is ({database name: {schema name: [table name]}}): 
+{'BANK_SALES_TRADING': {'BANK_SALES_TRADING': ['CUSTOMER_NODES', 'CUSTOMER_REGIONS', 'CUSTOMER_TRANSACTIONS']}}
+
+When using ORDER BY xxx DESC, add NULLS LAST to exclude null records: ORDER BY xxx DESC NULLS LAST.
+When asked something without stating name or id, return both of them. e.g. Which products ...? The answer should include product_name and product_id.
+When asked percentage decrease, you should return a positive value. e.g. How many percentage points in 2021 decrease compared to ...? The answer should be a positive value indicating the decresed number. Try to use ABS().
+If asked two tables, you should reply with the last one instead of combining two tables. e.g. Identifying the top five states ... examine the state that ranks fourth overall and identify its top five counties. You should only answer top five counties.
+Use ST_DISTANCE to calculate distance between two geographic points for more accurate answer.
+If the task description does not specify the number of decimal places, retain all decimals to four places.
+
+[Self-refine]
+2025-07-01 04:52:50 - Thread-744 (execute) - INFO - [Try to run SQL in self-refine]
+```sql
+WITH customer_txn_dates AS (
+    -- Step 1: Identify each customer's earliest and latest transaction dates.
+    SELECT 
+        "customer_id",
+        MIN(TO_DATE("txn_date")) AS "earliest_txn_date",
+        MAX(TO_DATE("txn_date")) AS "latest_txn_date"
+    FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+    GROUP BY "customer_id"
+),
+customer_balances AS (
+    -- Step 2: Calculate the daily balance for every transaction day.
+    SELECT 
+        "customer_id",
+        TO_DATE("txn_date") AS "txn_date",
+        SUM(CASE 
+            WHEN "txn_type" = 'deposit' THEN "txn_amount"
+            WHEN "txn_type" = 'withdrawal' THEN -1 * "txn_amount"
+            ELSE 0
+        END) AS "daily_balance"
+    FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+    GROUP BY "customer_id", TO_DATE("txn_date")
+),
+all_dates AS (
+    -- Step 3: Generate a continuous series of dates for each customer between earliest and latest transaction dates.
+    SELECT 
+        c."customer_id",
+        d."date" AS "txn_date"
+    FROM customer_txn_dates c,
+    LATERAL GENERATE_DATE_ARRAY(c."earliest_txn_date", c."latest_txn_date", INTERVAL '1 DAY') d
+),
+daily_balances_filled AS (
+    -- Step 4: Fill in days without transactions by carrying forward the previous day's balance.
+    SELECT 
+        a."customer_id",
+        a."txn_date",
+        GREATEST(0, SUM(COALESCE(b."daily_balance", 0)) 
+        OVER (PARTITION BY a."customer_id" ORDER BY a."txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)) AS "rolling_balance"
+    FROM all_dates a
+    LEFT JOIN customer_balances b
+    ON a."customer_id" = b."customer_id" AND a."txn_date" = b."txn_date"
+),
+monthly_max_balances AS (
+    -- Step 5: Identify the maximum rolling balance for each customer in each month.
+    SELECT 
+        "customer_id",
+        DATE_TRUNC('MONTH', "txn_date") AS "month",
+        MAX("rolling_balance") AS "max_monthly_balance"
+    FROM daily_balances_filled
+    GROUP BY "customer_id", DATE_TRUNC('MONTH', "txn_date")
+),
+monthly_total_balances AS (
+    -- Step 6: Sum these maximum monthly balances across all customers for each month.
+    SELECT 
+        "month",
+        SUM("max_monthly_balance") AS "total_max_monthly_balance"
+    FROM monthly_max_balances
+    GROUP BY "month"
+)
+-- Step 7: Final output - monthly total maximum balances.
+SELECT 
+    "month",
+    "total_max_monthly_balance"
+FROM monthly_total_balances
+ORDER BY "month";
+```
+[Try to run SQL in self-refine]
+2025-07-01 04:52:50 - Thread-744 (execute) - INFO - itercount: 1
+2025-07-01 04:52:50 - Thread-744 (execute) - INFO - [Self-refine]
+Input sql:
+WITH customer_txn_dates AS (
+    -- Step 1: Identify each customer's earliest and latest transaction dates.
+    SELECT 
+        "customer_id",
+        MIN(TO_DATE("txn_date")) AS "earliest_txn_date",
+        MAX(TO_DATE("txn_date")) AS "latest_txn_date"
+    FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+    GROUP BY "customer_id"
+),
+customer_balances AS (
+    -- Step 2: Calculate the daily balance for every transaction day.
+    SELECT 
+        "customer_id",
+        TO_DATE("txn_date") AS "txn_date",
+        SUM(CASE 
+            WHEN "txn_type" = 'deposit' THEN "txn_amount"
+            WHEN "txn_type" = 'withdrawal' THEN -1 * "txn_amount"
+            ELSE 0
+        END) AS "daily_balance"
+    FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+    GROUP BY "customer_id", TO_DATE("txn_date")
+),
+all_dates AS (
+    -- Step 3: Generate a continuous series of dates for each customer between earliest and latest transaction dates.
+    SELECT 
+        c."customer_id",
+        d."date" AS "txn_date"
+    FROM customer_txn_dates c,
+    LATERAL GENERATE_DATE_ARRAY(c."earliest_txn_date", c."latest_txn_date", INTERVAL '1 DAY') d
+),
+daily_balances_filled AS (
+    -- Step 4: Fill in days without transactions by carrying forward the previous day's balance.
+    SELECT 
+        a."customer_id",
+        a."txn_date",
+        GREATEST(0, SUM(COALESCE(b."daily_balance", 0)) 
+        OVER (PARTITION BY a."customer_id" ORDER BY a."txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)) AS "rolling_balance"
+    FROM all_dates a
+    LEFT JOIN customer_balances b
+    ON a."customer_id" = b."customer_id" AND a."txn_date" = b."txn_date"
+),
+monthly_max_balances AS (
+    -- Step 5: Identify the maximum rolling balance for each customer in each month.
+    SELECT 
+        "customer_id",
+        DATE_TRUNC('MONTH', "txn_date") AS "month",
+        MAX("rolling_balance") AS "max_monthly_balance"
+    FROM daily_balances_filled
+    GROUP BY "customer_id", DATE_TRUNC('MONTH', "txn_date")
+),
+monthly_total_balances AS (
+    -- Step 6: Sum these maximum monthly balances across all customers for each month.
+    SELECT 
+        "month",
+        SUM("max_monthly_balance") AS "total_max_monthly_balance"
+    FROM monthly_max_balances
+    GROUP BY "month"
+)
+-- Step 7: Final output - monthly total maximum balances.
+SELECT 
+    "month",
+    "total_max_monthly_balance"
+FROM monthly_total_balances
+ORDER BY "month";
+The error information is:
+{'status': 'error', 'error_msg': '##ERROR##002142 (42601): SQL compilation error:\nUnknown table function GENERATE_DATE_ARRAY'}
+Please correct it and output only 1 complete SQL query.
+[Self-refine]
+2025-07-01 04:53:22 - Thread-744 (execute) - INFO - [Try to run SQL in self-refine]
+```sql
+WITH customer_txn_dates AS (
+    -- Step 1: Identify each customer's earliest and latest transaction dates.
+    SELECT 
+        "customer_id",
+        MIN(TO_DATE("txn_date")) AS "earliest_txn_date",
+        MAX(TO_DATE("txn_date")) AS "latest_txn_date"
+    FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+    GROUP BY "customer_id"
+),
+all_dates AS (
+    -- Step 2: Generate a continuous series of dates for each customer between their earliest and latest transaction dates.
+    SELECT 
+        c."customer_id",
+        DATEADD(DAY, SEQ4(), c."earliest_txn_date") AS "txn_date"
+    FROM customer_txn_dates c,
+    TABLE(GENERATOR(ROWCOUNT => 10000)) -- Adjust ROWCOUNT if necessary for a sufficient date range
+    WHERE DATEADD(DAY, SEQ4(), c."earliest_txn_date") <= c."latest_txn_date"
+),
+customer_balances AS (
+    -- Step 3: Calculate the daily balance for every transaction day.
+    SELECT 
+        "customer_id",
+        TO_DATE("txn_date") AS "txn_date",
+        SUM(CASE 
+            WHEN "txn_type" = 'deposit' THEN "txn_amount"
+            WHEN "txn_type" = 'withdrawal' THEN -1 * "txn_amount"
+            ELSE 0
+        END) AS "daily_balance"
+    FROM BANK_SALES_TRADING.BANK_SALES_TRADING.CUSTOMER_TRANSACTIONS
+    GROUP BY "customer_id", TO_DATE("txn_date")
+),
+daily_balances_filled AS (
+    -- Step 4: Fill in days without transactions by carrying forward the previous day's balance.
+    SELECT 
+        a."customer_id",
+        a."txn_date",
+        GREATEST(0, SUM(COALESCE(b."daily_balance", 0)) 
+        OVER (PARTITION BY a."customer_id" ORDER BY a."txn_date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)) AS "rolling_balance"
+    FROM all_dates a
+    LEFT JOIN customer_balances b
+    ON a."customer_id" = b."customer_id" AND a."txn_date" = b."txn_date"
+),
+monthly_max_balances AS (
+    -- Step 5: Identify the highest rolling balance for each customer in each month.
+    SELECT 
+        "customer_id",
+        DATE_TRUNC('MONTH', "txn_date") AS "month",
+        MAX("rolling_balance") AS "max_monthly_balance"
+    FROM daily_balances_filled
+    GROUP BY "customer_id", DATE_TRUNC('MONTH', "txn_date")
+),
+monthly_total_balances AS (
+    -- Step 6: Sum these maximum monthly balances across all customers for each month.
+    SELECT 
+        "month",
+        SUM("max_monthly_balance") AS "total_max_monthly_balance"
+    FROM monthly_max_balances
+    GROUP BY "month"
+)
+-- Step 7: Final output - monthly total maximum balances.
+SELECT 
+    "month",
+    "total_max_monthly_balance"
+FROM monthly_total_balances
+ORDER BY "month";
+```
+[Try to run SQL in self-refine]
+2025-07-01 04:53:22 - Thread-744 (execute) - INFO - Total iteration counts: 1

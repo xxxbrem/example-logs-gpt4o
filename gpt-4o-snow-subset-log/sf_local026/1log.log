@@ -1,0 +1,1634 @@
+2025-07-01 04:50:09 - Thread-666 (execute) - INFO - [Exploration]
+```sql
+-- Description: Aggregate the total runs from IPL.IPL.BATSMAN_SCORED table for each (match_id, over_id, innings_no). 
+-- This will help us identify the number of runs scored in each over in all matches.
+SELECT 
+    "match_id", 
+    "innings_no", 
+    "over_id", 
+    SUM("runs_scored") AS "total_runs"
+FROM 
+    IPL.IPL.BATSMAN_SCORED
+GROUP BY 
+    "match_id", "innings_no", "over_id"
+ORDER BY 
+    "total_runs" DESC
+LIMIT 20;
+```
+
+```sql
+-- Description: Include extra runs to calculate the true total runs conceded in each (match_id, over_id, innings_no). 
+-- This combines runs from IPL.IPL.BATSMAN_SCORED and IPL.IPL.EXTRA_RUNS.
+SELECT 
+    b."match_id", 
+    b."innings_no", 
+    b."over_id", 
+    SUM(b."runs_scored") + COALESCE(SUM(e."extra_runs"), 0) AS "total_runs"
+FROM 
+    IPL.IPL.BATSMAN_SCORED b
+LEFT JOIN 
+    IPL.IPL.EXTRA_RUNS e
+ON 
+    b."match_id" = e."match_id" AND 
+    b."innings_no" = e."innings_no" AND 
+    b."over_id" = e."over_id" AND 
+    b."ball_id" = e."ball_id"
+GROUP BY 
+    b."match_id", b."innings_no", b."over_id"
+ORDER BY 
+    "total_runs" DESC
+LIMIT 20;
+```
+
+```sql
+-- Description: Filter overs that have the maximum runs within each match from the aggregated result above.
+-- We use a subquery to identify the max runs for each (match_id, innings_no), and filter only overs that match this value.
+WITH Over_Runs AS (
+    SELECT 
+        b."match_id", 
+        b."innings_no", 
+        b."over_id", 
+        SUM(b."runs_scored") + COALESCE(SUM(e."extra_runs"), 0) AS "total_runs"
+    FROM 
+        IPL.IPL.BATSMAN_SCORED b
+    LEFT JOIN 
+        IPL.IPL.EXTRA_RUNS e
+    ON 
+        b."match_id" = e."match_id" AND 
+        b."innings_no" = e."innings_no" AND 
+        b."over_id" = e."over_id" AND 
+        b."ball_id" = e."ball_id"
+    GROUP BY 
+        b."match_id", b."innings_no", b."over_id"
+)
+SELECT 
+    o."match_id", 
+    o."innings_no", 
+    o."over_id", 
+    o."total_runs"
+FROM 
+    Over_Runs o
+WHERE 
+    o."total_runs" = (
+        SELECT MAX("total_runs") 
+        FROM Over_Runs 
+        WHERE "match_id" = o."match_id"
+    )
+ORDER BY 
+    o."total_runs" DESC
+LIMIT 20;
+```
+
+```sql
+-- Description: Identify the bowlers for each maximum-run over by joining with IPL.IPL.BALL_BY_BALL table.
+-- Here, we include the bowler information from BALL_BY_BALL for the overs we filtered in the last query.
+WITH Max_Over_Runs AS (
+    SELECT 
+        o."match_id", 
+        o."innings_no", 
+        o."over_id", 
+        o."total_runs"
+    FROM (
+        SELECT 
+            b."match_id", 
+            b."innings_no", 
+            b."over_id", 
+            SUM(b."runs_scored") + COALESCE(SUM(e."extra_runs"), 0) AS "total_runs"
+        FROM 
+            IPL.IPL.BATSMAN_SCORED b
+        LEFT JOIN 
+            IPL.IPL.EXTRA_RUNS e
+        ON 
+            b."match_id" = e."match_id" AND 
+            b."innings_no" = e."innings_no" AND 
+            b."over_id" = e."over_id" AND 
+            b."ball_id" = e."ball_id"
+        GROUP BY 
+            b."match_id", b."innings_no", b."over_id"
+    ) o
+    WHERE 
+        o."total_runs" = (
+            SELECT MAX(SUM(b."runs_scored") + COALESCE(SUM(e."extra_runs"), 0)) 
+            FROM IPL.IPL.BATSMAN_SCORED b
+            LEFT JOIN IPL.IPL.EXTRA_RUNS e 
+            ON b."match_id" = e."match_id" AND 
+               b."innings_no" = e."innings_no" AND 
+               b."over_id" = e."over_id" AND 
+               b."ball_id" = e."ball_id"
+            WHERE b."match_id" = o."match_id"
+        )
+)
+SELECT 
+    m."match_id", 
+    m."innings_no", 
+    m."over_id", 
+    m."total_runs", 
+    b."bowler"
+FROM 
+    Max_Over_Runs m
+JOIN 
+    IPL.IPL.BALL_BY_BALL b
+ON 
+    m."match_id" = b."match_id" AND 
+    m."innings_no" = b."innings_no" AND 
+    m."over_id" = b."over_id"
+GROUP BY 
+    m."match_id", m."innings_no", m."over_id", b."bowler", m."total_runs"
+ORDER BY 
+    m."total_runs" DESC
+LIMIT 20;
+```
+
+```sql
+-- Description: Fetch the player names of the bowlers for the maximum-run overs from IPL.IPL.PLAYER.
+SELECT 
+    b."bowler", 
+    p."player_name", 
+    m."match_id", 
+    m."innings_no", 
+    m."over_id", 
+    m."total_runs"
+FROM (
+    SELECT 
+        m."match_id", 
+        m."innings_no", 
+        m."over_id", 
+        m."total_runs",
+        b."bowler"
+    FROM (
+        SELECT 
+            o."match_id", 
+            o."innings_no", 
+            o."over_id", 
+            o."total_runs"
+        FROM (
+            SELECT 
+                b."match_id", 
+                b."innings_no", 
+                b."over_id", 
+                SUM(b."runs_scored") + COALESCE(SUM(e."extra_runs"), 0) AS "total_runs"
+            FROM 
+                IPL.IPL.BATSMAN_SCORED b
+            LEFT JOIN 
+                IPL.IPL.EXTRA_RUNS e
+            ON 
+                b."match_id" = e."match_id" AND 
+                b."innings_no" = e."innings_no" AND 
+                b."over_id" = e."over_id" AND 
+                b."ball_id" = e."ball_id"
+            GROUP BY 
+                b."match_id", b."innings_no", b."over_id"
+        ) o
+        WHERE 
+            o."total_runs" = (
+                SELECT MAX(SUM(b."runs_scored") + COALESCE(SUM(e."extra_runs"), 0)) 
+                FROM IPL.IPL.BATSMAN_SCORED b
+                LEFT JOIN IPL.IPL.EXTRA_RUNS e 
+                ON b."match_id" = e."match_id" AND 
+                   b."innings_no" = e."innings_no" AND 
+                   b."over_id" = e."over_id" AND 
+                   b."ball_id" = e."ball_id"
+                WHERE b."match_id" = o."match_id"
+            )
+    ) m
+    JOIN 
+        IPL.IPL.BALL_BY_BALL b
+    ON 
+        m."match_id" = b."match_id" AND 
+        m."innings_no" = b."innings_no" AND 
+        m."over_id" = b."over_id"
+    GROUP BY 
+        m."match_id", m."innings_no", m."over_id", b."bowler", m."total_runs"
+) b
+JOIN 
+    IPL.IPL.PLAYER p
+ON 
+    b."bowler" = p."player_id"
+ORDER BY 
+    b."total_runs" DESC
+LIMIT 20;
+```
+
+```sql
+-- Description: Fetch the top 3 bowlers who conceded the maximum runs across all matches, along with respective match details and total runs conceded.
+SELECT 
+    b."player_name" AS "bowler_name", 
+    o."match_id", 
+    o."innings_no", 
+    o."over_id", 
+    o."total_runs"
+FROM (
+    SELECT 
+        m."match_id", 
+        m."innings_no", 
+        m."over_id", 
+        m."total_runs",
+        bl."bowler"
+    FROM (
+        SELECT 
+            o."match_id", 
+            o."innings_no", 
+            o."over_id", 
+            o."total_runs"
+        FROM (
+            SELECT 
+                b."match_id", 
+                b."innings_no", 
+                b."over_id", 
+                SUM(b."runs_scored") + COALESCE(SUM(e."extra_runs"), 0) AS "total_runs"
+            FROM 
+                IPL.IPL.BATSMAN_SCORED b
+            LEFT JOIN 
+                IPL.IPL.EXTRA_RUNS e
+            ON 
+                b."match_id" = e."match_id" AND 
+                b."innings_no" = e."innings_no" AND 
+                b."over_id" = e."over_id" AND 
+                b."ball_id" = e."ball_id"
+            GROUP BY 
+                b."match_id", b."innings_no", b."over_id"
+        ) o
+        WHERE 
+            o."total_runs" = (
+                SELECT MAX(o1."total_runs") 
+                FROM o1
+                WHERE o1."match_id" = o."match_id"
+            )
+    ) m
+    JOIN 
+        IPL.IPL.BALL_BY_BALL bl
+    ON 
+        m."match_id" = bl."match_id" AND 
+        m."innings_no" = bl."innings_no" AND 
+        m."over_id" = bl."over_id"
+) o
+JOIN 
+    IPL.IPL.PLAYER b
+ON 
+    o."bowler" = b."player_id"
+ORDER BY 
+    o."total_runs" DESC
+LIMIT 3;
+```
+[Exploration]
+2025-07-01 04:50:09 - Thread-666 (execute) - INFO - [Try to execute]
+-- Description: Aggregate the total runs from IPL.IPL.BATSMAN_SCORED table for each (match_id, over_id, innings_no). 
+-- This will help us identify the number of runs scored in each over in all matches.
+SELECT 
+    "match_id", 
+    "innings_no", 
+    "over_id", 
+    SUM("runs_scored") AS "total_runs"
+FROM 
+    IPL.IPL.BATSMAN_SCORED
+GROUP BY 
+    "match_id", "innings_no", "over_id"
+ORDER BY 
+    "total_runs" DESC
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:50:10 - Thread-666 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Aggregate the total runs from IPL.IPL.BATSMAN_SCORED table for each (match_id, over_id, innings_no). 
+-- This will help us identify the number of runs scored in each over in all matches.
+SELECT 
+    "match_id", 
+    "innings_no", 
+    "over_id", 
+    SUM("runs_scored") AS "total_runs"
+FROM 
+    IPL.IPL.BATSMAN_SCORED
+GROUP BY 
+    "match_id", "innings_no", "over_id"
+ORDER BY 
+    "total_runs" DESC
+LIMIT 20;
+Results:
+match_id,innings_no,over_id,total_runs
+501252,2,3,36
+734052,2,6,32
+548332,2,13,31
+335993,2,13,30
+980992,1,19,30
+501265,1,15,30
+598032,1,8,29
+598065,2,17,29
+980992,1,18,29
+548323,2,19,28
+598032,1,5,28
+548344,2,19,27
+598032,1,15,27
+729296,2,18,27
+336020,1,19,27
+980912,1,19,27
+598042,1,20,26
+419142,1,16,26
+598047,1,20,26
+335993,1,18,26
+
+[Successfully executed]
+2025-07-01 04:50:10 - Thread-666 (execute) - INFO - [Try to execute]
+-- Description: Include extra runs to calculate the true total runs conceded in each (match_id, over_id, innings_no). 
+-- This combines runs from IPL.IPL.BATSMAN_SCORED and IPL.IPL.EXTRA_RUNS.
+SELECT 
+    b."match_id", 
+    b."innings_no", 
+    b."over_id", 
+    SUM(b."runs_scored") + COALESCE(SUM(e."extra_runs"), 0) AS "total_runs"
+FROM 
+    IPL.IPL.BATSMAN_SCORED b
+LEFT JOIN 
+    IPL.IPL.EXTRA_RUNS e
+ON 
+    b."match_id" = e."match_id" AND 
+    b."innings_no" = e."innings_no" AND 
+    b."over_id" = e."over_id" AND 
+    b."ball_id" = e."ball_id"
+GROUP BY 
+    b."match_id", b."innings_no", b."over_id"
+ORDER BY 
+    "total_runs" DESC
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:50:11 - Thread-666 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Include extra runs to calculate the true total runs conceded in each (match_id, over_id, innings_no). 
+-- This combines runs from IPL.IPL.BATSMAN_SCORED and IPL.IPL.EXTRA_RUNS.
+SELECT 
+    b."match_id", 
+    b."innings_no", 
+    b."over_id", 
+    SUM(b."runs_scored") + COALESCE(SUM(e."extra_runs"), 0) AS "total_runs"
+FROM 
+    IPL.IPL.BATSMAN_SCORED b
+LEFT JOIN 
+    IPL.IPL.EXTRA_RUNS e
+ON 
+    b."match_id" = e."match_id" AND 
+    b."innings_no" = e."innings_no" AND 
+    b."over_id" = e."over_id" AND 
+    b."ball_id" = e."ball_id"
+GROUP BY 
+    b."match_id", b."innings_no", b."over_id"
+ORDER BY 
+    "total_runs" DESC
+LIMIT 20;
+Results:
+match_id,innings_no,over_id,total_runs
+501252,2,3,37
+734052,2,6,33
+548332,2,13,31
+980992,1,18,30
+335993,2,13,30
+501265,1,15,30
+980992,1,19,30
+598065,2,17,29
+598032,1,8,29
+598032,1,5,28
+548323,2,19,28
+392233,1,19,28
+980912,1,19,28
+598032,1,15,27
+548318,1,19,27
+548344,2,19,27
+336020,1,19,27
+729296,2,18,27
+598034,1,1,26
+729322,2,17,26
+
+[Successfully executed]
+2025-07-01 04:50:11 - Thread-666 (execute) - INFO - [Try to execute]
+-- Description: Filter overs that have the maximum runs within each match from the aggregated result above.
+-- We use a subquery to identify the max runs for each (match_id, innings_no), and filter only overs that match this value.
+WITH Over_Runs AS (
+    SELECT 
+        b."match_id", 
+        b."innings_no", 
+        b."over_id", 
+        SUM(b."runs_scored") + COALESCE(SUM(e."extra_runs"), 0) AS "total_runs"
+    FROM 
+        IPL.IPL.BATSMAN_SCORED b
+    LEFT JOIN 
+        IPL.IPL.EXTRA_RUNS e
+    ON 
+        b."match_id" = e."match_id" AND 
+        b."innings_no" = e."innings_no" AND 
+        b."over_id" = e."over_id" AND 
+        b."ball_id" = e."ball_id"
+    GROUP BY 
+        b."match_id", b."innings_no", b."over_id"
+)
+SELECT 
+    o."match_id", 
+    o."innings_no", 
+    o."over_id", 
+    o."total_runs"
+FROM 
+    Over_Runs o
+WHERE 
+    o."total_runs" = (
+        SELECT MAX("total_runs") 
+        FROM Over_Runs 
+        WHERE "match_id" = o."match_id"
+    )
+ORDER BY 
+    o."total_runs" DESC
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:50:11 - Thread-666 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Filter overs that have the maximum runs within each match from the aggregated result above.
+-- We use a subquery to identify the max runs for each (match_id, innings_no), and filter only overs that match this value.
+WITH Over_Runs AS (
+    SELECT 
+        b."match_id", 
+        b."innings_no", 
+        b."over_id", 
+        SUM(b."runs_scored") + COALESCE(SUM(e."extra_runs"), 0) AS "total_runs"
+    FROM 
+        IPL.IPL.BATSMAN_SCORED b
+    LEFT JOIN 
+        IPL.IPL.EXTRA_RUNS e
+    ON 
+        b."match_id" = e."match_id" AND 
+        b."innings_no" = e."innings_no" AND 
+        b."over_id" = e."over_id" AND 
+        b."ball_id" = e."ball_id"
+    GROUP BY 
+        b."match_id", b."innings_no", b."over_id"
+)
+SELECT 
+    o."match_id", 
+    o."innings_no", 
+    o."over_id", 
+    o."total_runs"
+FROM 
+    Over_Runs o
+WHERE 
+    o."total_runs" = (
+        SELECT MAX("total_runs") 
+        FROM Over_Runs 
+        WHERE "match_id" = o."match_id"
+    )
+ORDER BY 
+    o."total_runs" DESC
+LIMIT 20;
+Results:
+match_id,innings_no,over_id,total_runs
+501252,2,3,37
+734052,2,6,33
+548332,2,13,31
+980992,1,19,30
+335993,2,13,30
+980992,1,18,30
+501265,1,15,30
+598065,2,17,29
+598032,1,8,29
+548323,2,19,28
+980912,1,19,28
+392233,1,19,28
+336020,1,19,27
+548318,1,19,27
+548344,2,19,27
+729296,2,18,27
+598047,1,20,26
+980928,1,14,26
+734042,2,13,26
+734010,1,20,26
+
+[Successfully executed]
+2025-07-01 04:50:11 - Thread-666 (execute) - INFO - [Try to execute]
+-- Description: Identify the bowlers for each maximum-run over by joining with IPL.IPL.BALL_BY_BALL table.
+-- Here, we include the bowler information from BALL_BY_BALL for the overs we filtered in the last query.
+WITH Max_Over_Runs AS (
+    SELECT 
+        o."match_id", 
+        o."innings_no", 
+        o."over_id", 
+        o."total_runs"
+    FROM (
+        SELECT 
+            b."match_id", 
+            b."innings_no", 
+            b."over_id", 
+            SUM(b."runs_scored") + COALESCE(SUM(e."extra_runs"), 0) AS "total_runs"
+        FROM 
+            IPL.IPL.BATSMAN_SCORED b
+        LEFT JOIN 
+            IPL.IPL.EXTRA_RUNS e
+        ON 
+            b."match_id" = e."match_id" AND 
+            b."innings_no" = e."innings_no" AND 
+            b."over_id" = e."over_id" AND 
+            b."ball_id" = e."ball_id"
+        GROUP BY 
+            b."match_id", b."innings_no", b."over_id"
+    ) o
+    WHERE 
+        o."total_runs" = (
+            SELECT MAX(SUM(b."runs_scored") + COALESCE(SUM(e."extra_runs"), 0)) 
+            FROM IPL.IPL.BATSMAN_SCORED b
+            LEFT JOIN IPL.IPL.EXTRA_RUNS e 
+            ON b."match_id" = e."match_id" AND 
+               b."innings_no" = e."innings_no" AND 
+               b."over_id" = e."over_id" AND 
+               b."ball_id" = e."ball_id"
+            WHERE b."match_id" = o."match_id"
+        )
+)
+SELECT 
+    m."match_id", 
+    m."innings_no", 
+    m."over_id", 
+    m."total_runs", 
+    b."bowler"
+FROM 
+    Max_Over_Runs m
+JOIN 
+    IPL.IPL.BALL_BY_BALL b
+ON 
+    m."match_id" = b."match_id" AND 
+    m."innings_no" = b."innings_no" AND 
+    m."over_id" = b."over_id"
+GROUP BY 
+    m."match_id", m."innings_no", m."over_id", b."bowler", m."total_runs"
+ORDER BY 
+    m."total_runs" DESC
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:50:11 - Thread-666 (execute) - INFO - [Error occurred]
+{'status': 'error', 'error_msg': '##ERROR##002082 (42601): SQL compilation error: \nAggregate functions cannot be nested: [SUM(B."runs_scored")] nested in [MAX((SUM(B."runs_scored")) + (IFNULL(SUM(E."extra_runs"), 0)))]'}
+[Error occurred]
+2025-07-01 04:51:35 - Thread-666 (execute) - INFO - [Corrected SQL]
+```sql
+-- Description:
+-- The error in the original query arises because SQL does not allow the nesting of aggregate functions (e.g., SUM inside MAX).
+-- To fix this, we need to break down the logic into clear steps to ensure aggregates are calculated independently.
+--
+-- Thinking Process:
+-- 1. First, calculate the total runs conceded in each over (`batsman runs` + `extra runs`) for each (match_id, innings_no, over_id).
+--    This is done in a Common Table Expression (CTE) called `Total_Runs_Over`. Here, SUM functions are applied without nesting.
+--
+-- 2. Identify the over with the maximum runs conceded in each match. This is handled in another CTE, `Max_Over_Runs`, using the MAX function 
+--    on the pre-aggregated data from the first step. This ensures no nesting and isolates the max calculation.
+--
+-- 3. Join the results from `Max_Over_Runs` with `BALL_BY_BALL` to find the bowler responsible for these overs.
+--    This provides a connection between the over and its bowler in the final result.
+--
+-- 4. The query outputs the bowler, match_id, innings_no, over_id, and total runs conceded, sorted in descending order of total runs.
+-- 
+-- Here's the combined SQL that reflects this approach:
+
+WITH Total_Runs_Over AS (
+    -- Step 1: Calculate the total runs conceded in each over
+    SELECT 
+        b."match_id", 
+        b."innings_no", 
+        b."over_id", 
+        SUM(b."runs_scored") + COALESCE(SUM(e."extra_runs"), 0) AS "total_runs"
+    FROM 
+        IPL.IPL.BATSMAN_SCORED b
+    LEFT JOIN 
+        IPL.IPL.EXTRA_RUNS e
+    ON 
+        b."match_id" = e."match_id" AND 
+        b."innings_no" = e."innings_no" AND 
+        b."over_id" = e."over_id" AND 
+        b."ball_id" = e."ball_id"
+    GROUP BY 
+        b."match_id", b."innings_no", b."over_id"
+),
+Max_Over_Runs AS (
+    -- Step 2: Find the over with the maximum runs conceded for each match
+    SELECT 
+        t."match_id", 
+        t."innings_no", 
+        t."over_id", 
+        t."total_runs"
+    FROM 
+        Total_Runs_Over t
+    WHERE 
+        t."total_runs" = (
+            SELECT MAX(t_sub."total_runs") 
+            FROM Total_Runs_Over t_sub 
+            WHERE t_sub."match_id" = t."match_id"
+        )
+)
+-- Step 3: Join the maximum-run overs with BALL_BY_BALL to find the responsible bowler
+SELECT 
+    m."match_id", 
+    m."innings_no", 
+    m."over_id", 
+    m."total_runs", 
+    b."bowler"
+FROM 
+    Max_Over_Runs m
+JOIN 
+    IPL.IPL.BALL_BY_BALL b
+ON 
+    m."match_id" = b."match_id" AND 
+    m."innings_no" = b."innings_no" AND 
+    m."over_id" = b."over_id"
+GROUP BY 
+    m."match_id", m."innings_no", m."over_id", b."bowler", m."total_runs"
+ORDER BY 
+    m."total_runs" DESC
+LIMIT 20;
+```
+[Corrected SQL]
+2025-07-01 04:51:35 - Thread-666 (execute) - INFO - [Results for corrected sql]
+match_id,innings_no,over_id,total_runs,bowler
+501252,2,3,37,294
+734052,2,6,33,333
+548332,2,13,31,235
+980992,1,19,30,432
+335993,2,13,30,56
+501265,1,15,30,268
+980992,1,18,30,71
+598065,2,17,29,280
+598032,1,8,29,254
+392233,1,19,28,61
+392233,1,19,28,256
+980912,1,19,28,299
+548323,2,19,28,8
+548344,2,19,27,67
+336020,1,19,27,38
+729296,2,18,27,80
+548318,1,19,27,228
+548318,1,19,27,256
+598047,1,20,26,106
+335997,2,14,26,14
+
+[Results for corrected sql]
+2025-07-01 04:51:58 - Thread-666 (execute) - INFO - [Corrected other sqls]
+```sql
+-- Description:
+-- The first SQL fetches the player names of the bowlers for the maximum-run overs from the IPL.IPL.PLAYER table.
+-- The issue in the original SQL comes from the nesting of aggregate functions (SUM inside MAX). To fix this:
+-- 
+-- 1. First, calculate total runs conceded in each over using a Common Table Expression (CTE) called `Total_Runs_Over`.
+-- 2. Then, extract the maximum-run over for each match in the `Max_Over_Runs` CTE by comparing against a `MAX()` value without nesting.
+-- 3. Join the results with the `BALL_BY_BALL` table to extract bowler details and then join with the `PLAYER` table to fetch player names.
+-- Here's the corrected SQL:
+
+WITH Total_Runs_Over AS (
+    SELECT 
+        b."match_id", 
+        b."innings_no", 
+        b."over_id", 
+        SUM(b."runs_scored") + COALESCE(SUM(e."extra_runs"), 0) AS "total_runs"
+    FROM 
+        IPL.IPL.BATSMAN_SCORED b
+    LEFT JOIN 
+        IPL.IPL.EXTRA_RUNS e
+    ON 
+        b."match_id" = e."match_id" AND 
+        b."innings_no" = e."innings_no" AND 
+        b."over_id" = e."over_id" AND 
+        b."ball_id" = e."ball_id"
+    GROUP BY 
+        b."match_id", b."innings_no", b."over_id"
+),
+Max_Over_Runs AS (
+    SELECT 
+        t."match_id", 
+        t."innings_no", 
+        t."over_id", 
+        t."total_runs"
+    FROM 
+        Total_Runs_Over t
+    WHERE 
+        t."total_runs" = (
+            SELECT MAX(t_sub."total_runs") 
+            FROM Total_Runs_Over t_sub 
+            WHERE t_sub."match_id" = t."match_id"
+        )
+)
+SELECT 
+    b."bowler", 
+    p."player_name", 
+    m."match_id", 
+    m."innings_no", 
+    m."over_id", 
+    m."total_runs"
+FROM 
+    Max_Over_Runs m
+JOIN 
+    IPL.IPL.BALL_BY_BALL b
+ON 
+    m."match_id" = b."match_id" AND 
+    m."innings_no" = b."innings_no" AND 
+    m."over_id" = b."over_id"
+JOIN 
+    IPL.IPL.PLAYER p
+ON 
+    b."bowler" = p."player_id"
+GROUP BY 
+    b."bowler", p."player_name", m."match_id", m."innings_no", m."over_id", m."total_runs"
+ORDER BY 
+    m."total_runs" DESC
+LIMIT 20;
+```
+
+```sql
+-- Description:
+-- The second SQL fetches the top 3 bowlers who conceded the maximum runs across all matches, including match details and total runs.
+-- Similar to the first SQL, the issue arises from nesting aggregate functions within `SELECT MAX`. To fix this:
+-- 
+-- 1. Use `Total_Runs_Over` to calculate runs conceded in each (match_id, innings_no, over_id) without nesting SUM functions.
+-- 2. Use `Max_Over_Runs` to isolate the over with maximum runs for each match based on the calculated `total_runs`.
+-- 3. Join the maximum-run data with the `BALL_BY_BALL` table for bowler details and the `PLAYER` table for their names.
+-- Here's the corrected SQL:
+
+WITH Total_Runs_Over AS (
+    SELECT 
+        b."match_id", 
+        b."innings_no", 
+        b."over_id", 
+        SUM(b."runs_scored") + COALESCE(SUM(e."extra_runs"), 0) AS "total_runs"
+    FROM 
+        IPL.IPL.BATSMAN_SCORED b
+    LEFT JOIN 
+        IPL.IPL.EXTRA_RUNS e
+    ON 
+        b."match_id" = e."match_id" AND 
+        b."innings_no" = e."innings_no" AND 
+        b."over_id" = e."over_id" AND 
+        b."ball_id" = e."ball_id"
+    GROUP BY 
+        b."match_id", b."innings_no", b."over_id"
+),
+Max_Over_Runs AS (
+    SELECT 
+        t."match_id", 
+        t."innings_no", 
+        t."over_id", 
+        t."total_runs"
+    FROM 
+        Total_Runs_Over t
+    WHERE 
+        t."total_runs" = (
+            SELECT MAX(t_sub."total_runs") 
+            FROM Total_Runs_Over t_sub 
+            WHERE t_sub."match_id" = t."match_id"
+        )
+)
+SELECT 
+    p."player_name" AS "bowler_name", 
+    m."match_id", 
+    m."innings_no", 
+    m."over_id", 
+    m."total_runs"
+FROM 
+    Max_Over_Runs m
+JOIN 
+    IPL.IPL.BALL_BY_BALL b
+ON 
+    m."match_id" = b."match_id" AND 
+    m."innings_no" = b."innings_no" AND 
+    m."over_id" = b."over_id"
+JOIN 
+    IPL.IPL.PLAYER p
+ON 
+    b."bowler" = p."player_id"
+GROUP BY 
+    p."player_name", m."match_id", m."innings_no", m."over_id", m."total_runs"
+ORDER BY 
+    m."total_runs" DESC
+LIMIT 3;
+```
+[Corrected other sqls]
+2025-07-01 04:51:58 - Thread-666 (execute) - INFO - [Successfully corrected]
+Successfully executed. SQL:
+-- Description: Identify the bowlers for each maximum-run over by joining with IPL.IPL.BALL_BY_BALL table.
+-- Here, we include the bowler information from BALL_BY_BALL for the overs we filtered in the last query.
+WITH Max_Over_Runs AS (
+    SELECT 
+        o."match_id", 
+        o."innings_no", 
+        o."over_id", 
+        o."total_runs"
+    FROM (
+        SELECT 
+            b."match_id", 
+            b."innings_no", 
+            b."over_id", 
+            SUM(b."runs_scored") + COALESCE(SUM(e."extra_runs"), 0) AS "total_runs"
+        FROM 
+            IPL.IPL.BATSMAN_SCORED b
+        LEFT JOIN 
+            IPL.IPL.EXTRA_RUNS e
+        ON 
+            b."match_id" = e."match_id" AND 
+            b."innings_no" = e."innings_no" AND 
+            b."over_id" = e."over_id" AND 
+            b."ball_id" = e."ball_id"
+        GROUP BY 
+            b."match_id", b."innings_no", b."over_id"
+    ) o
+    WHERE 
+        o."total_runs" = (
+            SELECT MAX(SUM(b."runs_scored") + COALESCE(SUM(e."extra_runs"), 0)) 
+            FROM IPL.IPL.BATSMAN_SCORED b
+            LEFT JOIN IPL.IPL.EXTRA_RUNS e 
+            ON b."match_id" = e."match_id" AND 
+               b."innings_no" = e."innings_no" AND 
+               b."over_id" = e."over_id" AND 
+               b."ball_id" = e."ball_id"
+            WHERE b."match_id" = o."match_id"
+        )
+)
+SELECT 
+    m."match_id", 
+    m."innings_no", 
+    m."over_id", 
+    m."total_runs", 
+    b."bowler"
+FROM 
+    Max_Over_Runs m
+JOIN 
+    IPL.IPL.BALL_BY_BALL b
+ON 
+    m."match_id" = b."match_id" AND 
+    m."innings_no" = b."innings_no" AND 
+    m."over_id" = b."over_id"
+GROUP BY 
+    m."match_id", m."innings_no", m."over_id", b."bowler", m."total_runs"
+ORDER BY 
+    m."total_runs" DESC
+LIMIT 20;
+Results:
+match_id,innings_no,over_id,total_runs,bowler
+501252,2,3,37,294
+734052,2,6,33,333
+548332,2,13,31,235
+980992,1,19,30,432
+335993,2,13,30,56
+501265,1,15,30,268
+980992,1,18,30,71
+598065,2,17,29,280
+598032,1,8,29,254
+392233,1,19,28,61
+392233,1,19,28,256
+980912,1,19,28,299
+548323,2,19,28,8
+548344,2,19,27,67
+336020,1,19,27,38
+729296,2,18,27,80
+548318,1,19,27,228
+548318,1,19,27,256
+598047,1,20,26,106
+335997,2,14,26,14
+
+[Successfully corrected]
+2025-07-01 04:51:58 - Thread-666 (execute) - INFO - [Try to execute]
+-- Description:
+-- The first SQL fetches the player names of the bowlers for the maximum-run overs from the IPL.IPL.PLAYER table.
+-- The issue in the original SQL comes from the nesting of aggregate functions (SUM inside MAX). To fix this:
+-- 
+-- 1. First, calculate total runs conceded in each over using a Common Table Expression (CTE) called `Total_Runs_Over`.
+-- 2. Then, extract the maximum-run over for each match in the `Max_Over_Runs` CTE by comparing against a `MAX()` value without nesting.
+-- 3. Join the results with the `BALL_BY_BALL` table to extract bowler details and then join with the `PLAYER` table to fetch player names.
+-- Here's the corrected SQL:
+
+WITH Total_Runs_Over AS (
+    SELECT 
+        b."match_id", 
+        b."innings_no", 
+        b."over_id", 
+        SUM(b."runs_scored") + COALESCE(SUM(e."extra_runs"), 0) AS "total_runs"
+    FROM 
+        IPL.IPL.BATSMAN_SCORED b
+    LEFT JOIN 
+        IPL.IPL.EXTRA_RUNS e
+    ON 
+        b."match_id" = e."match_id" AND 
+        b."innings_no" = e."innings_no" AND 
+        b."over_id" = e."over_id" AND 
+        b."ball_id" = e."ball_id"
+    GROUP BY 
+        b."match_id", b."innings_no", b."over_id"
+),
+Max_Over_Runs AS (
+    SELECT 
+        t."match_id", 
+        t."innings_no", 
+        t."over_id", 
+        t."total_runs"
+    FROM 
+        Total_Runs_Over t
+    WHERE 
+        t."total_runs" = (
+            SELECT MAX(t_sub."total_runs") 
+            FROM Total_Runs_Over t_sub 
+            WHERE t_sub."match_id" = t."match_id"
+        )
+)
+SELECT 
+    b."bowler", 
+    p."player_name", 
+    m."match_id", 
+    m."innings_no", 
+    m."over_id", 
+    m."total_runs"
+FROM 
+    Max_Over_Runs m
+JOIN 
+    IPL.IPL.BALL_BY_BALL b
+ON 
+    m."match_id" = b."match_id" AND 
+    m."innings_no" = b."innings_no" AND 
+    m."over_id" = b."over_id"
+JOIN 
+    IPL.IPL.PLAYER p
+ON 
+    b."bowler" = p."player_id"
+GROUP BY 
+    b."bowler", p."player_name", m."match_id", m."innings_no", m."over_id", m."total_runs"
+ORDER BY 
+    m."total_runs" DESC
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:51:59 - Thread-666 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description:
+-- The first SQL fetches the player names of the bowlers for the maximum-run overs from the IPL.IPL.PLAYER table.
+-- The issue in the original SQL comes from the nesting of aggregate functions (SUM inside MAX). To fix this:
+-- 
+-- 1. First, calculate total runs conceded in each over using a Common Table Expression (CTE) called `Total_Runs_Over`.
+-- 2. Then, extract the maximum-run over for each match in the `Max_Over_Runs` CTE by comparing against a `MAX()` value without nesting.
+-- 3. Join the results with the `BALL_BY_BALL` table to extract bowler details and then join with the `PLAYER` table to fetch player names.
+-- Here's the corrected SQL:
+
+WITH Total_Runs_Over AS (
+    SELECT 
+        b."match_id", 
+        b."innings_no", 
+        b."over_id", 
+        SUM(b."runs_scored") + COALESCE(SUM(e."extra_runs"), 0) AS "total_runs"
+    FROM 
+        IPL.IPL.BATSMAN_SCORED b
+    LEFT JOIN 
+        IPL.IPL.EXTRA_RUNS e
+    ON 
+        b."match_id" = e."match_id" AND 
+        b."innings_no" = e."innings_no" AND 
+        b."over_id" = e."over_id" AND 
+        b."ball_id" = e."ball_id"
+    GROUP BY 
+        b."match_id", b."innings_no", b."over_id"
+),
+Max_Over_Runs AS (
+    SELECT 
+        t."match_id", 
+        t."innings_no", 
+        t."over_id", 
+        t."total_runs"
+    FROM 
+        Total_Runs_Over t
+    WHERE 
+        t."total_runs" = (
+            SELECT MAX(t_sub."total_runs") 
+            FROM Total_Runs_Over t_sub 
+            WHERE t_sub."match_id" = t."match_id"
+        )
+)
+SELECT 
+    b."bowler", 
+    p."player_name", 
+    m."match_id", 
+    m."innings_no", 
+    m."over_id", 
+    m."total_runs"
+FROM 
+    Max_Over_Runs m
+JOIN 
+    IPL.IPL.BALL_BY_BALL b
+ON 
+    m."match_id" = b."match_id" AND 
+    m."innings_no" = b."innings_no" AND 
+    m."over_id" = b."over_id"
+JOIN 
+    IPL.IPL.PLAYER p
+ON 
+    b."bowler" = p."player_id"
+GROUP BY 
+    b."bowler", p."player_name", m."match_id", m."innings_no", m."over_id", m."total_runs"
+ORDER BY 
+    m."total_runs" DESC
+LIMIT 20;
+Results:
+bowler,player_name,match_id,innings_no,over_id,total_runs
+294,P Parameswaran,501252,2,3,37
+333,P Awana,734052,2,6,33
+235,R Sharma,548332,2,13,31
+56,A Symonds,335993,2,13,30
+268,JJ van der Wath,501265,1,15,30
+432,S Kaushik,980992,1,19,30
+71,DJ Bravo,980992,1,18,30
+254,AJ Finch,598032,1,8,29
+280,NLTC Perera,598065,2,17,29
+299,B Kumar,980912,1,19,28
+8,V Kohli,548323,2,19,28
+61,RP Singh,392233,1,19,28
+256,Harmeet Singh,392233,1,19,28
+67,PP Chawla,548344,2,19,27
+
+[Successfully executed]
+2025-07-01 04:51:59 - Thread-666 (execute) - INFO - [Try to execute]
+-- Description:
+-- The second SQL fetches the top 3 bowlers who conceded the maximum runs across all matches, including match details and total runs.
+-- Similar to the first SQL, the issue arises from nesting aggregate functions within `SELECT MAX`. To fix this:
+-- 
+-- 1. Use `Total_Runs_Over` to calculate runs conceded in each (match_id, innings_no, over_id) without nesting SUM functions.
+-- 2. Use `Max_Over_Runs` to isolate the over with maximum runs for each match based on the calculated `total_runs`.
+-- 3. Join the maximum-run data with the `BALL_BY_BALL` table for bowler details and the `PLAYER` table for their names.
+-- Here's the corrected SQL:
+
+WITH Total_Runs_Over AS (
+    SELECT 
+        b."match_id", 
+        b."innings_no", 
+        b."over_id", 
+        SUM(b."runs_scored") + COALESCE(SUM(e."extra_runs"), 0) AS "total_runs"
+    FROM 
+        IPL.IPL.BATSMAN_SCORED b
+    LEFT JOIN 
+        IPL.IPL.EXTRA_RUNS e
+    ON 
+        b."match_id" = e."match_id" AND 
+        b."innings_no" = e."innings_no" AND 
+        b."over_id" = e."over_id" AND 
+        b."ball_id" = e."ball_id"
+    GROUP BY 
+        b."match_id", b."innings_no", b."over_id"
+),
+Max_Over_Runs AS (
+    SELECT 
+        t."match_id", 
+        t."innings_no", 
+        t."over_id", 
+        t."total_runs"
+    FROM 
+        Total_Runs_Over t
+    WHERE 
+        t."total_runs" = (
+            SELECT MAX(t_sub."total_runs") 
+            FROM Total_Runs_Over t_sub 
+            WHERE t_sub."match_id" = t."match_id"
+        )
+)
+SELECT 
+    p."player_name" AS "bowler_name", 
+    m."match_id", 
+    m."innings_no", 
+    m."over_id", 
+    m."total_runs"
+FROM 
+    Max_Over_Runs m
+JOIN 
+    IPL.IPL.BALL_BY_BALL b
+ON 
+    m."match_id" = b."match_id" AND 
+    m."innings_no" = b."innings_no" AND 
+    m."over_id" = b."over_id"
+JOIN 
+    IPL.IPL.PLAYER p
+ON 
+    b."bowler" = p."player_id"
+GROUP BY 
+    p."player_name", m."match_id", m."innings_no", m."over_id", m."total_runs"
+ORDER BY 
+    m."total_runs" DESC
+LIMIT 3;
+[Try to execute]
+2025-07-01 04:51:59 - Thread-666 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description:
+-- The second SQL fetches the top 3 bowlers who conceded the maximum runs across all matches, including match details and total runs.
+-- Similar to the first SQL, the issue arises from nesting aggregate functions within `SELECT MAX`. To fix this:
+-- 
+-- 1. Use `Total_Runs_Over` to calculate runs conceded in each (match_id, innings_no, over_id) without nesting SUM functions.
+-- 2. Use `Max_Over_Runs` to isolate the over with maximum runs for each match based on the calculated `total_runs`.
+-- 3. Join the maximum-run data with the `BALL_BY_BALL` table for bowler details and the `PLAYER` table for their names.
+-- Here's the corrected SQL:
+
+WITH Total_Runs_Over AS (
+    SELECT 
+        b."match_id", 
+        b."innings_no", 
+        b."over_id", 
+        SUM(b."runs_scored") + COALESCE(SUM(e."extra_runs"), 0) AS "total_runs"
+    FROM 
+        IPL.IPL.BATSMAN_SCORED b
+    LEFT JOIN 
+        IPL.IPL.EXTRA_RUNS e
+    ON 
+        b."match_id" = e."match_id" AND 
+        b."innings_no" = e."innings_no" AND 
+        b."over_id" = e."over_id" AND 
+        b."ball_id" = e."ball_id"
+    GROUP BY 
+        b."match_id", b."innings_no", b."over_id"
+),
+Max_Over_Runs AS (
+    SELECT 
+        t."match_id", 
+        t."innings_no", 
+        t."over_id", 
+        t."total_runs"
+    FROM 
+        Total_Runs_Over t
+    WHERE 
+        t."total_runs" = (
+            SELECT MAX(t_sub."total_runs") 
+            FROM Total_Runs_Over t_sub 
+            WHERE t_sub."match_id" = t."match_id"
+        )
+)
+SELECT 
+    p."player_name" AS "bowler_name", 
+    m."match_id", 
+    m."innings_no", 
+    m."over_id", 
+    m."total_runs"
+FROM 
+    Max_Over_Runs m
+JOIN 
+    IPL.IPL.BALL_BY_BALL b
+ON 
+    m."match_id" = b."match_id" AND 
+    m."innings_no" = b."innings_no" AND 
+    m."over_id" = b."over_id"
+JOIN 
+    IPL.IPL.PLAYER p
+ON 
+    b."bowler" = p."player_id"
+GROUP BY 
+    p."player_name", m."match_id", m."innings_no", m."over_id", m."total_runs"
+ORDER BY 
+    m."total_runs" DESC
+LIMIT 3;
+Results:
+bowler_name,match_id,innings_no,over_id,total_runs
+P Parameswaran,501252,2,3,37
+P Awana,734052,2,6,33
+R Sharma,548332,2,13,31
+
+[Successfully executed]
+2025-07-01 04:51:59 - Thread-666 (execute) - INFO - itercount: 0
+2025-07-01 04:51:59 - Thread-666 (execute) - INFO - [Self-refine]
+Table full name: IPL.IPL.PLAYER_MATCH
+Column name: team_id Type: NUMBER
+Column name: match_id Type: NUMBER
+Column name: player_id Type: NUMBER
+Sample rows:
+[{'match_id': 392220, 'player_id': 133, 'team_id': 7}, {'match_id': 548368, 'player_id': 40, 'team_id': 1}, {'match_id': 548368, 'player_id': 50, 'team_id': 7}, {'match_id': 501244, 'player_id': 40, 'team_id': 1}, {'match_id': 733998, 'player_id': 42, 'team_id': 11}]
+--------------------------------------------------
+Table full name: IPL.IPL.PLAYER
+Column name: player_id Type: NUMBER
+Column name: player_name Type: TEXT
+Column name: country_name Type: TEXT
+Sample rows:
+[{'player_id': 2, 'player_name': 'BB McCullum', 'country_name': 'New Zealand'}, {'player_id': 3, 'player_name': 'RT Ponting', 'country_name': 'Australia'}, {'player_id': 5, 'player_name': 'Mohammad Hafeez', 'country_name': 'Pakistan'}, {'player_id': 7, 'player_name': 'W Jaffer', 'country_name': 'India'}, {'player_id': 8, 'player_name': 'V Kohli', 'country_name': 'India'}]
+--------------------------------------------------
+Table full name: IPL.IPL.BATSMAN_SCORED
+Column name: ball_id Type: NUMBER
+Column name: runs_scored Type: NUMBER
+Column name: over_id Type: NUMBER
+Column name: match_id Type: NUMBER
+Column name: innings_no Type: NUMBER
+Sample rows:
+[{'match_id': 335987, 'over_id': 1, 'ball_id': 1, 'runs_scored': 1, 'innings_no': 2}, {'match_id': 335987, 'over_id': 1, 'ball_id': 2, 'runs_scored': 0, 'innings_no': 1}, {'match_id': 335987, 'over_id': 1, 'ball_id': 4, 'runs_scored': 1, 'innings_no': 2}, {'match_id': 335987, 'over_id': 1, 'ball_id': 5, 'runs_scored': 0, 'innings_no': 1}, {'match_id': 335987, 'over_id': 1, 'ball_id': 5, 'runs_scored': 1, 'innings_no': 2}]
+--------------------------------------------------
+Table full name: IPL.IPL.BALL_BY_BALL
+Column name: striker Type: NUMBER
+Column name: ball_id Type: NUMBER
+Column name: innings_no Type: NUMBER
+Column name: match_id Type: NUMBER
+Column name: team_bowling Type: NUMBER
+Column name: bowler Type: NUMBER
+Column name: over_id Type: NUMBER
+Column name: non_striker Type: NUMBER
+Sample rows:
+[{'match_id': 335987, 'over_id': 1, 'ball_id': 2, 'innings_no': 2, 'team_bowling': 1, 'striker': 7, 'non_striker': 6, 'bowler': 106}, {'match_id': 335987, 'over_id': 1, 'ball_id': 3, 'innings_no': 1, 'team_bowling': 2, 'striker': 2, 'non_striker': 1, 'bowler': 14}, {'match_id': 335987, 'over_id': 1, 'ball_id': 3, 'innings_no': 2, 'team_bowling': 1, 'striker': 7, 'non_striker': 6, 'bowler': 106}, {'match_id': 335987, 'over_id': 1, 'ball_id': 4, 'innings_no': 1, 'team_bowling': 2, 'striker': 2, 'non_striker': 1, 'bowler': 14}, {'match_id': 335987, 'over_id': 1, 'ball_id': 6, 'innings_no': 1, 'team_bowling': 2, 'striker': 2, 'non_striker': 1, 'bowler': 14}]
+--------------------------------------------------
+Table full name: IPL.IPL.EXTRA_RUNS
+Column name: over_id Type: NUMBER
+Column name: match_id Type: NUMBER
+Column name: innings_no Type: NUMBER
+Column name: ball_id Type: NUMBER
+Column name: extra_type Type: TEXT
+Column name: extra_runs Type: NUMBER
+Sample rows:
+[{'match_id': 501229, 'over_id': 18, 'ball_id': 6, 'extra_type': 'legbyes', 'extra_runs': 4, 'innings_no': 2}, {'match_id': 392239, 'over_id': 18, 'ball_id': 6, 'extra_type': 'legbyes', 'extra_runs': 1, 'innings_no': 2}, {'match_id': 501229, 'over_id': 20, 'ball_id': 3, 'extra_type': 'legbyes', 'extra_runs': 1, 'innings_no': 1}, {'match_id': 829816, 'over_id': 3, 'ball_id': 3, 'extra_type': 'legbyes', 'extra_runs': 1, 'innings_no': 2}, {'match_id': 501230, 'over_id': 3, 'ball_id': 4, 'extra_type': 'legbyes', 'extra_runs': 1, 'innings_no': 2}]
+--------------------------------------------------
+Table full name: IPL.IPL.MATCH
+Column name: team_2 Type: NUMBER
+Column name: match_date Type: TEXT
+Column name: match_id Type: NUMBER
+Column name: team_1 Type: NUMBER
+Sample rows:
+[{'match_id': 335987, 'team_1': 2, 'team_2': 1, 'match_date': '2008-04-18'}, {'match_id': 335988, 'team_1': 4, 'team_2': 3, 'match_date': '2008-04-19'}, {'match_id': 335989, 'team_1': 6, 'team_2': 5, 'match_date': '2008-04-19'}, {'match_id': 335991, 'team_1': 1, 'team_2': 8, 'match_date': '2008-04-20'}, {'match_id': 335993, 'team_1': 8, 'team_2': 6, 'match_date': '2008-04-22'}]
+--------------------------------------------------
+Table full name: IPL.IPL.TEAM
+Column name: name Type: TEXT
+Column name: team_id Type: NUMBER
+Sample rows:
+[{'team_id': 2, 'name': 'Royal Challengers Bangalore'}, {'team_id': 3, 'name': 'Chennai Super Kings'}, {'team_id': 4, 'name': 'Kings XI Punjab'}, {'team_id': 5, 'name': 'Rajasthan Royals'}, {'team_id': 6, 'name': 'Delhi Daredevils'}]
+--------------------------------------------------
+External knowledge that might be helpful: 
+None
+The table structure information is ({database name: {schema name: [table name]}}): 
+{'IPL': {'IPL': ['PLAYER_MATCH', 'PLAYER', 'BATSMAN_SCORED', 'BALL_BY_BALL', 'EXTRA_RUNS', 'MATCH', 'TEAM']}}
+
+Some few-shot examples after column exploration may be helpful:
+Query:
+-- Description: Aggregate the total runs from IPL.IPL.BATSMAN_SCORED table for each (match_id, over_id, innings_no). 
+-- This will help us identify the number of runs scored in each over in all matches.
+SELECT 
+    "match_id", 
+    "innings_no", 
+    "over_id", 
+    SUM("runs_scored") AS "total_runs"
+FROM 
+    IPL.IPL.BATSMAN_SCORED
+GROUP BY 
+    "match_id", "innings_no", "over_id"
+ORDER BY 
+    "total_runs" DESC
+LIMIT 20;
+Answer:
+match_id,innings_no,over_id,total_runs
+501252,2,3,36
+734052,2,6,32
+548332,2,13,31
+335993,2,13,30
+980992,1,19,30
+501265,1,15,30
+598032,1,8,29
+598065,2,17,29
+980992,1,18,29
+548323,2,19,28
+598032,1,5,28
+548344,2,19,27
+598032,1,15,27
+729296,2,18,27
+336020,1,19,27
+980912,1,19,27
+598042,1,20,26
+419142,1,16,26
+598047,1,20,26
+335993,1,18,26
+Query:
+-- Description: Include extra runs to calculate the true total runs conceded in each (match_id, over_id, innings_no). 
+-- This combines runs from IPL.IPL.BATSMAN_SCORED and IPL.IPL.EXTRA_RUNS.
+SELECT 
+    b."match_id", 
+    b."innings_no", 
+    b."over_id", 
+    SUM(b."runs_scored") + COALESCE(SUM(e."extra_runs"), 0) AS "total_runs"
+FROM 
+    IPL.IPL.BATSMAN_SCORED b
+LEFT JOIN 
+    IPL.IPL.EXTRA_RUNS e
+ON 
+    b."match_id" = e."match_id" AND 
+    b."innings_no" = e."innings_no" AND 
+    b."over_id" = e."over_id" AND 
+    b."ball_id" = e."ball_id"
+GROUP BY 
+    b."match_id", b."innings_no", b."over_id"
+ORDER BY 
+    "total_runs" DESC
+LIMIT 20;
+Answer:
+match_id,innings_no,over_id,total_runs
+501252,2,3,37
+734052,2,6,33
+548332,2,13,31
+980992,1,18,30
+335993,2,13,30
+501265,1,15,30
+980992,1,19,30
+598065,2,17,29
+598032,1,8,29
+598032,1,5,28
+548323,2,19,28
+392233,1,19,28
+980912,1,19,28
+598032,1,15,27
+548318,1,19,27
+548344,2,19,27
+336020,1,19,27
+729296,2,18,27
+598034,1,1,26
+729322,2,17,26
+Query:
+-- Description: Filter overs that have the maximum runs within each match from the aggregated result above.
+-- We use a subquery to identify the max runs for each (match_id, innings_no), and filter only overs that match this value.
+WITH Over_Runs AS (
+    SELECT 
+        b."match_id", 
+        b."innings_no", 
+        b."over_id", 
+        SUM(b."runs_scored") + COALESCE(SUM(e."extra_runs"), 0) AS "total_runs"
+    FROM 
+        IPL.IPL.BATSMAN_SCORED b
+    LEFT JOIN 
+        IPL.IPL.EXTRA_RUNS e
+    ON 
+        b."match_id" = e."match_id" AND 
+        b."innings_no" = e."innings_no" AND 
+        b."over_id" = e."over_id" AND 
+        b."ball_id" = e."ball_id"
+    GROUP BY 
+        b."match_id", b."innings_no", b."over_id"
+)
+SELECT 
+    o."match_id", 
+    o."innings_no", 
+    o."over_id", 
+    o."total_runs"
+FROM 
+    Over_Runs o
+WHERE 
+    o."total_runs" = (
+        SELECT MAX("total_runs") 
+        FROM Over_Runs 
+        WHERE "match_id" = o."match_id"
+    )
+ORDER BY 
+    o."total_runs" DESC
+LIMIT 20;
+Answer:
+match_id,innings_no,over_id,total_runs
+501252,2,3,37
+734052,2,6,33
+548332,2,13,31
+980992,1,19,30
+335993,2,13,30
+980992,1,18,30
+501265,1,15,30
+598065,2,17,29
+598032,1,8,29
+548323,2,19,28
+980912,1,19,28
+392233,1,19,28
+336020,1,19,27
+548318,1,19,27
+548344,2,19,27
+729296,2,18,27
+598047,1,20,26
+980928,1,14,26
+734042,2,13,26
+734010,1,20,26
+Query:
+-- Description:
+-- The first SQL fetches the player names of the bowlers for the maximum-run overs from the IPL.IPL.PLAYER table.
+-- The issue in the original SQL comes from the nesting of aggregate functions (SUM inside MAX). To fix this:
+-- 
+-- 1. First, calculate total runs conceded in each over using a Common Table Expression (CTE) called `Total_Runs_Over`.
+-- 2. Then, extract the maximum-run over for each match in the `Max_Over_Runs` CTE by comparing against a `MAX()` value without nesting.
+-- 3. Join the results with the `BALL_BY_BALL` table to extract bowler details and then join with the `PLAYER` table to fetch player names.
+-- Here's the corrected SQL:
+
+WITH Total_Runs_Over AS (
+    SELECT 
+        b."match_id", 
+        b."innings_no", 
+        b."over_id", 
+        SUM(b."runs_scored") + COALESCE(SUM(e."extra_runs"), 0) AS "total_runs"
+    FROM 
+        IPL.IPL.BATSMAN_SCORED b
+    LEFT JOIN 
+        IPL.IPL.EXTRA_RUNS e
+    ON 
+        b."match_id" = e."match_id" AND 
+        b."innings_no" = e."innings_no" AND 
+        b."over_id" = e."over_id" AND 
+        b."ball_id" = e."ball_id"
+    GROUP BY 
+        b."match_id", b."innings_no", b."over_id"
+),
+Max_Over_Runs AS (
+    SELECT 
+        t."match_id", 
+        t."innings_no", 
+        t."over_id", 
+        t."total_runs"
+    FROM 
+        Total_Runs_Over t
+    WHERE 
+        t."total_runs" = (
+            SELECT MAX(t_sub."total_runs") 
+            FROM Total_Runs_Over t_sub 
+            WHERE t_sub."match_id" = t."match_id"
+        )
+)
+SELECT 
+    b."bowler", 
+    p."player_name", 
+    m."match_id", 
+    m."innings_no", 
+    m."over_id", 
+    m."total_runs"
+FROM 
+    Max_Over_Runs m
+JOIN 
+    IPL.IPL.BALL_BY_BALL b
+ON 
+    m."match_id" = b."match_id" AND 
+    m."innings_no" = b."innings_no" AND 
+    m."over_id" = b."over_id"
+JOIN 
+    IPL.IPL.PLAYER p
+ON 
+    b."bowler" = p."player_id"
+GROUP BY 
+    b."bowler", p."player_name", m."match_id", m."innings_no", m."over_id", m."total_runs"
+ORDER BY 
+    m."total_runs" DESC
+LIMIT 20;
+Answer:
+bowler,player_name,match_id,innings_no,over_id,total_runs
+294,P Parameswaran,501252,2,3,37
+333,P Awana,734052,2,6,33
+235,R Sharma,548332,2,13,31
+56,A Symonds,335993,2,13,30
+268,JJ van der Wath,501265,1,15,30
+432,S Kaushik,980992,1,19,30
+71,DJ Bravo,980992,1,18,30
+254,AJ Finch,598032,1,8,29
+280,NLTC Perera,598065,2,17,29
+299,B Kumar,980912,1,19,28
+8,V Kohli,548323,2,19,28
+61,RP Singh,392233,1,19,28
+256,Harmeet Singh,392233,1,19,28
+67,PP Chawla,548344,2,19,27
+Query:
+-- Description:
+-- The second SQL fetches the top 3 bowlers who conceded the maximum runs across all matches, including match details and total runs.
+-- Similar to the first SQL, the issue arises from nesting aggregate functions within `SELECT MAX`. To fix this:
+-- 
+-- 1. Use `Total_Runs_Over` to calculate runs conceded in each (match_id, innings_no, over_id) without nesting SUM functions.
+-- 2. Use `Max_Over_Runs` to isolate the over with maximum runs for each match based on the calculated `total_runs`.
+-- 3. Join the maximum-run data with the `BALL_BY_BALL` table for bowler details and the `PLAYER` table for their names.
+-- Here's the corrected SQL:
+
+WITH Total_Runs_Over AS (
+    SELECT 
+        b."match_id", 
+        b."innings_no", 
+        b."over_id", 
+        SUM(b."runs_scored") + COALESCE(SUM(e."extra_runs"), 0) AS "total_runs"
+    FROM 
+        IPL.IPL.BATSMAN_SCORED b
+    LEFT JOIN 
+        IPL.IPL.EXTRA_RUNS e
+    ON 
+        b."match_id" = e."match_id" AND 
+        b."innings_no" = e."innings_no" AND 
+        b."over_id" = e."over_id" AND 
+        b."ball_id" = e."ball_id"
+    GROUP BY 
+        b."match_id", b."innings_no", b."over_id"
+),
+Max_Over_Runs AS (
+    SELECT 
+        t."match_id", 
+        t."innings_no", 
+        t."over_id", 
+        t."total_runs"
+    FROM 
+        Total_Runs_Over t
+    WHERE 
+        t."total_runs" = (
+            SELECT MAX(t_sub."total_runs") 
+            FROM Total_Runs_Over t_sub 
+            WHERE t_sub."match_id" = t."match_id"
+        )
+)
+SELECT 
+    p."player_name" AS "bowler_name", 
+    m."match_id", 
+    m."innings_no", 
+    m."over_id", 
+    m."total_runs"
+FROM 
+    Max_Over_Runs m
+JOIN 
+    IPL.IPL.BALL_BY_BALL b
+ON 
+    m."match_id" = b."match_id" AND 
+    m."innings_no" = b."innings_no" AND 
+    m."over_id" = b."over_id"
+JOIN 
+    IPL.IPL.PLAYER p
+ON 
+    b."bowler" = p."player_id"
+GROUP BY 
+    p."player_name", m."match_id", m."innings_no", m."over_id", m."total_runs"
+ORDER BY 
+    m."total_runs" DESC
+LIMIT 3;
+Answer:
+bowler_name,match_id,innings_no,over_id,total_runs
+P Parameswaran,501252,2,3,37
+P Awana,734052,2,6,33
+R Sharma,548332,2,13,31
+Task: Please help me identify the top 3 bowlers who, in the overs where the maximum runs were conceded in each match, gave up the highest number of runs in a single over across all matches. For each of these bowlers, provide the match in which they conceded these maximum runs. Only consider overs that had the most runs conceded within their respective matches, and among these, determine which bowlers conceded the most runs in a single over overall.
+Another way to say it: Please help me find the top 3 bowlers who conceded the maximum runs in a single over, along with the corresponding matches.
+
+Please think step by step and answer only one complete SQL in snowflake dialect in ```sql``` format.
+SQL usage example: ```sql
+SELECT "COLUMN_NAME" FROM DATABASE.SCHEMA.TABLE WHERE ... ``` (Adjust "DATABASE", "SCHEMA", and "TABLE" to match actual names, ensure all column names are enclosed in double quotations)
+Here are some useful tips for answering:
+When performing a UNION operation on many tables, ensure that all table names are explicitly listed. Union first and then add condition and selection. e.g. SELECT "col1", "col2" FROM (TABLE1 UNION ALL TABLE2) WHERE ...; Don't write sqls as (SELECT col1, col2 FROM TABLE1 WHERE ...) UNION ALL (SELECT col1, col2 FROM TABLE2 WHERE ...); Don't use ['-- Include all', '-- Omit', '-- Continue', '-- Union all', '-- ...', '-- List all', '-- Replace this', '-- Each table', '-- Add other'] to omit any table. Table names here: The table structure information is ({database name: {schema name: [table name]}}): 
+{'IPL': {'IPL': ['PLAYER_MATCH', 'PLAYER', 'BATSMAN_SCORED', 'BALL_BY_BALL', 'EXTRA_RUNS', 'MATCH', 'TEAM']}}
+
+When using ORDER BY xxx DESC, add NULLS LAST to exclude null records: ORDER BY xxx DESC NULLS LAST.
+When asked something without stating name or id, return both of them. e.g. Which products ...? The answer should include product_name and product_id.
+When asked percentage decrease, you should return a positive value. e.g. How many percentage points in 2021 decrease compared to ...? The answer should be a positive value indicating the decresed number. Try to use ABS().
+If asked two tables, you should reply with the last one instead of combining two tables. e.g. Identifying the top five states ... examine the state that ranks fourth overall and identify its top five counties. You should only answer top five counties.
+Use ST_DISTANCE to calculate distance between two geographic points for more accurate answer.
+If the task description does not specify the number of decimal places, retain all decimals to four places.
+
+[Self-refine]
+2025-07-01 04:52:10 - Thread-666 (execute) - INFO - [Try to run SQL in self-refine]
+```sql
+WITH Total_Runs_Over AS (
+    SELECT 
+        b."match_id", 
+        b."innings_no", 
+        b."over_id", 
+        SUM(b."runs_scored") + COALESCE(SUM(e."extra_runs"), 0) AS "total_runs"
+    FROM 
+        IPL.IPL.BATSMAN_SCORED b
+    LEFT JOIN 
+        IPL.IPL.EXTRA_RUNS e
+    ON 
+        b."match_id" = e."match_id" AND 
+        b."innings_no" = e."innings_no" AND 
+        b."over_id" = e."over_id" AND 
+        b."ball_id" = e."ball_id"
+    GROUP BY 
+        b."match_id", b."innings_no", b."over_id"
+),
+Max_Over_Runs AS (
+    SELECT 
+        t."match_id", 
+        t."innings_no", 
+        t."over_id", 
+        t."total_runs"
+    FROM 
+        Total_Runs_Over t
+    WHERE 
+        t."total_runs" = (
+            SELECT MAX(t_sub."total_runs") 
+            FROM Total_Runs_Over t_sub 
+            WHERE t_sub."match_id" = t."match_id"
+        )
+),
+Bowler_Total_Runs AS (
+    SELECT 
+        b."bowler", 
+        p."player_name" AS "bowler_name", 
+        m."match_id", 
+        m."innings_no", 
+        m."over_id", 
+        m."total_runs"
+    FROM 
+        Max_Over_Runs m
+    JOIN 
+        IPL.IPL.BALL_BY_BALL b
+    ON 
+        m."match_id" = b."match_id" AND 
+        m."innings_no" = b."innings_no" AND 
+        m."over_id" = b."over_id"
+    JOIN 
+        IPL.IPL.PLAYER p
+    ON 
+        b."bowler" = p."player_id"
+    GROUP BY 
+        b."bowler", 
+        p."player_name", 
+        m."match_id", 
+        m."innings_no", 
+        m."over_id", 
+        m."total_runs"
+)
+SELECT 
+    "bowler_name", 
+    "match_id", 
+    "innings_no", 
+    "over_id", 
+    "total_runs"
+FROM 
+    Bowler_Total_Runs
+ORDER BY 
+    "total_runs" DESC NULLS LAST
+LIMIT 3;
+```
+[Try to run SQL in self-refine]
+2025-07-01 04:52:11 - Thread-666 (execute) - INFO - Total iteration counts: 0

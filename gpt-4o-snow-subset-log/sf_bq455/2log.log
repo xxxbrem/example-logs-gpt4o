@@ -1,0 +1,1703 @@
+2025-07-01 04:46:18 - Thread-587 (execute) - INFO - [Exploration]
+```sql
+-- Description: Identify all distinct SeriesInstanceUIDs where the `Modality` is 'CT' and exclude the 'nlst' collection.
+SELECT DISTINCT 
+    "SeriesInstanceUID"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL"
+WHERE 
+    "Modality" = 'CT'
+    AND "collection_id" != 'nlst'
+LIMIT 20;
+```
+
+```sql
+-- Description: Retrieve series with SeriesInstanceUID, SeriesNumber, PatientID, instance_size (converted to MiB), and ImageType for CT modality, excluding 'LOCALIZER' series and JPEG compressed TransferSyntaxUIDs.
+SELECT 
+    "SeriesInstanceUID", 
+    "SeriesNumber", 
+    "PatientID", 
+    ("instance_size" / (1024 * 1024)) AS "series_size_mib", 
+    "ImageType"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL"
+WHERE 
+    "Modality" = 'CT'
+    AND NOT "ImageType" ILIKE '%LOCALIZER%'
+    AND "TransferSyntaxUID" NOT IN ('1.2.840.10008.1.2.4.70', '1.2.840.10008.1.2.4.51')
+    AND "collection_id" != 'nlst'
+LIMIT 20;
+```
+
+```sql
+-- Description: Filter instances with consistent ImageOrientationPatient values for each SeriesInstanceUID to ensure only single unique orientation is considered.
+SELECT 
+    "SeriesInstanceUID", 
+    COUNT(DISTINCT "ImageOrientationPatient") AS "unique_orientations"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL"
+WHERE 
+    "Modality" = 'CT'
+    AND "collection_id" != 'nlst'
+GROUP BY 
+    "SeriesInstanceUID"
+HAVING 
+    COUNT(DISTINCT "ImageOrientationPatient") = 1
+LIMIT 20;
+```
+
+```sql
+-- Description: Find SeriesInstanceUIDs with z-axis components of the cross product of x and y direction cosines aligning with the expected plane (absolute value between 0.99 and 1.01).
+SELECT 
+    "SeriesInstanceUID"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL"
+WHERE 
+    "Modality" = 'CT'
+    AND "collection_id" != 'nlst'
+    AND ABS(
+        CAST(JSON_EXTRACT("ImageOrientationPatient", '$[0]') AS FLOAT) * CAST(JSON_EXTRACT("ImageOrientationPatient", '$[4]') AS FLOAT) 
+        - CAST(JSON_EXTRACT("ImageOrientationPatient", '$[1]') AS FLOAT) * CAST(JSON_EXTRACT("ImageOrientationPatient", '$[3]') AS FLOAT)
+    ) BETWEEN 0.99 AND 1.01
+LIMIT 20;
+```
+
+```sql
+-- Description: Retrieve series with consistent z-axis slice positions matching unique InstanceNumbers and calculate the total number of images per series.
+SELECT 
+    "SeriesInstanceUID",
+    COUNT(DISTINCT JSON_EXTRACT("ImagePositionPatient", '$[2]')) AS "unique_z_positions",
+    COUNT(DISTINCT "InstanceNumber") AS "unique_instances"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL"
+WHERE 
+    "Modality" = 'CT'
+    AND "collection_id" != 'nlst'
+GROUP BY 
+    "SeriesInstanceUID"
+HAVING 
+    COUNT(DISTINCT JSON_EXTRACT("ImagePositionPatient", '$[2]')) = COUNT(DISTINCT "InstanceNumber")
+LIMIT 20;
+```
+
+```sql
+-- Description: Identify series with consistent PixelSpacing values, which ensures uniform pixel size across slices.
+SELECT 
+    "SeriesInstanceUID", 
+    COUNT(DISTINCT "PixelSpacing") AS "unique_pixel_spacings"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL"
+WHERE 
+    "Modality" = 'CT'
+    AND "collection_id" != 'nlst'
+GROUP BY 
+    "SeriesInstanceUID"
+HAVING 
+    COUNT(DISTINCT "PixelSpacing") = 1
+LIMIT 20;
+```
+
+```sql
+-- Description: Retrieve SeriesInstanceUIDs for series with consistent Rows and Columns (pixel dimensions) throughout.
+SELECT 
+    "SeriesInstanceUID",
+    COUNT(DISTINCT "Rows") AS "unique_row_dimensions",
+    COUNT(DISTINCT "Columns") AS "unique_column_dimensions"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL"
+WHERE 
+    "Modality" = 'CT'
+    AND "collection_id" != 'nlst'
+GROUP BY 
+    "SeriesInstanceUID"
+HAVING 
+    COUNT(DISTINCT "Rows") = 1 
+    AND COUNT(DISTINCT "Columns") = 1
+LIMIT 20;
+```
+
+```sql
+-- Description: Combine all constraints to find series satisfying the criteria, including uniform slice intervals (z-positions) and consistent ImageOrientation.
+SELECT 
+    a."SeriesInstanceUID", 
+    a."SeriesNumber", 
+    a."PatientID", 
+    (SUM(a."instance_size") / (1024 * 1024)) AS "series_size_mib"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL" a
+INNER JOIN (
+    SELECT 
+        "SeriesInstanceUID"
+    FROM 
+        "IDC"."IDC_V17"."DICOM_ALL"
+    WHERE 
+        "Modality" = 'CT'
+        AND "collection_id" != 'nlst'
+        AND NOT "ImageType" ILIKE '%LOCALIZER%'
+        AND "TransferSyntaxUID" NOT IN ('1.2.840.10008.1.2.4.70', '1.2.840.10008.1.2.4.51')
+    GROUP BY 
+        "SeriesInstanceUID"
+    HAVING 
+        COUNT(DISTINCT JSON_EXTRACT("ImagePositionPatient", '$[2]')) = COUNT(DISTINCT "InstanceNumber")
+        AND COUNT(DISTINCT "ImageOrientationPatient") = 1
+        AND COUNT(DISTINCT "PixelSpacing") = 1
+        AND COUNT(DISTINCT "Rows") = 1
+        AND COUNT(DISTINCT "Columns") = 1
+) b
+ON a."SeriesInstanceUID" = b."SeriesInstanceUID"
+GROUP BY 
+    a."SeriesInstanceUID", a."SeriesNumber", a."PatientID"
+ORDER BY 
+    "series_size_mib" DESC
+LIMIT 20;
+```
+
+```sql
+-- Description: Final query to return the top 5 CT scan series by size, satisfying all the outlined conditions.
+SELECT 
+    "SeriesInstanceUID", 
+    "SeriesNumber", 
+    "PatientID", 
+    "series_size_mib"
+FROM (
+    SELECT 
+        a."SeriesInstanceUID", 
+        a."SeriesNumber", 
+        a."PatientID", 
+        (SUM(a."instance_size") / (1024 * 1024)) AS "series_size_mib"
+    FROM 
+        "IDC"."IDC_V17"."DICOM_ALL" a
+    INNER JOIN (
+        SELECT 
+            "SeriesInstanceUID"
+        FROM 
+            "IDC"."IDC_V17"."DICOM_ALL"
+        WHERE 
+            "Modality" = 'CT'
+            AND "collection_id" != 'nlst'
+            AND NOT "ImageType" ILIKE '%LOCALIZER%'
+            AND "TransferSyntaxUID" NOT IN ('1.2.840.10008.1.2.4.70', '1.2.840.10008.1.2.4.51')
+        GROUP BY 
+            "SeriesInstanceUID"
+        HAVING 
+            COUNT(DISTINCT JSON_EXTRACT("ImagePositionPatient", '$[2]')) = COUNT(DISTINCT "InstanceNumber")
+            AND COUNT(DISTINCT "ImageOrientationPatient") = 1
+            AND COUNT(DISTINCT "PixelSpacing") = 1
+            AND COUNT(DISTINCT "Rows") = 1
+            AND COUNT(DISTINCT "Columns") = 1
+    ) b
+    ON a."SeriesInstanceUID" = b."SeriesInstanceUID"
+    GROUP BY 
+        a."SeriesInstanceUID", a."SeriesNumber", a."PatientID"
+) c
+ORDER BY 
+    "series_size_mib" DESC
+LIMIT 5;
+```
+[Exploration]
+2025-07-01 04:46:18 - Thread-587 (execute) - INFO - [Try to execute]
+-- Description: Identify all distinct SeriesInstanceUIDs where the `Modality` is 'CT' and exclude the 'nlst' collection.
+SELECT DISTINCT 
+    "SeriesInstanceUID"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL"
+WHERE 
+    "Modality" = 'CT'
+    AND "collection_id" != 'nlst'
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:46:20 - Thread-587 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Identify all distinct SeriesInstanceUIDs where the `Modality` is 'CT' and exclude the 'nlst' collection.
+SELECT DISTINCT 
+    "SeriesInstanceUID"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL"
+WHERE 
+    "Modality" = 'CT'
+    AND "collection_id" != 'nlst'
+LIMIT 20;
+Results:
+SeriesInstanceUID
+1.3.6.1.4.1.14519.5.2.1.1600.1201.244243278541663399109431916357
+1.3.6.1.4.1.14519.5.2.1.1600.1201.139358652937749542331129499581
+1.2.826.0.1.3680043.10.474.3337526406001412680527826672645639035
+1.3.6.1.4.1.14519.5.2.1.1600.1202.393328078228531363079749962612
+1.3.6.1.4.1.14519.5.2.1.81338354450462947599575060525652398820
+1.3.6.1.4.1.14519.5.2.1.229312928030409974102083048062778216454
+1.3.6.1.4.1.14519.5.2.1.1600.1201.311486751925492011060710287959
+1.3.6.1.4.1.14519.5.2.
+
+[Successfully executed]
+2025-07-01 04:46:20 - Thread-587 (execute) - INFO - [Try to execute]
+-- Description: Retrieve series with SeriesInstanceUID, SeriesNumber, PatientID, instance_size (converted to MiB), and ImageType for CT modality, excluding 'LOCALIZER' series and JPEG compressed TransferSyntaxUIDs.
+SELECT 
+    "SeriesInstanceUID", 
+    "SeriesNumber", 
+    "PatientID", 
+    ("instance_size" / (1024 * 1024)) AS "series_size_mib", 
+    "ImageType"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL"
+WHERE 
+    "Modality" = 'CT'
+    AND NOT "ImageType" ILIKE '%LOCALIZER%'
+    AND "TransferSyntaxUID" NOT IN ('1.2.840.10008.1.2.4.70', '1.2.840.10008.1.2.4.51')
+    AND "collection_id" != 'nlst'
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:46:20 - Thread-587 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Retrieve series with SeriesInstanceUID, SeriesNumber, PatientID, instance_size (converted to MiB), and ImageType for CT modality, excluding 'LOCALIZER' series and JPEG compressed TransferSyntaxUIDs.
+SELECT 
+    "SeriesInstanceUID", 
+    "SeriesNumber", 
+    "PatientID", 
+    ("instance_size" / (1024 * 1024)) AS "series_size_mib", 
+    "ImageType"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL"
+WHERE 
+    "Modality" = 'CT'
+    AND NOT "ImageType" ILIKE '%LOCALIZER%'
+    AND "TransferSyntaxUID" NOT IN ('1.2.840.10008.1.2.4.70', '1.2.840.10008.1.2.4.51')
+    AND "collection_id" != 'nlst'
+LIMIT 20;
+Results:
+SeriesInstanceUID,SeriesNumber,PatientID,series_size_mib,ImageType
+1.3.6.1.4.1.14519.5.2.1.7009.2403.149532723737106693656739993848,53997,ACRIN-NSCLC-FDG-PET-020,0.502558,"[
+  ""DERIVED"",
+  ""PRIMARY"",
+  ""AXIAL""
+]"
+1.3.6.1.4.1.14519.5.2.1.7009.2403.651298522129431002058571534549,40065,ACRIN-NSCLC-FDG-PET-087,0.502586,"[
+  ""DERIVED"",
+  ""PRIMARY"",
+  ""AXIAL""
+]"
+1.3.6.1.4.1.14519.5.2.1.7009.2403.262576887310612138511078980361,1,ACRIN-NSCLC-FDG-PET-220,0.502724,"[
+  ""ORIGINAL"",
+  ""PRI
+
+[Successfully executed]
+2025-07-01 04:46:20 - Thread-587 (execute) - INFO - [Try to execute]
+-- Description: Filter instances with consistent ImageOrientationPatient values for each SeriesInstanceUID to ensure only single unique orientation is considered.
+SELECT 
+    "SeriesInstanceUID", 
+    COUNT(DISTINCT "ImageOrientationPatient") AS "unique_orientations"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL"
+WHERE 
+    "Modality" = 'CT'
+    AND "collection_id" != 'nlst'
+GROUP BY 
+    "SeriesInstanceUID"
+HAVING 
+    COUNT(DISTINCT "ImageOrientationPatient") = 1
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:46:22 - Thread-587 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Filter instances with consistent ImageOrientationPatient values for each SeriesInstanceUID to ensure only single unique orientation is considered.
+SELECT 
+    "SeriesInstanceUID", 
+    COUNT(DISTINCT "ImageOrientationPatient") AS "unique_orientations"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL"
+WHERE 
+    "Modality" = 'CT'
+    AND "collection_id" != 'nlst'
+GROUP BY 
+    "SeriesInstanceUID"
+HAVING 
+    COUNT(DISTINCT "ImageOrientationPatient") = 1
+LIMIT 20;
+Results:
+SeriesInstanceUID,unique_orientations
+1.3.6.1.4.1.9328.50.4.625187,1
+1.3.6.1.4.1.14519.5.2.1.6919.4624.799005287649921268034033852073,1
+1.3.12.2.1107.5.1.4.60175.30000008042113424165600161212,1
+1.3.6.1.4.1.14519.5.2.1.7009.2403.142332487240711763684068345432,1
+1.3.6.1.4.1.14519.5.2.1.6450.4004.259069733378239319649040362055,1
+1.3.6.1.4.1.14519.5.2.1.5168.1900.136001226456621344050523916277,1
+1.3.6.1.4.1.14519.5.2.1.7009.2403.514464559022878068235268001899,1
+1.3.6.1.4.1.14519.5.2.1.3671.4
+
+[Successfully executed]
+2025-07-01 04:46:22 - Thread-587 (execute) - INFO - [Try to execute]
+-- Description: Find SeriesInstanceUIDs with z-axis components of the cross product of x and y direction cosines aligning with the expected plane (absolute value between 0.99 and 1.01).
+SELECT 
+    "SeriesInstanceUID"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL"
+WHERE 
+    "Modality" = 'CT'
+    AND "collection_id" != 'nlst'
+    AND ABS(
+        CAST(JSON_EXTRACT("ImageOrientationPatient", '$[0]') AS FLOAT) * CAST(JSON_EXTRACT("ImageOrientationPatient", '$[4]') AS FLOAT) 
+        - CAST(JSON_EXTRACT("ImageOrientationPatient", '$[1]') AS FLOAT) * CAST(JSON_EXTRACT("ImageOrientationPatient", '$[3]') AS FLOAT)
+    ) BETWEEN 0.99 AND 1.01
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:46:22 - Thread-587 (execute) - INFO - [Error occurred]
+{'status': 'error', 'error_msg': '##ERROR##002140 (42601): SQL compilation error:\nUnknown functions JSON_EXTRACT, JSON_EXTRACT, JSON_EXTRACT, JSON_EXTRACT'}
+[Error occurred]
+2025-07-01 04:47:07 - Thread-587 (execute) - INFO - [Corrected SQL]
+### Thinking Process:
+1. **Goal**: Extract `SeriesInstanceUID` where:
+   - The imaging modality is `CT`.
+   - The data does not belong to the `nlst` collection.
+   - The z-axis alignment of the Image Plane (calculated from the cross product of direction cosines in `ImageOrientationPatient`) lies between 0.99 and 1.01.
+
+2. **Data Format**: The `ImageOrientationPatient` column is in `VARIANT` format, storing an array of six numeric values representing direction cosines:
+   - `[0]`, `[1]`, `[2]`: x-direction cosine.
+   - `[3]`, `[4]`, `[5]`: y-direction cosine.
+
+3. **Z-Axis Component Calculation**:
+   The z-axis component of the cross product can be calculated as:
+   \[
+   (x_0 \cdot y_1) - (x_1 \cdot y_0)
+   \]
+   where `x_0`, `y_1`, `x_1`, and `y_0` are the first two elements of the x- and y-direction cosines, respectively.
+
+4. **Extracting Cosines in Snowflake**:
+   - Use `::VARIANT[index]` to extract the indexed elements from `ImageOrientationPatient`.
+   - Cast these extracted values to `FLOAT` for arithmetic operations.
+
+5. **Filtering Criteria**:
+   - Use `ABS()` to enforce the absolute value bounds of the z-axis component calculation (between 0.99 and 1.01).
+   - Filter for `CT` modality and exclude data from the `nlst` collection.
+
+6. **Result Limitation**:
+   - Present only the `SeriesInstanceUID` matching the criteria.
+   - Limit the output to 20 rows.
+
+### SQL Query:
+```sql
+-- Description: This query selects SeriesInstanceUIDs for CT series where the z-axis component of the cross product aligns within accepted bounds (0.99 ≤ abs(value) ≤ 1.01), ensuring the correct orientation of the imaging plane.
+
+SELECT 
+    "SeriesInstanceUID"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL"
+WHERE 
+    "Modality" = 'CT' -- Restrict to CT modality
+    AND "collection_id" != 'nlst' -- Exclude the 'nlst' collection
+    AND ABS(
+        CAST("ImageOrientationPatient"::VARIANT[0] AS FLOAT) * CAST("ImageOrientationPatient"::VARIANT[4] AS FLOAT) -- x0 * y1
+        - CAST("ImageOrientationPatient"::VARIANT[1] AS FLOAT) * CAST("ImageOrientationPatient"::VARIANT[3] AS FLOAT) -- x1 * y0
+    ) BETWEEN 0.99 AND 1.01 -- Enforce bounds on z-axis alignment
+LIMIT 20; -- Limit results to 20 rows
+```
+[Corrected SQL]
+2025-07-01 04:47:09 - Thread-587 (execute) - INFO - [Results for corrected sql]
+SeriesInstanceUID
+1.3.6.1.4.1.14519.5.2.1.6834.5010.245609484597622054191584138381
+1.3.6.1.4.1.14519.5.2.1.6834.5010.148529694733361305012151030542
+1.3.6.1.4.1.14519.5.2.1.6834.5010.186790175963490045903395819808
+1.3.6.1.4.1.14519.5.2.1.6834.5010.168264309915398317868811484264
+1.3.6.1.4.1.14519.5.2.1.6834.5010.129073982207664046372889700279
+1.3.6.1.4.1.14519.5.2.1.6834.5010.272615324507700117976527979989
+1.3.6.1.4.1.14519.5.2.1.6834.5010.141294591507373785491319426531
+1.3.6.1.4.1.14519.5
+
+[Results for corrected sql]
+2025-07-01 04:47:31 - Thread-587 (execute) - INFO - [Corrected other sqls]
+```sql
+-- Description: Retrieve series with consistent z-axis slice positions matching unique InstanceNumbers and calculate the total number of images per series. Replacing JSON_EXTRACT with Snowflake VARIANT indexing for proper parsing of ImagePositionPatient.
+SELECT 
+    "SeriesInstanceUID",
+    COUNT(DISTINCT CAST("ImagePositionPatient"::VARIANT[2] AS FLOAT)) AS "unique_z_positions",
+    COUNT(DISTINCT "InstanceNumber") AS "unique_instances"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL"
+WHERE 
+    "Modality" = 'CT'
+    AND "collection_id" != 'nlst'
+GROUP BY 
+    "SeriesInstanceUID"
+HAVING 
+    COUNT(DISTINCT CAST("ImagePositionPatient"::VARIANT[2] AS FLOAT)) = COUNT(DISTINCT "InstanceNumber")
+LIMIT 20;
+```
+
+```sql
+-- Description: Identify series with consistent PixelSpacing values, ensuring uniform pixel size across slices. PixelSpacing does not require JSON_EXTRACT correction as no error is reported.
+SELECT 
+    "SeriesInstanceUID", 
+    COUNT(DISTINCT "PixelSpacing") AS "unique_pixel_spacings"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL"
+WHERE 
+    "Modality" = 'CT'
+    AND "collection_id" != 'nlst'
+GROUP BY 
+    "SeriesInstanceUID"
+HAVING 
+    COUNT(DISTINCT "PixelSpacing") = 1
+LIMIT 20;
+```
+
+```sql
+-- Description: Retrieve SeriesInstanceUIDs for series with consistent Rows and Columns (pixel dimensions) throughout. No JSON_EXTRACT correction is necessary as Rows and Columns are numeric fields.
+SELECT 
+    "SeriesInstanceUID",
+    COUNT(DISTINCT "Rows") AS "unique_row_dimensions",
+    COUNT(DISTINCT "Columns") AS "unique_column_dimensions"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL"
+WHERE 
+    "Modality" = 'CT'
+    AND "collection_id" != 'nlst'
+GROUP BY 
+    "SeriesInstanceUID"
+HAVING 
+    COUNT(DISTINCT "Rows") = 1 
+    AND COUNT(DISTINCT "Columns") = 1
+LIMIT 20;
+```
+
+```sql
+-- Description: Combine all constraints to find series satisfying criteria, including uniform slice intervals (z-positions) and consistent ImageOrientation. Replacing JSON_EXTRACT for ImagePositionPatient with Snowflake VARIANT indexing.
+SELECT 
+    a."SeriesInstanceUID", 
+    a."SeriesNumber", 
+    a."PatientID", 
+    (SUM(a."instance_size") / (1024 * 1024)) AS "series_size_mib"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL" a
+INNER JOIN (
+    SELECT 
+        "SeriesInstanceUID"
+    FROM 
+        "IDC"."IDC_V17"."DICOM_ALL"
+    WHERE 
+        "Modality" = 'CT'
+        AND "collection_id" != 'nlst'
+        AND NOT "ImageType" ILIKE '%LOCALIZER%'
+        AND "TransferSyntaxUID" NOT IN ('1.2.840.10008.1.2.4.70', '1.2.840.10008.1.2.4.51')
+    GROUP BY 
+        "SeriesInstanceUID"
+    HAVING 
+        COUNT(DISTINCT CAST("ImagePositionPatient"::VARIANT[2] AS FLOAT)) = COUNT(DISTINCT "InstanceNumber")
+        AND COUNT(DISTINCT "ImageOrientationPatient") = 1
+        AND COUNT(DISTINCT "PixelSpacing") = 1
+        AND COUNT(DISTINCT "Rows") = 1
+        AND COUNT(DISTINCT "Columns") = 1
+) b
+ON a."SeriesInstanceUID" = b."SeriesInstanceUID"
+GROUP BY 
+    a."SeriesInstanceUID", a."SeriesNumber", a."PatientID"
+ORDER BY 
+    "series_size_mib" DESC
+LIMIT 20;
+```
+
+```sql
+-- Description: Final query to return the top 5 CT scan series by size, satisfying all outlined conditions. Incorporates corrections for JSON_EXTRACT using Snowflake VARIANT indexing for ImagePositionPatient.
+SELECT 
+    "SeriesInstanceUID", 
+    "SeriesNumber", 
+    "PatientID", 
+    "series_size_mib"
+FROM (
+    SELECT 
+        a."SeriesInstanceUID", 
+        a."SeriesNumber", 
+        a."PatientID", 
+        (SUM(a."instance_size") / (1024 * 1024)) AS "series_size_mib"
+    FROM 
+        "IDC"."IDC_V17"."DICOM_ALL" a
+    INNER JOIN (
+        SELECT 
+            "SeriesInstanceUID"
+        FROM 
+            "IDC"."IDC_V17"."DICOM_ALL"
+        WHERE 
+            "Modality" = 'CT'
+            AND "collection_id" != 'nlst'
+            AND NOT "ImageType" ILIKE '%LOCALIZER%'
+            AND "TransferSyntaxUID" NOT IN ('1.2.840.10008.1.2.4.70', '1.2.840.10008.1.2.4.51')
+        GROUP BY 
+            "SeriesInstanceUID"
+        HAVING 
+            COUNT(DISTINCT CAST("ImagePositionPatient"::VARIANT[2] AS FLOAT)) = COUNT(DISTINCT "InstanceNumber")
+            AND COUNT(DISTINCT "ImageOrientationPatient") = 1
+            AND COUNT(DISTINCT "PixelSpacing") = 1
+            AND COUNT(DISTINCT "Rows") = 1
+            AND COUNT(DISTINCT "Columns") = 1
+    ) b
+    ON a."SeriesInstanceUID" = b."SeriesInstanceUID"
+    GROUP BY 
+        a."SeriesInstanceUID", a."SeriesNumber", a."PatientID"
+) c
+ORDER BY 
+    "series_size_mib" DESC
+LIMIT 5;
+```
+[Corrected other sqls]
+2025-07-01 04:47:31 - Thread-587 (execute) - INFO - [Successfully corrected]
+Successfully executed. SQL:
+-- Description: Find SeriesInstanceUIDs with z-axis components of the cross product of x and y direction cosines aligning with the expected plane (absolute value between 0.99 and 1.01).
+SELECT 
+    "SeriesInstanceUID"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL"
+WHERE 
+    "Modality" = 'CT'
+    AND "collection_id" != 'nlst'
+    AND ABS(
+        CAST(JSON_EXTRACT("ImageOrientationPatient", '$[0]') AS FLOAT) * CAST(JSON_EXTRACT("ImageOrientationPatient", '$[4]') AS FLOAT) 
+        - CAST(JSON_EXTRACT("ImageOrientationPatient", '$[1]') AS FLOAT) * CAST(JSON_EXTRACT("ImageOrientationPatient", '$[3]') AS FLOAT)
+    ) BETWEEN 0.99 AND 1.01
+LIMIT 20;
+Results:
+SeriesInstanceUID
+1.3.6.1.4.1.14519.5.2.1.6834.5010.245609484597622054191584138381
+1.3.6.1.4.1.14519.5.2.1.6834.5010.148529694733361305012151030542
+1.3.6.1.4.1.14519.5.2.1.6834.5010.186790175963490045903395819808
+1.3.6.1.4.1.14519.5.2.1.6834.5010.168264309915398317868811484264
+1.3.6.1.4.1.14519.5.2.1.6834.5010.129073982207664046372889700279
+1.3.6.1.4.1.14519.5.2.1.6834.5010.272615324507700117976527979989
+1.3.6.1.4.1.14519.5.2.1.6834.5010.141294591507373785491319426531
+1.3.6.1.4.1.14519.5
+
+[Successfully corrected]
+2025-07-01 04:47:31 - Thread-587 (execute) - INFO - [Try to execute]
+-- Description: Retrieve series with consistent z-axis slice positions matching unique InstanceNumbers and calculate the total number of images per series. Replacing JSON_EXTRACT with Snowflake VARIANT indexing for proper parsing of ImagePositionPatient.
+SELECT 
+    "SeriesInstanceUID",
+    COUNT(DISTINCT CAST("ImagePositionPatient"::VARIANT[2] AS FLOAT)) AS "unique_z_positions",
+    COUNT(DISTINCT "InstanceNumber") AS "unique_instances"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL"
+WHERE 
+    "Modality" = 'CT'
+    AND "collection_id" != 'nlst'
+GROUP BY 
+    "SeriesInstanceUID"
+HAVING 
+    COUNT(DISTINCT CAST("ImagePositionPatient"::VARIANT[2] AS FLOAT)) = COUNT(DISTINCT "InstanceNumber")
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:47:39 - Thread-587 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Retrieve series with consistent z-axis slice positions matching unique InstanceNumbers and calculate the total number of images per series. Replacing JSON_EXTRACT with Snowflake VARIANT indexing for proper parsing of ImagePositionPatient.
+SELECT 
+    "SeriesInstanceUID",
+    COUNT(DISTINCT CAST("ImagePositionPatient"::VARIANT[2] AS FLOAT)) AS "unique_z_positions",
+    COUNT(DISTINCT "InstanceNumber") AS "unique_instances"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL"
+WHERE 
+    "Modality" = 'CT'
+    AND "collection_id" != 'nlst'
+GROUP BY 
+    "SeriesInstanceUID"
+HAVING 
+    COUNT(DISTINCT CAST("ImagePositionPatient"::VARIANT[2] AS FLOAT)) = COUNT(DISTINCT "InstanceNumber")
+LIMIT 20;
+Results:
+SeriesInstanceUID,unique_z_positions,unique_instances
+1.3.6.1.4.1.14519.5.2.1.6279.6001.206310993373699650907461884037,6,6
+1.3.6.1.4.1.14519.5.2.1.6834.5010.165869043223467355253765864725,2,2
+1.3.6.1.4.1.14519.5.2.1.1357.4011.169528141610153113274919864942,9,9
+1.3.6.1.4.1.14519.5.2.1.6655.2359.103929337957398976242600764397,17,17
+1.2.840.113704.1.111.4716.1224516753.43,29,29
+1.3.6.1.4.1.14519.5.2.1.3344.4020.509325909277445882399396462540,6,6
+1.3.6.1.4.1.14519.5.2.1.9203.4004.172876512814
+
+[Successfully executed]
+2025-07-01 04:47:39 - Thread-587 (execute) - INFO - [Try to execute]
+-- Description: Identify series with consistent PixelSpacing values, ensuring uniform pixel size across slices. PixelSpacing does not require JSON_EXTRACT correction as no error is reported.
+SELECT 
+    "SeriesInstanceUID", 
+    COUNT(DISTINCT "PixelSpacing") AS "unique_pixel_spacings"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL"
+WHERE 
+    "Modality" = 'CT'
+    AND "collection_id" != 'nlst'
+GROUP BY 
+    "SeriesInstanceUID"
+HAVING 
+    COUNT(DISTINCT "PixelSpacing") = 1
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:47:46 - Thread-587 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Identify series with consistent PixelSpacing values, ensuring uniform pixel size across slices. PixelSpacing does not require JSON_EXTRACT correction as no error is reported.
+SELECT 
+    "SeriesInstanceUID", 
+    COUNT(DISTINCT "PixelSpacing") AS "unique_pixel_spacings"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL"
+WHERE 
+    "Modality" = 'CT'
+    AND "collection_id" != 'nlst'
+GROUP BY 
+    "SeriesInstanceUID"
+HAVING 
+    COUNT(DISTINCT "PixelSpacing") = 1
+LIMIT 20;
+Results:
+SeriesInstanceUID,unique_pixel_spacings
+1.2.840.113704.1.111.1120.1224533541.14,1
+1.3.6.1.4.1.14519.5.2.1.6450.9002.217367240046972683989491086440,1
+1.3.6.1.4.1.14519.5.2.1.6279.6001.620476670380256054392660616754,1
+1.3.6.1.4.1.14519.5.2.1.7009.2403.194566092615434351966359036964,1
+1.3.6.1.4.1.14519.5.2.1.8421.4019.122233760025449389617836945654,1
+1.3.6.1.4.1.14519.5.2.1.6834.5010.843945513281045194541827154509,1
+1.3.6.1.4.1.14519.5.2.1.6834.5010.243386566459539238595054580287,1
+1.3.6.1.
+
+[Successfully executed]
+2025-07-01 04:47:46 - Thread-587 (execute) - INFO - [Try to execute]
+-- Description: Retrieve SeriesInstanceUIDs for series with consistent Rows and Columns (pixel dimensions) throughout. No JSON_EXTRACT correction is necessary as Rows and Columns are numeric fields.
+SELECT 
+    "SeriesInstanceUID",
+    COUNT(DISTINCT "Rows") AS "unique_row_dimensions",
+    COUNT(DISTINCT "Columns") AS "unique_column_dimensions"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL"
+WHERE 
+    "Modality" = 'CT'
+    AND "collection_id" != 'nlst'
+GROUP BY 
+    "SeriesInstanceUID"
+HAVING 
+    COUNT(DISTINCT "Rows") = 1 
+    AND COUNT(DISTINCT "Columns") = 1
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:47:58 - Thread-587 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Retrieve SeriesInstanceUIDs for series with consistent Rows and Columns (pixel dimensions) throughout. No JSON_EXTRACT correction is necessary as Rows and Columns are numeric fields.
+SELECT 
+    "SeriesInstanceUID",
+    COUNT(DISTINCT "Rows") AS "unique_row_dimensions",
+    COUNT(DISTINCT "Columns") AS "unique_column_dimensions"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL"
+WHERE 
+    "Modality" = 'CT'
+    AND "collection_id" != 'nlst'
+GROUP BY 
+    "SeriesInstanceUID"
+HAVING 
+    COUNT(DISTINCT "Rows") = 1 
+    AND COUNT(DISTINCT "Columns") = 1
+LIMIT 20;
+Results:
+SeriesInstanceUID,unique_row_dimensions,unique_column_dimensions
+1.3.6.1.4.1.9328.50.4.851295,1,1
+1.3.6.1.4.1.14519.5.2.1.230160373437170261273914199765548754728,1,1
+1.3.6.1.4.1.14519.5.2.1.198136226587823477275988945401314177632,1,1
+1.3.6.1.4.1.14519.5.2.1.6834.5010.207847026353414149257063878224,1,1
+1.3.6.1.4.1.14519.5.2.1.4334.1501.104119102335095114156407071236,1,1
+1.3.6.1.4.1.14519.5.2.1.6834.5010.277359005291394806020990423828,1,1
+1.2.840.113704.1.111.5888.1225395095.66,1,1
+1.3.6.1
+
+[Successfully executed]
+2025-07-01 04:47:58 - Thread-587 (execute) - INFO - [Try to execute]
+-- Description: Combine all constraints to find series satisfying criteria, including uniform slice intervals (z-positions) and consistent ImageOrientation. Replacing JSON_EXTRACT for ImagePositionPatient with Snowflake VARIANT indexing.
+SELECT 
+    a."SeriesInstanceUID", 
+    a."SeriesNumber", 
+    a."PatientID", 
+    (SUM(a."instance_size") / (1024 * 1024)) AS "series_size_mib"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL" a
+INNER JOIN (
+    SELECT 
+        "SeriesInstanceUID"
+    FROM 
+        "IDC"."IDC_V17"."DICOM_ALL"
+    WHERE 
+        "Modality" = 'CT'
+        AND "collection_id" != 'nlst'
+        AND NOT "ImageType" ILIKE '%LOCALIZER%'
+        AND "TransferSyntaxUID" NOT IN ('1.2.840.10008.1.2.4.70', '1.2.840.10008.1.2.4.51')
+    GROUP BY 
+        "SeriesInstanceUID"
+    HAVING 
+        COUNT(DISTINCT CAST("ImagePositionPatient"::VARIANT[2] AS FLOAT)) = COUNT(DISTINCT "InstanceNumber")
+        AND COUNT(DISTINCT "ImageOrientationPatient") = 1
+        AND COUNT(DISTINCT "PixelSpacing") = 1
+        AND COUNT(DISTINCT "Rows") = 1
+        AND COUNT(DISTINCT "Columns") = 1
+) b
+ON a."SeriesInstanceUID" = b."SeriesInstanceUID"
+GROUP BY 
+    a."SeriesInstanceUID", a."SeriesNumber", a."PatientID"
+ORDER BY 
+    "series_size_mib" DESC
+LIMIT 20;
+[Try to execute]
+2025-07-01 04:48:11 - Thread-587 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Combine all constraints to find series satisfying criteria, including uniform slice intervals (z-positions) and consistent ImageOrientation. Replacing JSON_EXTRACT for ImagePositionPatient with Snowflake VARIANT indexing.
+SELECT 
+    a."SeriesInstanceUID", 
+    a."SeriesNumber", 
+    a."PatientID", 
+    (SUM(a."instance_size") / (1024 * 1024)) AS "series_size_mib"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL" a
+INNER JOIN (
+    SELECT 
+        "SeriesInstanceUID"
+    FROM 
+        "IDC"."IDC_V17"."DICOM_ALL"
+    WHERE 
+        "Modality" = 'CT'
+        AND "collection_id" != 'nlst'
+        AND NOT "ImageType" ILIKE '%LOCALIZER%'
+        AND "TransferSyntaxUID" NOT IN ('1.2.840.10008.1.2.4.70', '1.2.840.10008.1.2.4.51')
+    GROUP BY 
+        "SeriesInstanceUID"
+    HAVING 
+        COUNT(DISTINCT CAST("ImagePositionPatient"::VARIANT[2] AS FLOAT)) = COUNT(DISTINCT "InstanceNumber")
+        AND COUNT(DISTINCT "ImageOrientationPatient") = 1
+        AND COUNT(DISTINCT "PixelSpacing") = 1
+        AND COUNT(DISTINCT "Rows") = 1
+        AND COUNT(DISTINCT "Columns") = 1
+) b
+ON a."SeriesInstanceUID" = b."SeriesInstanceUID"
+GROUP BY 
+    a."SeriesInstanceUID", a."SeriesNumber", a."PatientID"
+ORDER BY 
+    "series_size_mib" DESC
+LIMIT 20;
+Results:
+SeriesInstanceUID,SeriesNumber,PatientID,series_size_mib
+1.3.6.1.4.1.14519.5.2.1.99.1071.13277129293167305892649949655853,14,A822542,51.907221
+1.3.6.1.4.1.14519.5.2.1.3023.4024.516385546787261837605313262948,3,TCGA-QQ-A5V2,45.852354
+1.3.6.1.4.1.14519.5.2.1.3023.4024.336792208940753756815581767981,3,TCGA-QQ-A8VF,41.812361
+1.3.6.1.4.1.14519.5.2.1.2932.1975.504686912389793508180110599728,7,C3N-01536,37.218845
+1.3.6.1.4.1.14519.5.2.1.2932.1975.172267354930989988622900595777,8,C3N-03233,37.21871
+
+[Successfully executed]
+2025-07-01 04:48:11 - Thread-587 (execute) - INFO - [Try to execute]
+-- Description: Final query to return the top 5 CT scan series by size, satisfying all outlined conditions. Incorporates corrections for JSON_EXTRACT using Snowflake VARIANT indexing for ImagePositionPatient.
+SELECT 
+    "SeriesInstanceUID", 
+    "SeriesNumber", 
+    "PatientID", 
+    "series_size_mib"
+FROM (
+    SELECT 
+        a."SeriesInstanceUID", 
+        a."SeriesNumber", 
+        a."PatientID", 
+        (SUM(a."instance_size") / (1024 * 1024)) AS "series_size_mib"
+    FROM 
+        "IDC"."IDC_V17"."DICOM_ALL" a
+    INNER JOIN (
+        SELECT 
+            "SeriesInstanceUID"
+        FROM 
+            "IDC"."IDC_V17"."DICOM_ALL"
+        WHERE 
+            "Modality" = 'CT'
+            AND "collection_id" != 'nlst'
+            AND NOT "ImageType" ILIKE '%LOCALIZER%'
+            AND "TransferSyntaxUID" NOT IN ('1.2.840.10008.1.2.4.70', '1.2.840.10008.1.2.4.51')
+        GROUP BY 
+            "SeriesInstanceUID"
+        HAVING 
+            COUNT(DISTINCT CAST("ImagePositionPatient"::VARIANT[2] AS FLOAT)) = COUNT(DISTINCT "InstanceNumber")
+            AND COUNT(DISTINCT "ImageOrientationPatient") = 1
+            AND COUNT(DISTINCT "PixelSpacing") = 1
+            AND COUNT(DISTINCT "Rows") = 1
+            AND COUNT(DISTINCT "Columns") = 1
+    ) b
+    ON a."SeriesInstanceUID" = b."SeriesInstanceUID"
+    GROUP BY 
+        a."SeriesInstanceUID", a."SeriesNumber", a."PatientID"
+) c
+ORDER BY 
+    "series_size_mib" DESC
+LIMIT 5;
+[Try to execute]
+2025-07-01 04:48:31 - Thread-587 (execute) - INFO - [Successfully executed]
+Successfully executed. SQL:
+-- Description: Final query to return the top 5 CT scan series by size, satisfying all outlined conditions. Incorporates corrections for JSON_EXTRACT using Snowflake VARIANT indexing for ImagePositionPatient.
+SELECT 
+    "SeriesInstanceUID", 
+    "SeriesNumber", 
+    "PatientID", 
+    "series_size_mib"
+FROM (
+    SELECT 
+        a."SeriesInstanceUID", 
+        a."SeriesNumber", 
+        a."PatientID", 
+        (SUM(a."instance_size") / (1024 * 1024)) AS "series_size_mib"
+    FROM 
+        "IDC"."IDC_V17"."DICOM_ALL" a
+    INNER JOIN (
+        SELECT 
+            "SeriesInstanceUID"
+        FROM 
+            "IDC"."IDC_V17"."DICOM_ALL"
+        WHERE 
+            "Modality" = 'CT'
+            AND "collection_id" != 'nlst'
+            AND NOT "ImageType" ILIKE '%LOCALIZER%'
+            AND "TransferSyntaxUID" NOT IN ('1.2.840.10008.1.2.4.70', '1.2.840.10008.1.2.4.51')
+        GROUP BY 
+            "SeriesInstanceUID"
+        HAVING 
+            COUNT(DISTINCT CAST("ImagePositionPatient"::VARIANT[2] AS FLOAT)) = COUNT(DISTINCT "InstanceNumber")
+            AND COUNT(DISTINCT "ImageOrientationPatient") = 1
+            AND COUNT(DISTINCT "PixelSpacing") = 1
+            AND COUNT(DISTINCT "Rows") = 1
+            AND COUNT(DISTINCT "Columns") = 1
+    ) b
+    ON a."SeriesInstanceUID" = b."SeriesInstanceUID"
+    GROUP BY 
+        a."SeriesInstanceUID", a."SeriesNumber", a."PatientID"
+) c
+ORDER BY 
+    "series_size_mib" DESC
+LIMIT 5;
+Results:
+SeriesInstanceUID,SeriesNumber,PatientID,series_size_mib
+1.3.6.1.4.1.14519.5.2.1.99.1071.13277129293167305892649949655853,14,A822542,51.907221
+1.3.6.1.4.1.14519.5.2.1.3023.4024.516385546787261837605313262948,3,TCGA-QQ-A5V2,45.852354
+1.3.6.1.4.1.14519.5.2.1.3023.4024.336792208940753756815581767981,3,TCGA-QQ-A8VF,41.812361
+1.3.6.1.4.1.14519.5.2.1.2932.1975.504686912389793508180110599728,7,C3N-01536,37.218845
+1.3.6.1.4.1.14519.5.2.1.2932.1975.172267354930989988622900595777,8,C3N-03233,37.21871
+
+[Successfully executed]
+2025-07-01 04:48:31 - Thread-587 (execute) - INFO - itercount: 0
+2025-07-01 04:48:31 - Thread-587 (execute) - INFO - [Self-refine]
+Table full name: IDC.IDC_V17.DICOM_METADATA
+Column name: SeriesNumber Type: TEXT
+Column name: SeriesInstanceUID Type: TEXT
+Column name: Type Type: TEXT
+Column name: SeriesDescription Type: TEXT
+Column name: SpacingBetweenSlices Type: TEXT
+Column name: ImageType Type: VARIANT
+Column name: InstanceNumber Type: TEXT
+Column name: XRayTubeCurrentInmA Type: FLOAT
+Column name: KVP Type: TEXT
+Column name: SliceThickness Type: TEXT
+Column name: TransferSyntaxUID Type: TEXT
+Column name: Exposure Type: TEXT
+Column name: ImageOrientation Type: VARIANT
+Column name: ImageOrientationPatient Type: VARIANT
+Column name: SOPInstanceUID Type: TEXT
+Column name: ImagePositionPatient Type: VARIANT
+Column name: XRayTubeCurrent Type: TEXT
+Column name: Modality Type: TEXT
+Column name: ExposureInmAs Type: FLOAT
+Column name: PixelSpacing Type: VARIANT
+Column name: ImagesInSeries Type: TEXT
+Column name: PatientID Type: TEXT
+Column name: ImagePosition Type: VARIANT
+Column name: ExposureTime Type: TEXT
+Column name: UID Type: TEXT
+Column name: Rows Type: NUMBER
+Column name: Columns Type: NUMBER
+Column name: CTDIvol Type: FLOAT
+Sample rows:
+[{'TransferSyntaxUID': '1.2.840.10008.1.2.4.50', 'ImageType': '[\n  "DERIVED",\n  "PRIMARY",\n  "VOLUME",\n  "NONE"\n]', 'SOPInstanceUID': '1.3.6.1.4.1.5962.99.1.154767222.292368839.1640832307062.7.0', 'Modality': 'SM', 'SeriesDescription': 'HE tumor', 'PatientID': 'C3N-01088', 'SliceThickness': None, 'KVP': None, 'SpacingBetweenSlices': None, 'ExposureTime': None, 'XRayTubeCurrent': None, 'Exposure': None, 'XRayTubeCurrentInmA': None, 'ExposureInmAs': None, 'CTDIvol': None, 'SeriesInstanceUID': '1.3.6.1.4.1.5962.99.1.154767222.292368839.1640832307062.2.0', 'SeriesNumber': '1', 'InstanceNumber': '1', 'ImagePosition': '[]', 'ImagePositionPatient': '[]', 'ImageOrientationPatient': '[]', 'ImagesInSeries': None, 'Rows': 240, 'Columns': 240, 'PixelSpacing': '[]'}, {'TransferSyntaxUID': '1.2.840.10008.1.2.1', 'ImageType': '[\n  "DERIVED",\n  "PRIMARY",\n  "OVERVIEW",\n  "NONE"\n]', 'SOPInstanceUID': '1.3.6.1.4.1.5962.99.1.154767222.292368839.1640832307062.35.0', 'Modality': 'SM', 'SeriesDescription': 'HE tumor', 'PatientID': 'C3N-01088', 'SliceThickness': None, 'KVP': None, 'SpacingBetweenSlices': None, 'ExposureTime': None, 'XRayTubeCurrent': None, 'Exposure': None, 'XRayTubeCurrentInmA': None, 'ExposureInmAs': None, 'CTDIvol': None, 'SeriesInstanceUID': '1.3.6.1.4.1.5962.99.1.154767222.292368839.1640832307062.2.0', 'SeriesNumber': '1', 'InstanceNumber': '6', 'ImagePosition': '[]', 'ImagePositionPatient': '[]', 'ImageOrientationPatient': '[]', 'ImagesInSeries': None, 'Rows': 629, 'Columns': 1600, 'PixelSpacing': '[]'}, {'TransferSyntaxUID': '1.2.840.10008.1.2.1', 'ImageType': '[\n  "DERIVED",\n  "PRIMARY",\n  "LABEL",\n  "NONE"\n]', 'SOPInstanceUID': '1.3.6.1.4.1.5962.99.1.2133926228.1619968177.1655696367956.37.0', 'Modality': 'SM', 'SeriesDescription': 'HE tumor', 'PatientID': 'C3N-01088', 'SliceThickness': None, 'KVP': None, 'SpacingBetweenSlices': None, 'ExposureTime': None, 'XRayTubeCurrent': None, 'Exposure': None, 'XRayTubeCurrentInmA': None, 'ExposureInmAs': None, 'CTDIvol': None, 'SeriesInstanceUID': '1.3.6.1.4.1.5962.99.1.154767222.292368839.1640832307062.2.0', 'SeriesNumber': '1', 'InstanceNumber': '5', 'ImagePosition': '[]', 'ImagePositionPatient': '[]', 'ImageOrientationPatient': '[]', 'ImagesInSeries': None, 'Rows': 716, 'Columns': 666, 'PixelSpacing': '[]'}, {'TransferSyntaxUID': '1.2.840.10008.1.2.1', 'ImageType': '[\n  "DERIVED",\n  "PRIMARY",\n  "OVERVIEW",\n  "NONE"\n]', 'SOPInstanceUID': '1.3.6.1.4.1.5962.99.1.157627571.692579403.1640835167411.42.0', 'Modality': 'SM', 'SeriesDescription': 'HE tumor', 'PatientID': 'C3N-01088', 'SliceThickness': None, 'KVP': None, 'SpacingBetweenSlices': None, 'ExposureTime': None, 'XRayTubeCurrent': None, 'Exposure': None, 'XRayTubeCurrentInmA': None, 'ExposureInmAs': None, 'CTDIvol': None, 'SeriesInstanceUID': '1.3.6.1.4.1.5962.99.1.157627571.692579403.1640835167411.2.0', 'SeriesNumber': '1', 'InstanceNumber': '7', 'ImagePosition': '[]', 'ImagePositionPatient': '[]', 'ImageOrientationPatient': '[]', 'ImagesInSeries': None, 'Rows': 629, 'Columns': 1600, 'PixelSpacing': '[]'}, {'TransferSyntaxUID': '1.2.840.10008.1.2.4.50', 'ImageType': '[\n  "DERIVED",\n  "PRIMARY",\n  "VOLUME",\n  "NONE"\n]', 'SOPInstanceUID': '1.3.6.1.4.1.5962.99.1.157627571.692579403.1640835167411.7.0', 'Modality': 'SM', 'SeriesDescription': 'HE tumor', 'PatientID': 'C3N-01088', 'SliceThickness': None, 'KVP': None, 'SpacingBetweenSlices': None, 'ExposureTime': None, 'XRayTubeCurrent': None, 'Exposure': None, 'XRayTubeCurrentInmA': None, 'ExposureInmAs': None, 'CTDIvol': None, 'SeriesInstanceUID': '1.3.6.1.4.1.5962.99.1.157627571.692579403.1640835167411.2.0', 'SeriesNumber': '1', 'InstanceNumber': '1', 'ImagePosition': '[]', 'ImagePositionPatient': '[]', 'ImageOrientationPatient': '[]', 'ImagesInSeries': None, 'Rows': 240, 'Columns': 240, 'PixelSpacing': '[]'}]
+--------------------------------------------------
+Table full name: IDC.IDC_V17.DICOM_METADATA_CURATED
+Column name: SOPInstanceUID Type: TEXT Description: DICOM SOPInstanceUID
+Column name: SliceThickness Type: FLOAT Description: Cast of Slice_Thickness to FLOAT64
+Sample rows:
+[{'SOPInstanceUID': '1.3.6.1.4.1.14519.5.2.1.1620.1225.337801122878670074294531806897', 'SliceThickness': None}, {'SOPInstanceUID': '1.3.6.1.4.1.5962.99.1.2140475088.421872551.1655702916816.37.0', 'SliceThickness': None}, {'SOPInstanceUID': '1.3.6.1.4.1.5962.99.1.3388672280.250944349.1639771244824.22.0', 'SliceThickness': None}, {'SOPInstanceUID': '1.3.6.1.4.1.5962.99.1.285798320.1466497774.1640963338160.42.0', 'SliceThickness': None}, {'SOPInstanceUID': '1.2.276.0.7230010.3.1.4.481037312.39574.1685071533.519153', 'SliceThickness': None}]
+--------------------------------------------------
+Table full name: IDC.IDC_V17.AUXILIARY_METADATA
+Column name: SOPInstanceUID Type: TEXT Description: DICOM instance containing this instance version
+Column name: collection_id Type: TEXT Description: Collection ID as used internally by IDC webapp and accepted by the IDC API
+Column name: instance_size Type: NUMBER Description: Size in bytes of this version of this instance
+Column name: SeriesInstanceUID Type: TEXT Description: DICOM series containing this instance
+Sample rows:
+[{'collection_id': 'acrin_6698', 'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.7695.4164.100929779510512848238254512097', 'SOPInstanceUID': '1.3.6.1.4.1.14519.5.2.1.7695.4164.784850890634822414222832957135', 'instance_size': 530510}, {'collection_id': 'acrin_6698', 'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.7695.4164.100929779510512848238254512097', 'SOPInstanceUID': '1.3.6.1.4.1.14519.5.2.1.7695.4164.166527479339466134062467856450', 'instance_size': 530512}, {'collection_id': 'acrin_6698', 'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.7695.4164.100929779510512848238254512097', 'SOPInstanceUID': '1.3.6.1.4.1.14519.5.2.1.7695.4164.227440160180778953226675332234', 'instance_size': 530512}, {'collection_id': 'acrin_6698', 'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.7695.4164.100929779510512848238254512097', 'SOPInstanceUID': '1.3.6.1.4.1.14519.5.2.1.7695.4164.267897853011778859581783671016', 'instance_size': 530512}, {'collection_id': 'acrin_6698', 'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.7695.4164.100929779510512848238254512097', 'SOPInstanceUID': '1.3.6.1.4.1.14519.5.2.1.7695.4164.331545318411104179804799741788', 'instance_size': 530512}]
+--------------------------------------------------
+Table full name: IDC.IDC_V17.DICOM_ALL
+Column name: ExposureTime Type: TEXT
+Column name: ImagePosition Type: VARIANT
+Column name: CTDIvol Type: FLOAT
+Column name: PatientID Type: TEXT Description: Patient ID assigned by submitter of this data
+Column name: SliceThickness Type: TEXT
+Column name: UID Type: TEXT
+Column name: Modality Type: TEXT
+Column name: instance_size Type: NUMBER Description: Size in bytes of this version of this instance
+Column name: ImagesInSeries Type: TEXT
+Column name: KVP Type: TEXT
+Column name: SeriesDescription Type: TEXT
+Column name: SOPInstanceUID Type: TEXT
+Column name: collection_id Type: TEXT Description: The ID of the collection containing this instance as expected by the IDC web app and API. Duplicate of the idc_webapp_collection_id column.
+Column name: InstanceNumber Type: TEXT
+Column name: ImageType Type: VARIANT
+Column name: ImageOrientation Type: VARIANT
+Column name: SeriesNumber Type: TEXT
+Column name: PixelSpacing Type: VARIANT
+Column name: Rows Type: NUMBER
+Column name: ExposureInmAs Type: FLOAT
+Column name: XRayTubeCurrentInmA Type: FLOAT
+Column name: Columns Type: NUMBER
+Column name: Exposure Type: TEXT
+Column name: ImagePositionPatient Type: VARIANT
+Column name: ImageOrientationPatient Type: VARIANT
+Column name: XRayTubeCurrent Type: TEXT
+Column name: SeriesInstanceUID Type: TEXT
+Column name: Type Type: TEXT
+Column name: TransferSyntaxUID Type: TEXT
+Column name: SpacingBetweenSlices Type: TEXT
+Sample rows:
+[{'collection_id': 'nlst', 'PatientID': '115644', 'SeriesInstanceUID': '1.2.840.113654.2.55.286585074629136673697149467703631406338', 'SOPInstanceUID': '1.2.840.113654.2.55.232251254905686701117181565039442087865', 'instance_size': 526602, 'TransferSyntaxUID': '1.2.840.10008.1.2.1', 'ImageType': '[\n  "ORIGINAL",\n  "PRIMARY",\n  "AXIAL"\n]', 'Modality': 'CT', 'SeriesDescription': '1,OPA,GE,HSQX,STANDARD,310,2.5,120,56,0.1,1.5', 'SliceThickness': '2.500000', 'KVP': '120', 'SpacingBetweenSlices': None, 'ExposureTime': '798', 'XRayTubeCurrent': '80', 'Exposure': '1166', 'XRayTubeCurrentInmA': None, 'ExposureInmAs': None, 'CTDIvol': None, 'SeriesNumber': '2', 'InstanceNumber': '21', 'ImagePosition': '[]', 'ImagePositionPatient': '[\n  "-165.399994",\n  "-155.000000",\n  "-66.144997"\n]', 'ImageOrientationPatient': '[\n  "1.000000",\n  "0.000000",\n  "0.000000",\n  "0.000000",\n  "1.000000",\n  "0.000000"\n]', 'ImagesInSeries': None, 'Rows': 512, 'Columns': 512, 'PixelSpacing': '[\n  "0.605469",\n  "0.605469"\n]'}, {'collection_id': 'nlst', 'PatientID': '125284', 'SeriesInstanceUID': '1.2.840.113654.2.55.206816254587970136084378013338289118172', 'SOPInstanceUID': '1.2.840.113654.2.55.281149784892428811639464384293629235745', 'instance_size': 526608, 'TransferSyntaxUID': '1.2.840.10008.1.2.1', 'ImageType': '[\n  "ORIGINAL",\n  "PRIMARY",\n  "AXIAL"\n]', 'Modality': 'CT', 'SeriesDescription': '1,OPA,GE,HSQX,STANDARD,310,2.5,120,56,0.1,1.5', 'SliceThickness': '2.500000', 'KVP': '120', 'SpacingBetweenSlices': None, 'ExposureTime': '798', 'XRayTubeCurrent': '80', 'Exposure': '1110', 'XRayTubeCurrentInmA': None, 'ExposureInmAs': None, 'CTDIvol': None, 'SeriesNumber': '2', 'InstanceNumber': '50', 'ImagePosition': '[]', 'ImagePositionPatient': '[\n  "-149.300003",\n  "-153.399994",\n  "-129.880005"\n]', 'ImageOrientationPatient': '[\n  "1.000000",\n  "0.000000",\n  "0.000000",\n  "0.000000",\n  "1.000000",\n  "0.000000"\n]', 'ImagesInSeries': None, 'Rows': 512, 'Columns': 512, 'PixelSpacing': '[\n  "0.605469",\n  "0.605469"\n]'}, {'collection_id': 'nlst', 'PatientID': '111916', 'SeriesInstanceUID': '1.2.840.113654.2.55.177630169322150231721484650076633097612', 'SOPInstanceUID': '1.2.840.113654.2.55.169820662853239776981123072671212105735', 'instance_size': 526610, 'TransferSyntaxUID': '1.2.840.10008.1.2.1', 'ImageType': '[\n  "ORIGINAL",\n  "PRIMARY",\n  "AXIAL"\n]', 'Modality': 'CT', 'SeriesDescription': '1,OPA,GE,HSQX,STANDARD,350,2.5,120,56,0.1,1.5', 'SliceThickness': '2.500000', 'KVP': '120', 'SpacingBetweenSlices': None, 'ExposureTime': '798', 'XRayTubeCurrent': '80', 'Exposure': '1380', 'XRayTubeCurrentInmA': None, 'ExposureInmAs': None, 'CTDIvol': None, 'SeriesNumber': '2', 'InstanceNumber': '114', 'ImagePosition': '[]', 'ImagePositionPatient': '[\n  "-178.600006",\n  "-175.000000",\n  "-271.994995"\n]', 'ImageOrientationPatient': '[\n  "1.000000",\n  "0.000000",\n  "0.000000",\n  "0.000000",\n  "1.000000",\n  "0.000000"\n]', 'ImagesInSeries': None, 'Rows': 512, 'Columns': 512, 'PixelSpacing': '[\n  "0.683594",\n  "0.683594"\n]'}, {'collection_id': 'nlst', 'PatientID': '105094', 'SeriesInstanceUID': '1.2.840.113654.2.55.241127592238091291973528290810645287066', 'SOPInstanceUID': '1.2.840.113654.2.55.195670402165839899895759391289032265317', 'instance_size': 526608, 'TransferSyntaxUID': '1.2.840.10008.1.2.1', 'ImageType': '[\n  "ORIGINAL",\n  "PRIMARY",\n  "AXIAL"\n]', 'Modality': 'CT', 'SeriesDescription': '1,OPA,GE,HSQX,STANDARD,350,2.5,120,56,0.1,1.5', 'SliceThickness': '2.500000', 'KVP': '120', 'SpacingBetweenSlices': None, 'ExposureTime': '798', 'XRayTubeCurrent': '80', 'Exposure': '1222', 'XRayTubeCurrentInmA': None, 'ExposureInmAs': None, 'CTDIvol': None, 'SeriesNumber': '2', 'InstanceNumber': '72', 'ImagePosition': '[]', 'ImagePositionPatient': '[\n  "-179.699997",\n  "-141.699997",\n  "-272.170013"\n]', 'ImageOrientationPatient': '[\n  "1.000000",\n  "0.000000",\n  "0.000000",\n  "0.000000",\n  "1.000000",\n  "0.000000"\n]', 'ImagesInSeries': None, 'Rows': 512, 'Columns': 512, 'PixelSpacing': '[\n  "0.683594",\n  "0.683594"\n]'}, {'collection_id': 'nlst', 'PatientID': '131538', 'SeriesInstanceUID': '1.2.840.113654.2.55.256299343016283789104389095516984631610', 'SOPInstanceUID': '1.2.840.113654.2.55.85167056264528248627639073741729153183', 'instance_size': 526602, 'TransferSyntaxUID': '1.2.840.10008.1.2.1', 'ImageType': '[\n  "ORIGINAL",\n  "PRIMARY",\n  "AXIAL"\n]', 'Modality': 'CT', 'SeriesDescription': '1,OPA,GE,HSQX,STANDARD,350,2.5,120,56,0.1,1.5', 'SliceThickness': '2.500000', 'KVP': '120', 'SpacingBetweenSlices': None, 'ExposureTime': '798', 'XRayTubeCurrent': '80', 'Exposure': '1203', 'XRayTubeCurrentInmA': None, 'ExposureInmAs': None, 'CTDIvol': None, 'SeriesNumber': '3', 'InstanceNumber': '69', 'ImagePosition': '[]', 'ImagePositionPatient': '[\n  "-182.800003",\n  "-146.899994",\n  "-272.154999"\n]', 'ImageOrientationPatient': '[\n  "1.000000",\n  "0.000000",\n  "0.000000",\n  "0.000000",\n  "1.000000",\n  "0.000000"\n]', 'ImagesInSeries': None, 'Rows': 512, 'Columns': 512, 'PixelSpacing': '[\n  "0.683594",\n  "0.683594"\n]'}]
+--------------------------------------------------
+Table full name: IDC.IDC_V17.DICOM_METADATA_CURATED_SERIES_LEVEL
+Column name: max_TotalPixelMatrixRows Type: NUMBER Description: Minimum value of the Rows attribute across instances within the series. Contains first non-null value between the top-level Rows attribute and the one in TotalPixelMatrixRows (encountered in SM modality).
+Column name: SeriesInstanceUID Type: TEXT Description: DICOM SeriesInstanceUID
+Column name: Modality Type: TEXT Description: DICOM Modality
+Column name: min_PixelSpacing_2sf Type: FLOAT Description: Minimum value of the first component of pixel spacing across all instances in the series. Contains first non-null value between first component of the top-level PixelSpacing attribute and the one in SharedFunctionalGroupSequence[0] > PixelMeasuresSequence[0]. Rounded to two significant figures.
+Column name: max_TotalPixelMatrixColumns Type: NUMBER Description: Minimum value of the Columns attribute across instances within the series. Contains first non-null value between the top-level Columns attribute and the one in TotalPixelMatrixColumns (encountered in SM modality).
+Sample rows:
+[{'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.2103.7010.269874.1.2', 'min_PixelSpacing_2sf': None, 'max_TotalPixelMatrixColumns': None, 'max_TotalPixelMatrixRows': None, 'Modality': 'KO'}, {'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.2103.7010.269874.1.1', 'min_PixelSpacing_2sf': None, 'max_TotalPixelMatrixColumns': None, 'max_TotalPixelMatrixRows': None, 'Modality': 'KO'}, {'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.2103.7010.237254.1.2', 'min_PixelSpacing_2sf': None, 'max_TotalPixelMatrixColumns': None, 'max_TotalPixelMatrixRows': None, 'Modality': 'KO'}, {'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.2103.7010.263376.2.1', 'min_PixelSpacing_2sf': None, 'max_TotalPixelMatrixColumns': None, 'max_TotalPixelMatrixRows': None, 'Modality': 'KO'}, {'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.2103.7010.135953.2.2', 'min_PixelSpacing_2sf': None, 'max_TotalPixelMatrixColumns': None, 'max_TotalPixelMatrixRows': None, 'Modality': 'KO'}]
+--------------------------------------------------
+Table full name: IDC.IDC_V17.DICOM_PIVOT
+Column name: Modality Type: TEXT
+Column name: max_TotalPixelMatrixRows Type: NUMBER
+Column name: instance_size Type: NUMBER
+Column name: SeriesDescription Type: TEXT
+Column name: SOPInstanceUID Type: TEXT
+Column name: collection_id Type: TEXT
+Column name: SeriesNumber Type: TEXT
+Column name: SliceThickness Type: FLOAT
+Column name: SeriesInstanceUID Type: TEXT
+Column name: ImageType Type: TEXT
+Column name: PatientID Type: TEXT
+Column name: max_TotalPixelMatrixColumns Type: NUMBER
+Sample rows:
+[{'PatientID': 'UPENN-GBM-00513', 'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.185195136958159502142654387221547856729', 'SliceThickness': 5.0, 'SeriesNumber': '14', 'SeriesDescription': 'ep2d_perf BOLUS_TERA', 'SOPInstanceUID': '1.3.6.1.4.1.14519.5.2.1.201644798538859159720916103279874451632', 'Modality': 'MR', 'collection_id': 'upenn_gbm', 'instance_size': 36948, 'max_TotalPixelMatrixColumns': 128, 'max_TotalPixelMatrixRows': 128, 'ImageType': 'ORIGINAL, PRIMARY, PERFUSION, NONE, ND, NORM'}, {'PatientID': 'UPENN-GBM-00519', 'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.285201929497843344185967283825964169195', 'SliceThickness': 4.0, 'SeriesNumber': '13', 'SeriesDescription': 'ep2d_perf BOLUS_TERA', 'SOPInstanceUID': '1.3.6.1.4.1.14519.5.2.1.284648789561114483507224549503882513471', 'Modality': 'MR', 'collection_id': 'upenn_gbm', 'instance_size': 36970, 'max_TotalPixelMatrixColumns': 128, 'max_TotalPixelMatrixRows': 128, 'ImageType': 'ORIGINAL, PRIMARY, PERFUSION, NONE, ND, NORM'}, {'PatientID': 'UPENN-GBM-00416', 'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.75622442647298518363100372261560810525', 'SliceThickness': 4.0, 'SeriesNumber': '13', 'SeriesDescription': 'ep2d_perf BOLUS_TERA', 'SOPInstanceUID': '1.3.6.1.4.1.14519.5.2.1.64715764737679289365432093996341540549', 'Modality': 'MR', 'collection_id': 'upenn_gbm', 'instance_size': 36916, 'max_TotalPixelMatrixColumns': 128, 'max_TotalPixelMatrixRows': 128, 'ImageType': 'ORIGINAL, PRIMARY, PERFUSION, NONE, ND, NORM'}, {'PatientID': 'UPENN-GBM-00473', 'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.135489908748676184571973467902447917371', 'SliceThickness': 3.5, 'SeriesNumber': '13', 'SeriesDescription': 'ep2d_perf BOLUS_TERA', 'SOPInstanceUID': '1.3.6.1.4.1.14519.5.2.1.114859382544420303794672772499243450451', 'Modality': 'MR', 'collection_id': 'upenn_gbm', 'instance_size': 37022, 'max_TotalPixelMatrixColumns': 128, 'max_TotalPixelMatrixRows': 128, 'ImageType': 'ORIGINAL, PRIMARY, PERFUSION, NONE, ND, NORM'}, {'PatientID': 'UPENN-GBM-00459', 'SeriesInstanceUID': '1.3.6.1.4.1.14519.5.2.1.152910459779232363967902946401636166563', 'SliceThickness': 3.0, 'SeriesNumber': '13', 'SeriesDescription': 'ep2d_perf BOLUS_TERA', 'SOPInstanceUID': '1.3.6.1.4.1.14519.5.2.1.308657597317534610205545200298236188919', 'Modality': 'MR', 'collection_id': 'upenn_gbm', 'instance_size': 36962, 'max_TotalPixelMatrixColumns': 128, 'max_TotalPixelMatrixRows': 128, 'ImageType': 'ORIGINAL, PRIMARY, PERFUSION, NONE, ND, NORM'}]
+--------------------------------------------------
+External knowledge that might be helpful: 
+None
+The table structure information is ({database name: {schema name: [table name]}}): 
+{'IDC': {'IDC_V17': ['DICOM_METADATA', 'DICOM_METADATA_CURATED', 'AUXILIARY_METADATA', 'DICOM_ALL', 'DICOM_METADATA_CURATED_SERIES_LEVEL', 'DICOM_PIVOT']}}
+
+Some few-shot examples after column exploration may be helpful:
+Query:
+-- Description: Identify all distinct SeriesInstanceUIDs where the `Modality` is 'CT' and exclude the 'nlst' collection.
+SELECT DISTINCT 
+    "SeriesInstanceUID"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL"
+WHERE 
+    "Modality" = 'CT'
+    AND "collection_id" != 'nlst'
+LIMIT 20;
+Answer:
+SeriesInstanceUID
+1.3.6.1.4.1.14519.5.2.1.1600.1201.244243278541663399109431916357
+1.3.6.1.4.1.14519.5.2.1.1600.1201.139358652937749542331129499581
+1.2.826.0.1.3680043.10.474.3337526406001412680527826672645639035
+1.3.6.1.4.1.14519.5.2.1.1600.1202.393328078228531363079749962612
+1.3.6.1.4.1.14519.5.2.1.81338354450462947599575060525652398820
+1.3.6.1.4.1.14519.5.2.1.229312928030409974102083048062778216454
+1.3.6.1.4.1.14519.5.2.1.1600.1201.311486751925492011060710287959
+1.3.6.1.4.1.14519.5.2.
+Query:
+-- Description: Retrieve series with SeriesInstanceUID, SeriesNumber, PatientID, instance_size (converted to MiB), and ImageType for CT modality, excluding 'LOCALIZER' series and JPEG compressed TransferSyntaxUIDs.
+SELECT 
+    "SeriesInstanceUID", 
+    "SeriesNumber", 
+    "PatientID", 
+    ("instance_size" / (1024 * 1024)) AS "series_size_mib", 
+    "ImageType"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL"
+WHERE 
+    "Modality" = 'CT'
+    AND NOT "ImageType" ILIKE '%LOCALIZER%'
+    AND "TransferSyntaxUID" NOT IN ('1.2.840.10008.1.2.4.70', '1.2.840.10008.1.2.4.51')
+    AND "collection_id" != 'nlst'
+LIMIT 20;
+Answer:
+SeriesInstanceUID,SeriesNumber,PatientID,series_size_mib,ImageType
+1.3.6.1.4.1.14519.5.2.1.7009.2403.149532723737106693656739993848,53997,ACRIN-NSCLC-FDG-PET-020,0.502558,"[
+  ""DERIVED"",
+  ""PRIMARY"",
+  ""AXIAL""
+]"
+1.3.6.1.4.1.14519.5.2.1.7009.2403.651298522129431002058571534549,40065,ACRIN-NSCLC-FDG-PET-087,0.502586,"[
+  ""DERIVED"",
+  ""PRIMARY"",
+  ""AXIAL""
+]"
+1.3.6.1.4.1.14519.5.2.1.7009.2403.262576887310612138511078980361,1,ACRIN-NSCLC-FDG-PET-220,0.502724,"[
+  ""ORIGINAL"",
+  ""PRI
+Query:
+-- Description: Filter instances with consistent ImageOrientationPatient values for each SeriesInstanceUID to ensure only single unique orientation is considered.
+SELECT 
+    "SeriesInstanceUID", 
+    COUNT(DISTINCT "ImageOrientationPatient") AS "unique_orientations"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL"
+WHERE 
+    "Modality" = 'CT'
+    AND "collection_id" != 'nlst'
+GROUP BY 
+    "SeriesInstanceUID"
+HAVING 
+    COUNT(DISTINCT "ImageOrientationPatient") = 1
+LIMIT 20;
+Answer:
+SeriesInstanceUID,unique_orientations
+1.3.6.1.4.1.9328.50.4.625187,1
+1.3.6.1.4.1.14519.5.2.1.6919.4624.799005287649921268034033852073,1
+1.3.12.2.1107.5.1.4.60175.30000008042113424165600161212,1
+1.3.6.1.4.1.14519.5.2.1.7009.2403.142332487240711763684068345432,1
+1.3.6.1.4.1.14519.5.2.1.6450.4004.259069733378239319649040362055,1
+1.3.6.1.4.1.14519.5.2.1.5168.1900.136001226456621344050523916277,1
+1.3.6.1.4.1.14519.5.2.1.7009.2403.514464559022878068235268001899,1
+1.3.6.1.4.1.14519.5.2.1.3671.4
+Query:
+-- Description: Retrieve series with consistent z-axis slice positions matching unique InstanceNumbers and calculate the total number of images per series. Replacing JSON_EXTRACT with Snowflake VARIANT indexing for proper parsing of ImagePositionPatient.
+SELECT 
+    "SeriesInstanceUID",
+    COUNT(DISTINCT CAST("ImagePositionPatient"::VARIANT[2] AS FLOAT)) AS "unique_z_positions",
+    COUNT(DISTINCT "InstanceNumber") AS "unique_instances"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL"
+WHERE 
+    "Modality" = 'CT'
+    AND "collection_id" != 'nlst'
+GROUP BY 
+    "SeriesInstanceUID"
+HAVING 
+    COUNT(DISTINCT CAST("ImagePositionPatient"::VARIANT[2] AS FLOAT)) = COUNT(DISTINCT "InstanceNumber")
+LIMIT 20;
+Answer:
+SeriesInstanceUID,unique_z_positions,unique_instances
+1.3.6.1.4.1.14519.5.2.1.6279.6001.206310993373699650907461884037,6,6
+1.3.6.1.4.1.14519.5.2.1.6834.5010.165869043223467355253765864725,2,2
+1.3.6.1.4.1.14519.5.2.1.1357.4011.169528141610153113274919864942,9,9
+1.3.6.1.4.1.14519.5.2.1.6655.2359.103929337957398976242600764397,17,17
+1.2.840.113704.1.111.4716.1224516753.43,29,29
+1.3.6.1.4.1.14519.5.2.1.3344.4020.509325909277445882399396462540,6,6
+1.3.6.1.4.1.14519.5.2.1.9203.4004.172876512814
+Query:
+-- Description: Identify series with consistent PixelSpacing values, ensuring uniform pixel size across slices. PixelSpacing does not require JSON_EXTRACT correction as no error is reported.
+SELECT 
+    "SeriesInstanceUID", 
+    COUNT(DISTINCT "PixelSpacing") AS "unique_pixel_spacings"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL"
+WHERE 
+    "Modality" = 'CT'
+    AND "collection_id" != 'nlst'
+GROUP BY 
+    "SeriesInstanceUID"
+HAVING 
+    COUNT(DISTINCT "PixelSpacing") = 1
+LIMIT 20;
+Answer:
+SeriesInstanceUID,unique_pixel_spacings
+1.2.840.113704.1.111.1120.1224533541.14,1
+1.3.6.1.4.1.14519.5.2.1.6450.9002.217367240046972683989491086440,1
+1.3.6.1.4.1.14519.5.2.1.6279.6001.620476670380256054392660616754,1
+1.3.6.1.4.1.14519.5.2.1.7009.2403.194566092615434351966359036964,1
+1.3.6.1.4.1.14519.5.2.1.8421.4019.122233760025449389617836945654,1
+1.3.6.1.4.1.14519.5.2.1.6834.5010.843945513281045194541827154509,1
+1.3.6.1.4.1.14519.5.2.1.6834.5010.243386566459539238595054580287,1
+1.3.6.1.
+Query:
+-- Description: Retrieve SeriesInstanceUIDs for series with consistent Rows and Columns (pixel dimensions) throughout. No JSON_EXTRACT correction is necessary as Rows and Columns are numeric fields.
+SELECT 
+    "SeriesInstanceUID",
+    COUNT(DISTINCT "Rows") AS "unique_row_dimensions",
+    COUNT(DISTINCT "Columns") AS "unique_column_dimensions"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL"
+WHERE 
+    "Modality" = 'CT'
+    AND "collection_id" != 'nlst'
+GROUP BY 
+    "SeriesInstanceUID"
+HAVING 
+    COUNT(DISTINCT "Rows") = 1 
+    AND COUNT(DISTINCT "Columns") = 1
+LIMIT 20;
+Answer:
+SeriesInstanceUID,unique_row_dimensions,unique_column_dimensions
+1.3.6.1.4.1.9328.50.4.851295,1,1
+1.3.6.1.4.1.14519.5.2.1.230160373437170261273914199765548754728,1,1
+1.3.6.1.4.1.14519.5.2.1.198136226587823477275988945401314177632,1,1
+1.3.6.1.4.1.14519.5.2.1.6834.5010.207847026353414149257063878224,1,1
+1.3.6.1.4.1.14519.5.2.1.4334.1501.104119102335095114156407071236,1,1
+1.3.6.1.4.1.14519.5.2.1.6834.5010.277359005291394806020990423828,1,1
+1.2.840.113704.1.111.5888.1225395095.66,1,1
+1.3.6.1
+Query:
+-- Description: Combine all constraints to find series satisfying criteria, including uniform slice intervals (z-positions) and consistent ImageOrientation. Replacing JSON_EXTRACT for ImagePositionPatient with Snowflake VARIANT indexing.
+SELECT 
+    a."SeriesInstanceUID", 
+    a."SeriesNumber", 
+    a."PatientID", 
+    (SUM(a."instance_size") / (1024 * 1024)) AS "series_size_mib"
+FROM 
+    "IDC"."IDC_V17"."DICOM_ALL" a
+INNER JOIN (
+    SELECT 
+        "SeriesInstanceUID"
+    FROM 
+        "IDC"."IDC_V17"."DICOM_ALL"
+    WHERE 
+        "Modality" = 'CT'
+        AND "collection_id" != 'nlst'
+        AND NOT "ImageType" ILIKE '%LOCALIZER%'
+        AND "TransferSyntaxUID" NOT IN ('1.2.840.10008.1.2.4.70', '1.2.840.10008.1.2.4.51')
+    GROUP BY 
+        "SeriesInstanceUID"
+    HAVING 
+        COUNT(DISTINCT CAST("ImagePositionPatient"::VARIANT[2] AS FLOAT)) = COUNT(DISTINCT "InstanceNumber")
+        AND COUNT(DISTINCT "ImageOrientationPatient") = 1
+        AND COUNT(DISTINCT "PixelSpacing") = 1
+        AND COUNT(DISTINCT "Rows") = 1
+        AND COUNT(DISTINCT "Columns") = 1
+) b
+ON a."SeriesInstanceUID" = b."SeriesInstanceUID"
+GROUP BY 
+    a."SeriesInstanceUID", a."SeriesNumber", a."PatientID"
+ORDER BY 
+    "series_size_mib" DESC
+LIMIT 20;
+Answer:
+SeriesInstanceUID,SeriesNumber,PatientID,series_size_mib
+1.3.6.1.4.1.14519.5.2.1.99.1071.13277129293167305892649949655853,14,A822542,51.907221
+1.3.6.1.4.1.14519.5.2.1.3023.4024.516385546787261837605313262948,3,TCGA-QQ-A5V2,45.852354
+1.3.6.1.4.1.14519.5.2.1.3023.4024.336792208940753756815581767981,3,TCGA-QQ-A8VF,41.812361
+1.3.6.1.4.1.14519.5.2.1.2932.1975.504686912389793508180110599728,7,C3N-01536,37.218845
+1.3.6.1.4.1.14519.5.2.1.2932.1975.172267354930989988622900595777,8,C3N-03233,37.21871
+Query:
+-- Description: Final query to return the top 5 CT scan series by size, satisfying all outlined conditions. Incorporates corrections for JSON_EXTRACT using Snowflake VARIANT indexing for ImagePositionPatient.
+SELECT 
+    "SeriesInstanceUID", 
+    "SeriesNumber", 
+    "PatientID", 
+    "series_size_mib"
+FROM (
+    SELECT 
+        a."SeriesInstanceUID", 
+        a."SeriesNumber", 
+        a."PatientID", 
+        (SUM(a."instance_size") / (1024 * 1024)) AS "series_size_mib"
+    FROM 
+        "IDC"."IDC_V17"."DICOM_ALL" a
+    INNER JOIN (
+        SELECT 
+            "SeriesInstanceUID"
+        FROM 
+            "IDC"."IDC_V17"."DICOM_ALL"
+        WHERE 
+            "Modality" = 'CT'
+            AND "collection_id" != 'nlst'
+            AND NOT "ImageType" ILIKE '%LOCALIZER%'
+            AND "TransferSyntaxUID" NOT IN ('1.2.840.10008.1.2.4.70', '1.2.840.10008.1.2.4.51')
+        GROUP BY 
+            "SeriesInstanceUID"
+        HAVING 
+            COUNT(DISTINCT CAST("ImagePositionPatient"::VARIANT[2] AS FLOAT)) = COUNT(DISTINCT "InstanceNumber")
+            AND COUNT(DISTINCT "ImageOrientationPatient") = 1
+            AND COUNT(DISTINCT "PixelSpacing") = 1
+            AND COUNT(DISTINCT "Rows") = 1
+            AND COUNT(DISTINCT "Columns") = 1
+    ) b
+    ON a."SeriesInstanceUID" = b."SeriesInstanceUID"
+    GROUP BY 
+        a."SeriesInstanceUID", a."SeriesNumber", a."PatientID"
+) c
+ORDER BY 
+    "series_size_mib" DESC
+LIMIT 5;
+Answer:
+SeriesInstanceUID,SeriesNumber,PatientID,series_size_mib
+1.3.6.1.4.1.14519.5.2.1.99.1071.13277129293167305892649949655853,14,A822542,51.907221
+1.3.6.1.4.1.14519.5.2.1.3023.4024.516385546787261837605313262948,3,TCGA-QQ-A5V2,45.852354
+1.3.6.1.4.1.14519.5.2.1.3023.4024.336792208940753756815581767981,3,TCGA-QQ-A8VF,41.812361
+1.3.6.1.4.1.14519.5.2.1.2932.1975.504686912389793508180110599728,7,C3N-01536,37.218845
+1.3.6.1.4.1.14519.5.2.1.2932.1975.172267354930989988622900595777,8,C3N-03233,37.21871
+Task: Identify the top five CT scan series by size (in MiB), including their SeriesInstanceUID, series number, patient ID, and series size. These series must be from the CT modality and not part of the 'nlst' collection. Exclude any series where the ImageType is classified as 'LOCALIZER' or where the TransferSyntaxUID is either '1.2.840.10008.1.2.4.70' or '1.2.840.10008.1.2.4.51' (i.e., JPEG compressed). The selected series must have consistent slice intervals, exposure levels, image orientation (with only one unique ImageOrientationPatient value), pixel spacing, image positions (both z-axis and xy positions), and pixel dimensions (rows and columns). Ensure that the number of images matches the number of unique z-axis positions, indicating no duplicate slices. Additionally, the z-axis component of the cross product of the x and y direction cosines from ImageOrientationPatient must have an absolute value between 0.99 and 1.01, ensuring alignment with the expected imaging plane. Finally, order the results by series size in descending order and limit the output to the top five series satisfying these conditions.
+Another way to say it: Find the top 5 CT scan series ID, including their series number, patient ID, and series size (in MiB), where the series are not classified as 'LOCALIZER' or have the specific JPEG compressed transfer syntaxes '1.2.840.10008.1.2.4.70' or '1.2.840.10008.1.2.4.51'. The series must have consistent slice intervals, exposure levels, image orientation, pixel spacing, image positions, and pixel dimensions. Additionally, the z-axis of the image orientation must align with the expected plane (dot product between 0.99 and 1.01).
+
+Please think step by step and answer only one complete SQL in snowflake dialect in ```sql``` format.
+SQL usage example: ```sql
+SELECT "COLUMN_NAME" FROM DATABASE.SCHEMA.TABLE WHERE ... ``` (Adjust "DATABASE", "SCHEMA", and "TABLE" to match actual names, ensure all column names are enclosed in double quotations)
+Here are some useful tips for answering:
+When performing a UNION operation on many tables, ensure that all table names are explicitly listed. Union first and then add condition and selection. e.g. SELECT "col1", "col2" FROM (TABLE1 UNION ALL TABLE2) WHERE ...; Don't write sqls as (SELECT col1, col2 FROM TABLE1 WHERE ...) UNION ALL (SELECT col1, col2 FROM TABLE2 WHERE ...); Don't use ['-- Include all', '-- Omit', '-- Continue', '-- Union all', '-- ...', '-- List all', '-- Replace this', '-- Each table', '-- Add other'] to omit any table. Table names here: The table structure information is ({database name: {schema name: [table name]}}): 
+{'IDC': {'IDC_V17': ['DICOM_METADATA', 'DICOM_METADATA_CURATED', 'AUXILIARY_METADATA', 'DICOM_ALL', 'DICOM_METADATA_CURATED_SERIES_LEVEL', 'DICOM_PIVOT']}}
+
+When using ORDER BY xxx DESC, add NULLS LAST to exclude null records: ORDER BY xxx DESC NULLS LAST.
+When asked something without stating name or id, return both of them. e.g. Which products ...? The answer should include product_name and product_id.
+When asked percentage decrease, you should return a positive value. e.g. How many percentage points in 2021 decrease compared to ...? The answer should be a positive value indicating the decresed number. Try to use ABS().
+If asked two tables, you should reply with the last one instead of combining two tables. e.g. Identifying the top five states ... examine the state that ranks fourth overall and identify its top five counties. You should only answer top five counties.
+Use ST_DISTANCE to calculate distance between two geographic points for more accurate answer.
+If the task description does not specify the number of decimal places, retain all decimals to four places.
+
+[Self-refine]
+2025-07-01 04:48:49 - Thread-587 (execute) - INFO - [Try to run SQL in self-refine]
+```sql
+WITH FilteredSeries AS (
+    SELECT 
+        "SeriesInstanceUID",
+        "SeriesNumber",
+        "PatientID",
+        (SUM("instance_size") / (1024 * 1024)) AS "series_size_mib"
+    FROM 
+        "IDC"."IDC_V17"."DICOM_ALL" a
+    INNER JOIN (
+        SELECT 
+            "SeriesInstanceUID"
+        FROM 
+            "IDC"."IDC_V17"."DICOM_ALL"
+        WHERE 
+            "Modality" = 'CT'
+            AND "collection_id" != 'nlst'
+            AND NOT "ImageType" ILIKE '%LOCALIZER%'
+            AND "TransferSyntaxUID" NOT IN ('1.2.840.10008.1.2.4.70', '1.2.840.10008.1.2.4.51')
+        GROUP BY 
+            "SeriesInstanceUID"
+        HAVING 
+            COUNT(DISTINCT CAST("ImagePositionPatient"::VARIANT[2] AS FLOAT)) = COUNT(DISTINCT "InstanceNumber") -- Consistent z-axis slice intervals
+            AND COUNT(DISTINCT "ImageOrientationPatient") = 1 -- Consistent orientation
+            AND COUNT(DISTINCT "PixelSpacing") = 1 -- Consistent pixel spacing
+            AND COUNT(DISTINCT "Rows") = 1 
+            AND COUNT(DISTINCT "Columns") = 1
+            AND ABS(
+                CAST("ImageOrientationPatient"::VARIANT[0] AS FLOAT) * CAST("ImageOrientationPatient"::VARIANT[4] AS FLOAT) -
+                CAST("ImageOrientationPatient"::VARIANT[1] AS FLOAT) * CAST("ImageOrientationPatient"::VARIANT[3] AS FLOAT)
+            ) BETWEEN 0.99 AND 1.01 -- Alignment with expected imaging plane
+    ) b
+    ON a."SeriesInstanceUID" = b."SeriesInstanceUID"
+    GROUP BY 
+        a."SeriesInstanceUID", a."SeriesNumber", a."PatientID"
+)
+SELECT 
+    "SeriesInstanceUID", 
+    "SeriesNumber", 
+    "PatientID", 
+    "series_size_mib"
+FROM 
+    FilteredSeries
+ORDER BY 
+    "series_size_mib" DESC NULLS LAST
+LIMIT 5;
+```
+[Try to run SQL in self-refine]
+2025-07-01 04:48:49 - Thread-587 (execute) - INFO - itercount: 1
+2025-07-01 04:48:49 - Thread-587 (execute) - INFO - [Self-refine]
+Input sql:
+WITH FilteredSeries AS (
+    SELECT 
+        "SeriesInstanceUID",
+        "SeriesNumber",
+        "PatientID",
+        (SUM("instance_size") / (1024 * 1024)) AS "series_size_mib"
+    FROM 
+        "IDC"."IDC_V17"."DICOM_ALL" a
+    INNER JOIN (
+        SELECT 
+            "SeriesInstanceUID"
+        FROM 
+            "IDC"."IDC_V17"."DICOM_ALL"
+        WHERE 
+            "Modality" = 'CT'
+            AND "collection_id" != 'nlst'
+            AND NOT "ImageType" ILIKE '%LOCALIZER%'
+            AND "TransferSyntaxUID" NOT IN ('1.2.840.10008.1.2.4.70', '1.2.840.10008.1.2.4.51')
+        GROUP BY 
+            "SeriesInstanceUID"
+        HAVING 
+            COUNT(DISTINCT CAST("ImagePositionPatient"::VARIANT[2] AS FLOAT)) = COUNT(DISTINCT "InstanceNumber") -- Consistent z-axis slice intervals
+            AND COUNT(DISTINCT "ImageOrientationPatient") = 1 -- Consistent orientation
+            AND COUNT(DISTINCT "PixelSpacing") = 1 -- Consistent pixel spacing
+            AND COUNT(DISTINCT "Rows") = 1 
+            AND COUNT(DISTINCT "Columns") = 1
+            AND ABS(
+                CAST("ImageOrientationPatient"::VARIANT[0] AS FLOAT) * CAST("ImageOrientationPatient"::VARIANT[4] AS FLOAT) -
+                CAST("ImageOrientationPatient"::VARIANT[1] AS FLOAT) * CAST("ImageOrientationPatient"::VARIANT[3] AS FLOAT)
+            ) BETWEEN 0.99 AND 1.01 -- Alignment with expected imaging plane
+    ) b
+    ON a."SeriesInstanceUID" = b."SeriesInstanceUID"
+    GROUP BY 
+        a."SeriesInstanceUID", a."SeriesNumber", a."PatientID"
+)
+SELECT 
+    "SeriesInstanceUID", 
+    "SeriesNumber", 
+    "PatientID", 
+    "series_size_mib"
+FROM 
+    FilteredSeries
+ORDER BY 
+    "series_size_mib" DESC NULLS LAST
+LIMIT 5;
+The error information is:
+{'status': 'error', 'error_msg': "##ERROR##002028 (42601): SQL compilation error:\nambiguous column name 'SeriesInstanceUID'"}
+Please correct it and output only 1 complete SQL query.
+[Self-refine]
+2025-07-01 04:48:56 - Thread-587 (execute) - INFO - [Try to run SQL in self-refine]
+```sql
+WITH FilteredSeries AS (
+    SELECT 
+        a."SeriesInstanceUID",
+        a."SeriesNumber",
+        a."PatientID",
+        (SUM(a."instance_size") / (1024 * 1024)) AS "series_size_mib"
+    FROM 
+        "IDC"."IDC_V17"."DICOM_ALL" a
+    INNER JOIN (
+        SELECT 
+            DISTINCT "SeriesInstanceUID"
+        FROM 
+            "IDC"."IDC_V17"."DICOM_ALL"
+        WHERE 
+            "Modality" = 'CT'
+            AND "collection_id" != 'nlst'
+            AND NOT "ImageType" ILIKE '%LOCALIZER%'
+            AND "TransferSyntaxUID" NOT IN ('1.2.840.10008.1.2.4.70', '1.2.840.10008.1.2.4.51')
+        GROUP BY 
+            "SeriesInstanceUID"
+        HAVING 
+            COUNT(DISTINCT CAST("ImagePositionPatient"::VARIANT[2] AS FLOAT)) = COUNT(DISTINCT "InstanceNumber") -- Consistent z-axis slice intervals
+            AND COUNT(DISTINCT "ImageOrientationPatient") = 1 -- Consistent orientation
+            AND COUNT(DISTINCT "PixelSpacing") = 1 -- Consistent pixel spacing
+            AND COUNT(DISTINCT "Rows") = 1 
+            AND COUNT(DISTINCT "Columns") = 1
+            AND ABS(
+                CAST("ImageOrientationPatient"::VARIANT[0] AS FLOAT) * CAST("ImageOrientationPatient"::VARIANT[4] AS FLOAT) -
+                CAST("ImageOrientationPatient"::VARIANT[1] AS FLOAT) * CAST("ImageOrientationPatient"::VARIANT[3] AS FLOAT)
+            ) BETWEEN 0.99 AND 1.01 -- Alignment with expected imaging plane
+    ) b
+    ON a."SeriesInstanceUID" = b."SeriesInstanceUID"
+    GROUP BY 
+        a."SeriesInstanceUID", a."SeriesNumber", a."PatientID"
+)
+SELECT 
+    "SeriesInstanceUID", 
+    "SeriesNumber", 
+    "PatientID", 
+    "series_size_mib"
+FROM 
+    FilteredSeries
+ORDER BY 
+    "series_size_mib" DESC NULLS LAST
+LIMIT 5;
+```
+[Try to run SQL in self-refine]
+2025-07-01 04:48:57 - Thread-587 (execute) - INFO - itercount: 2
+2025-07-01 04:48:57 - Thread-587 (execute) - INFO - [Self-refine]
+Input sql:
+WITH FilteredSeries AS (
+    SELECT 
+        a."SeriesInstanceUID",
+        a."SeriesNumber",
+        a."PatientID",
+        (SUM(a."instance_size") / (1024 * 1024)) AS "series_size_mib"
+    FROM 
+        "IDC"."IDC_V17"."DICOM_ALL" a
+    INNER JOIN (
+        SELECT 
+            DISTINCT "SeriesInstanceUID"
+        FROM 
+            "IDC"."IDC_V17"."DICOM_ALL"
+        WHERE 
+            "Modality" = 'CT'
+            AND "collection_id" != 'nlst'
+            AND NOT "ImageType" ILIKE '%LOCALIZER%'
+            AND "TransferSyntaxUID" NOT IN ('1.2.840.10008.1.2.4.70', '1.2.840.10008.1.2.4.51')
+        GROUP BY 
+            "SeriesInstanceUID"
+        HAVING 
+            COUNT(DISTINCT CAST("ImagePositionPatient"::VARIANT[2] AS FLOAT)) = COUNT(DISTINCT "InstanceNumber") -- Consistent z-axis slice intervals
+            AND COUNT(DISTINCT "ImageOrientationPatient") = 1 -- Consistent orientation
+            AND COUNT(DISTINCT "PixelSpacing") = 1 -- Consistent pixel spacing
+            AND COUNT(DISTINCT "Rows") = 1 
+            AND COUNT(DISTINCT "Columns") = 1
+            AND ABS(
+                CAST("ImageOrientationPatient"::VARIANT[0] AS FLOAT) * CAST("ImageOrientationPatient"::VARIANT[4] AS FLOAT) -
+                CAST("ImageOrientationPatient"::VARIANT[1] AS FLOAT) * CAST("ImageOrientationPatient"::VARIANT[3] AS FLOAT)
+            ) BETWEEN 0.99 AND 1.01 -- Alignment with expected imaging plane
+    ) b
+    ON a."SeriesInstanceUID" = b."SeriesInstanceUID"
+    GROUP BY 
+        a."SeriesInstanceUID", a."SeriesNumber", a."PatientID"
+)
+SELECT 
+    "SeriesInstanceUID", 
+    "SeriesNumber", 
+    "PatientID", 
+    "series_size_mib"
+FROM 
+    FilteredSeries
+ORDER BY 
+    "series_size_mib" DESC NULLS LAST
+LIMIT 5;
+The error information is:
+{'status': 'error', 'error_msg': '##ERROR##000979 (42601): SQL compilation error:\n[DICOM_ALL."ImageOrientationPatient"] is not a valid group by expression'}
+Please correct it and output only 1 complete SQL query.
+[Self-refine]
+2025-07-01 04:49:15 - Thread-587 (execute) - INFO - [Try to run SQL in self-refine]
+```sql
+WITH FilteredSeries AS (
+    SELECT 
+        a."SeriesInstanceUID",
+        a."SeriesNumber",
+        a."PatientID",
+        (SUM(a."instance_size") / (1024 * 1024)) AS "series_size_mib"
+    FROM 
+        "IDC"."IDC_V17"."DICOM_ALL" a
+    INNER JOIN (
+        SELECT 
+            "SeriesInstanceUID"
+        FROM 
+            "IDC"."IDC_V17"."DICOM_ALL"
+        WHERE 
+            "Modality" = 'CT'
+            AND "collection_id" != 'nlst'
+            AND NOT "ImageType" ILIKE '%LOCALIZER%'
+            AND "TransferSyntaxUID" NOT IN ('1.2.840.10008.1.2.4.70', '1.2.840.10008.1.2.4.51')
+        GROUP BY 
+            "SeriesInstanceUID"
+        HAVING 
+            COUNT(DISTINCT CAST("ImagePositionPatient"::VARIANT[2] AS FLOAT)) = COUNT(DISTINCT "InstanceNumber") -- Consistent z-axis slice intervals
+            AND COUNT(DISTINCT CAST("ImageOrientationPatient"::VARIANT AS STRING)) = 1 -- Consistent orientation
+            AND COUNT(DISTINCT CAST("PixelSpacing"::VARIANT AS STRING)) = 1 -- Consistent pixel spacing
+            AND COUNT(DISTINCT "Rows") = 1 -- Consistent Rows
+            AND COUNT(DISTINCT "Columns") = 1 -- Consistent Columns
+            AND ABS(
+                (CAST("ImageOrientationPatient"::VARIANT[0] AS FLOAT) * CAST("ImageOrientationPatient"::VARIANT[4] AS FLOAT)) -
+                (CAST("ImageOrientationPatient"::VARIANT[1] AS FLOAT) * CAST("ImageOrientationPatient"::VARIANT[3] AS FLOAT))
+            ) BETWEEN 0.99 AND 1.01 -- Alignment with expected imaging plane
+    ) b
+    ON a."SeriesInstanceUID" = b."SeriesInstanceUID"
+    GROUP BY 
+        a."SeriesInstanceUID", a."SeriesNumber", a."PatientID"
+)
+SELECT 
+    "SeriesInstanceUID", 
+    "SeriesNumber", 
+    "PatientID", 
+    "series_size_mib"
+FROM 
+    FilteredSeries
+ORDER BY 
+    "series_size_mib" DESC NULLS LAST
+LIMIT 5;
+```
+[Try to run SQL in self-refine]
+2025-07-01 04:49:15 - Thread-587 (execute) - INFO - itercount: 3
+2025-07-01 04:49:15 - Thread-587 (execute) - INFO - [Self-refine]
+Input sql:
+WITH FilteredSeries AS (
+    SELECT 
+        a."SeriesInstanceUID",
+        a."SeriesNumber",
+        a."PatientID",
+        (SUM(a."instance_size") / (1024 * 1024)) AS "series_size_mib"
+    FROM 
+        "IDC"."IDC_V17"."DICOM_ALL" a
+    INNER JOIN (
+        SELECT 
+            "SeriesInstanceUID"
+        FROM 
+            "IDC"."IDC_V17"."DICOM_ALL"
+        WHERE 
+            "Modality" = 'CT'
+            AND "collection_id" != 'nlst'
+            AND NOT "ImageType" ILIKE '%LOCALIZER%'
+            AND "TransferSyntaxUID" NOT IN ('1.2.840.10008.1.2.4.70', '1.2.840.10008.1.2.4.51')
+        GROUP BY 
+            "SeriesInstanceUID"
+        HAVING 
+            COUNT(DISTINCT CAST("ImagePositionPatient"::VARIANT[2] AS FLOAT)) = COUNT(DISTINCT "InstanceNumber") -- Consistent z-axis slice intervals
+            AND COUNT(DISTINCT CAST("ImageOrientationPatient"::VARIANT AS STRING)) = 1 -- Consistent orientation
+            AND COUNT(DISTINCT CAST("PixelSpacing"::VARIANT AS STRING)) = 1 -- Consistent pixel spacing
+            AND COUNT(DISTINCT "Rows") = 1 -- Consistent Rows
+            AND COUNT(DISTINCT "Columns") = 1 -- Consistent Columns
+            AND ABS(
+                (CAST("ImageOrientationPatient"::VARIANT[0] AS FLOAT) * CAST("ImageOrientationPatient"::VARIANT[4] AS FLOAT)) -
+                (CAST("ImageOrientationPatient"::VARIANT[1] AS FLOAT) * CAST("ImageOrientationPatient"::VARIANT[3] AS FLOAT))
+            ) BETWEEN 0.99 AND 1.01 -- Alignment with expected imaging plane
+    ) b
+    ON a."SeriesInstanceUID" = b."SeriesInstanceUID"
+    GROUP BY 
+        a."SeriesInstanceUID", a."SeriesNumber", a."PatientID"
+)
+SELECT 
+    "SeriesInstanceUID", 
+    "SeriesNumber", 
+    "PatientID", 
+    "series_size_mib"
+FROM 
+    FilteredSeries
+ORDER BY 
+    "series_size_mib" DESC NULLS LAST
+LIMIT 5;
+The error information is:
+{'status': 'error', 'error_msg': '##ERROR##000979 (42601): SQL compilation error:\n[DICOM_ALL."ImageOrientationPatient"] is not a valid group by expression'}
+Please correct it and output only 1 complete SQL query.
+[Self-refine]
+2025-07-01 04:49:26 - Thread-587 (execute) - INFO - [Try to run SQL in self-refine]
+```sql
+WITH FilteredSeries AS (
+    SELECT 
+        a."SeriesInstanceUID",
+        a."SeriesNumber",
+        a."PatientID",
+        (SUM(a."instance_size") / (1024 * 1024)) AS "series_size_mib"
+    FROM 
+        "IDC"."IDC_V17"."DICOM_ALL" a
+    INNER JOIN (
+        SELECT 
+            "SeriesInstanceUID"
+        FROM 
+            "IDC"."IDC_V17"."DICOM_ALL"
+        WHERE 
+            "Modality" = 'CT'
+            AND "collection_id" != 'nlst'
+            AND NOT "ImageType" ILIKE '%LOCALIZER%'
+            AND "TransferSyntaxUID" NOT IN ('1.2.840.10008.1.2.4.70', '1.2.840.10008.1.2.4.51')
+        GROUP BY 
+            "SeriesInstanceUID"
+        HAVING 
+            COUNT(DISTINCT CAST("ImagePositionPatient"::VARIANT[2] AS FLOAT)) = COUNT(DISTINCT "InstanceNumber") -- Consistent z-axis slice intervals
+            AND COUNT(DISTINCT TO_JSON("ImageOrientationPatient")) = 1 -- Consistent orientation
+            AND COUNT(DISTINCT TO_JSON("PixelSpacing")) = 1 -- Consistent pixel spacing
+            AND COUNT(DISTINCT "Rows") = 1 -- Consistent Rows
+            AND COUNT(DISTINCT "Columns") = 1 -- Consistent Columns
+            AND ABS(
+                (CAST("ImageOrientationPatient"::VARIANT[0] AS FLOAT) * CAST("ImageOrientationPatient"::VARIANT[4] AS FLOAT)) -
+                (CAST("ImageOrientationPatient"::VARIANT[1] AS FLOAT) * CAST("ImageOrientationPatient"::VARIANT[3] AS FLOAT))
+            ) BETWEEN 0.99 AND 1.01 -- Alignment with expected imaging plane
+    ) b
+    ON a."SeriesInstanceUID" = b."SeriesInstanceUID"
+    GROUP BY 
+        a."SeriesInstanceUID", a."SeriesNumber", a."PatientID"
+)
+SELECT 
+    "SeriesInstanceUID", 
+    "SeriesNumber", 
+    "PatientID", 
+    "series_size_mib"
+FROM 
+    FilteredSeries
+ORDER BY 
+    "series_size_mib" DESC NULLS LAST
+LIMIT 5;
+```
+[Try to run SQL in self-refine]
+2025-07-01 04:49:26 - Thread-587 (execute) - INFO - itercount: 4
+2025-07-01 04:49:26 - Thread-587 (execute) - INFO - [Self-refine]
+Input sql:
+WITH FilteredSeries AS (
+    SELECT 
+        a."SeriesInstanceUID",
+        a."SeriesNumber",
+        a."PatientID",
+        (SUM(a."instance_size") / (1024 * 1024)) AS "series_size_mib"
+    FROM 
+        "IDC"."IDC_V17"."DICOM_ALL" a
+    INNER JOIN (
+        SELECT 
+            "SeriesInstanceUID"
+        FROM 
+            "IDC"."IDC_V17"."DICOM_ALL"
+        WHERE 
+            "Modality" = 'CT'
+            AND "collection_id" != 'nlst'
+            AND NOT "ImageType" ILIKE '%LOCALIZER%'
+            AND "TransferSyntaxUID" NOT IN ('1.2.840.10008.1.2.4.70', '1.2.840.10008.1.2.4.51')
+        GROUP BY 
+            "SeriesInstanceUID"
+        HAVING 
+            COUNT(DISTINCT CAST("ImagePositionPatient"::VARIANT[2] AS FLOAT)) = COUNT(DISTINCT "InstanceNumber") -- Consistent z-axis slice intervals
+            AND COUNT(DISTINCT TO_JSON("ImageOrientationPatient")) = 1 -- Consistent orientation
+            AND COUNT(DISTINCT TO_JSON("PixelSpacing")) = 1 -- Consistent pixel spacing
+            AND COUNT(DISTINCT "Rows") = 1 -- Consistent Rows
+            AND COUNT(DISTINCT "Columns") = 1 -- Consistent Columns
+            AND ABS(
+                (CAST("ImageOrientationPatient"::VARIANT[0] AS FLOAT) * CAST("ImageOrientationPatient"::VARIANT[4] AS FLOAT)) -
+                (CAST("ImageOrientationPatient"::VARIANT[1] AS FLOAT) * CAST("ImageOrientationPatient"::VARIANT[3] AS FLOAT))
+            ) BETWEEN 0.99 AND 1.01 -- Alignment with expected imaging plane
+    ) b
+    ON a."SeriesInstanceUID" = b."SeriesInstanceUID"
+    GROUP BY 
+        a."SeriesInstanceUID", a."SeriesNumber", a."PatientID"
+)
+SELECT 
+    "SeriesInstanceUID", 
+    "SeriesNumber", 
+    "PatientID", 
+    "series_size_mib"
+FROM 
+    FilteredSeries
+ORDER BY 
+    "series_size_mib" DESC NULLS LAST
+LIMIT 5;
+The error information is:
+{'status': 'error', 'error_msg': '##ERROR##000979 (42601): SQL compilation error:\n[DICOM_ALL."ImageOrientationPatient"] is not a valid group by expression'}
+Please correct it and output only 1 complete SQL query.
+[Self-refine]
+2025-07-01 04:49:37 - Thread-587 (execute) - INFO - [Try to run SQL in self-refine]
+```sql
+WITH FilteredSeries AS (
+    SELECT 
+        a."SeriesInstanceUID",
+        a."SeriesNumber",
+        a."PatientID",
+        (SUM(a."instance_size") / (1024 * 1024)) AS "series_size_mib"
+    FROM 
+        "IDC"."IDC_V17"."DICOM_ALL" a
+    INNER JOIN (
+        SELECT 
+            "SeriesInstanceUID"
+        FROM 
+            "IDC"."IDC_V17"."DICOM_ALL"
+        WHERE 
+            "Modality" = 'CT'
+            AND "collection_id" != 'nlst'
+            AND NOT "ImageType" ILIKE '%LOCALIZER%'
+            AND "TransferSyntaxUID" NOT IN ('1.2.840.10008.1.2.4.70', '1.2.840.10008.1.2.4.51')
+        GROUP BY 
+            "SeriesInstanceUID"
+        HAVING 
+            COUNT(DISTINCT CAST("ImagePositionPatient"::VARIANT[2] AS FLOAT)) = COUNT(DISTINCT "InstanceNumber") -- Consistent z-axis slice intervals
+            AND COUNT(DISTINCT CAST("ImageOrientationPatient"::VARIANT[0] AS FLOAT)) = 1 -- Consistent orientation (first direction cosine)
+            AND COUNT(DISTINCT CAST("ImageOrientationPatient"::VARIANT[1] AS FLOAT)) = 1 -- Consistent orientation (second direction cosine)
+            AND COUNT(DISTINCT "PixelSpacing") = 1 -- Consistent pixel spacing
+            AND COUNT(DISTINCT "Rows") = 1 -- Consistent Rows
+            AND COUNT(DISTINCT "Columns") = 1 -- Consistent Columns
+            AND ABS(
+                (CAST("ImageOrientationPatient"::VARIANT[0] AS FLOAT) * CAST("ImageOrientationPatient"::VARIANT[4] AS FLOAT)) -
+                (CAST("ImageOrientationPatient"::VARIANT[1] AS FLOAT) * CAST("ImageOrientationPatient"::VARIANT[3] AS FLOAT))
+            ) BETWEEN 0.99 AND 1.01 -- Alignment with expected imaging plane
+    ) b
+    ON a."SeriesInstanceUID" = b."SeriesInstanceUID"
+    GROUP BY 
+        a."SeriesInstanceUID", a."SeriesNumber", a."PatientID"
+)
+SELECT 
+    "SeriesInstanceUID", 
+    "SeriesNumber", 
+    "PatientID", 
+    "series_size_mib"
+FROM 
+    FilteredSeries
+ORDER BY 
+    "series_size_mib" DESC NULLS LAST
+LIMIT 5;
+```
+[Try to run SQL in self-refine]
+2025-07-01 04:49:37 - Thread-587 (execute) - INFO - Total iteration counts: 5
+2025-07-01 04:49:37 - Thread-587 (execute) - INFO - Max Iter, remove file

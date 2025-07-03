@@ -1,0 +1,24 @@
+SELECT 
+    "NUMBER", 
+    "STREET", 
+    "STREET_TYPE", 
+    "LATITUDE", 
+    "LONGITUDE", 
+    "CITY"
+FROM 
+    "US_ADDRESSES__POI"."CYBERSYN"."US_ADDRESSES"
+WHERE 
+    "STATE" = 'FL' AND "ZIP" = (
+        SELECT "ZIP"
+        FROM (
+            SELECT "ZIP", COUNT(*) AS "ADDRESS_COUNT"
+            FROM "US_ADDRESSES__POI"."CYBERSYN"."US_ADDRESSES"
+            WHERE "STATE" = 'FL'
+            GROUP BY "ZIP"
+            ORDER BY "ADDRESS_COUNT" DESC NULLS LAST
+        ) 
+        LIMIT 1
+    )
+ORDER BY 
+    "LATITUDE" DESC NULLS LAST
+LIMIT 10;
